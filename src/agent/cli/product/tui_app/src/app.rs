@@ -3833,6 +3833,7 @@ impl App {
     }
 
     async fn update_feature_flags(&mut self, updates: Vec<(Feature, bool)>) {
+        let updates = normalize_feature_updates(updates);
         let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
             matches!(
                 feature,
@@ -4722,6 +4723,31 @@ impl App {
             }
         });
     }
+}
+
+fn normalize_feature_updates(updates: Vec<(Feature, bool)>) -> Vec<(Feature, bool)> {
+    let mut normalized = Vec::new();
+    for (feature, enabled) in updates {
+        push_feature_update(&mut normalized, feature, enabled);
+        if enabled {
+            if feature == Feature::InputSlimming {
+                push_feature_update(&mut normalized, Feature::InputSlimmingLiveZone, false);
+            } else if feature == Feature::InputSlimmingLiveZone {
+                push_feature_update(&mut normalized, Feature::InputSlimming, false);
+            }
+        }
+    }
+    normalized
+}
+
+fn push_feature_update(updates: &mut Vec<(Feature, bool)>, feature: Feature, enabled: bool) {
+    if let Some(index) = updates
+        .iter()
+        .position(|(existing, _)| *existing == feature)
+    {
+        updates.remove(index);
+    }
+    updates.push((feature, enabled));
 }
 
 #[cfg(test)]
@@ -6022,6 +6048,57 @@ show_raw_agent_reasoning = true
     }
 
     #[tokio::test]
+    async fn update_feature_flags_keeps_input_slimming_strategies_mutually_exclusive() {
+        let mut app = make_test_app().await;
+        app.config.features.enable(Feature::InputSlimming);
+        app.chat_widget
+            .set_feature_enabled(Feature::InputSlimming, true);
+        ConfigEditsBuilder::new(&app.config.lha_home)
+            .set_feature_enabled(Feature::InputSlimming.key(), true)
+            .apply()
+            .await
+            .expect("seed input slimming config");
+
+        app.update_feature_flags(vec![(Feature::InputSlimmingLiveZone, true)])
+            .await;
+
+        assert!(!app.config.features.enabled(Feature::InputSlimming));
+        assert!(app.config.features.enabled(Feature::InputSlimmingLiveZone));
+        assert!(
+            !app.chat_widget
+                .config_ref()
+                .features
+                .enabled(Feature::InputSlimming)
+        );
+        assert!(
+            app.chat_widget
+                .config_ref()
+                .features
+                .enabled(Feature::InputSlimmingLiveZone)
+        );
+        assert_feature_config_toml(
+            &app,
+            Feature::InputSlimming,
+            None,
+            Feature::InputSlimmingLiveZone,
+            Some(true),
+        );
+
+        app.update_feature_flags(vec![(Feature::InputSlimming, true)])
+            .await;
+
+        assert!(app.config.features.enabled(Feature::InputSlimming));
+        assert!(!app.config.features.enabled(Feature::InputSlimmingLiveZone));
+        assert_feature_config_toml(
+            &app,
+            Feature::InputSlimming,
+            Some(true),
+            Feature::InputSlimmingLiveZone,
+            None,
+        );
+    }
+
+    #[tokio::test]
     async fn update_memory_settings_persists_toml_and_updates_in_memory() -> Result<()> {
         let mut app = make_test_app().await;
 
@@ -6060,6 +6137,26 @@ show_raw_agent_reasoning = true
         assert_memory_config_toml(&app, false, true, true, false)?;
 
         Ok(())
+    }
+
+    fn assert_feature_config_toml(
+        app: &App,
+        first: Feature,
+        first_value: Option<bool>,
+        second: Feature,
+        second_value: Option<bool>,
+    ) {
+        let contents = std::fs::read_to_string(app.config.lha_home.join(CONFIG_TOML_FILE))
+            .expect("read config");
+        let parsed: toml::Table = toml::from_str(&contents).expect("parse config");
+        let features = parsed.get("features");
+        let read_feature = |feature: Feature| {
+            features
+                .and_then(|features| features.get(feature.key()))
+                .and_then(TomlValue::as_bool)
+        };
+        assert_eq!(read_feature(first), first_value);
+        assert_eq!(read_feature(second), second_value);
     }
 
     fn assert_memory_config_toml(

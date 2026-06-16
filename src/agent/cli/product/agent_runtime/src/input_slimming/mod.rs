@@ -13,6 +13,8 @@ use lha_llm::ToolResultPayload;
 use lha_llm::TranscriptItem;
 use lha_llm::TurnRequest;
 
+use crate::product::agent::features::Feature;
+use crate::product::agent::features::Features;
 use crate::product::agent::input_slimming::candidate::Candidate;
 use crate::product::agent::input_slimming::candidate::CandidateTarget;
 use crate::product::agent::input_slimming::candidate::candidates_from_item;
@@ -23,6 +25,7 @@ use crate::product::agent::input_slimming::candidate::skip_for_recent_live_outpu
 use crate::product::agent::input_slimming::metrics::emit_metrics;
 use crate::product::agent::input_slimming::strategy::StrategyOutput;
 use crate::product::agent::input_slimming::strategy::slim_text_for_tool;
+use crate::product::agent::protocol::InputSlimmingScope;
 use crate::product::agent::protocol::InputSlimmingTokenStats;
 use crate::product::agent::truncate::approx_token_count;
 use crate::product::otel::OtelManager;
@@ -70,6 +73,8 @@ pub(crate) struct InputSlimmingContext<'a> {
     pub(crate) turn_id: &'a str,
     pub(crate) estimate_request_tokens: Option<&'a RequestTokenEstimator<'a>>,
     pub(crate) mode: InputSlimmingMode,
+    pub(crate) scope: InputSlimmingScope,
+    pub(crate) wire_api: InputSlimmingWireApi,
     pub(crate) context_window: Option<i64>,
     pub(crate) estimated_input_tokens: Option<i64>,
 }
@@ -78,6 +83,44 @@ pub(crate) struct InputSlimmingContext<'a> {
 pub(crate) enum InputSlimmingMode {
     Apply,
     MeasureOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InputSlimmingActivation {
+    Disabled,
+    Scope(InputSlimmingScope),
+    Conflict,
+}
+
+pub(crate) const INPUT_SLIMMING_CONFLICT_WARNING: &str = "Input slimming strategies are mutually exclusive; enable only one of input_slimming or input_slimming_live_zone.";
+
+pub(crate) fn resolve_input_slimming_scope(features: &Features) -> InputSlimmingActivation {
+    match (
+        features.enabled(Feature::InputSlimming),
+        features.enabled(Feature::InputSlimmingLiveZone),
+    ) {
+        (false, false) => InputSlimmingActivation::Disabled,
+        (true, false) => InputSlimmingActivation::Scope(InputSlimmingScope::HistoricalToolOutputs),
+        (false, true) => InputSlimmingActivation::Scope(InputSlimmingScope::LiveZoneToolOutputs),
+        (true, true) => InputSlimmingActivation::Conflict,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InputSlimmingWireApi {
+    Responses,
+    Chat,
+    Messages,
+}
+
+impl InputSlimmingWireApi {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Responses => "responses",
+            Self::Chat => "chat",
+            Self::Messages => "messages",
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -102,6 +145,8 @@ impl InputSlimmer {
                 turn_id: "test",
                 estimate_request_tokens: None,
                 mode: InputSlimmingMode::Apply,
+                scope: InputSlimmingScope::HistoricalToolOutputs,
+                wire_api: InputSlimmingWireApi::Responses,
                 context_window: None,
                 estimated_input_tokens: None,
             },
@@ -131,22 +176,22 @@ impl InputSlimmer {
         };
 
         for (idx, item) in request.conversation.iter().enumerate() {
-            if idx == latest_user_index {
-                if let Some(skip) = skip_for_current_user_item(item) {
+            let Some(zone) = candidate_zone_for_scope(context.scope, idx, latest_user_index) else {
+                if idx == latest_user_index {
+                    if let Some(skip) = skip_for_current_user_item(item) {
+                        metrics.skipped.push(skip);
+                    }
+                } else if let Some(skip) = skip_for_protected_item(item) {
                     metrics.skipped.push(skip);
                 }
                 continue;
-            }
-
-            let zone = if idx < latest_user_index {
-                CandidateZone::HistoricalToolOutput
-            } else {
-                CandidateZone::LiveToolOutput
             };
 
             let collection =
                 candidates_from_item(idx, item, zone, self.options.min_candidate_tokens);
-            if matches!(zone, CandidateZone::LiveToolOutput) {
+            if context.scope == InputSlimmingScope::HistoricalToolOutputs
+                && matches!(zone, CandidateZone::LiveToolOutput)
+            {
                 if collection
                     .skips
                     .iter()
@@ -284,6 +329,7 @@ impl InputSlimmer {
         let cache_key = SlimmedReplacementCacheKey {
             original_hash: hash.clone(),
             tool_name: candidate.tool_name.clone(),
+            scope: context.scope,
             zone: candidate.zone,
             success: candidate.success,
             strategy_version: INPUT_SLIMMING_STRATEGY_VERSION,
@@ -357,6 +403,7 @@ impl InputSlimmer {
 
         let replacement_tokens_approx = approx_token_count(&replacement);
         let metadata = StoredInputMetadata {
+            scope: context.scope,
             strategy: strategy_output.strategy,
             tool_name: candidate.tool_name.clone(),
             original_tokens: candidate.original_tokens_approx,
@@ -400,8 +447,39 @@ impl InputSlimmer {
         }))
     }
 
-    pub(crate) fn emit_metrics(outcome: &InputSlimmingOutcome, otel: &OtelManager, model: &str) {
-        emit_metrics(&outcome.metrics, otel, model);
+    pub(crate) fn emit_metrics(
+        outcome: &InputSlimmingOutcome,
+        otel: &OtelManager,
+        model: &str,
+        scope: InputSlimmingScope,
+        wire_api: InputSlimmingWireApi,
+    ) {
+        emit_metrics(&outcome.metrics, otel, model, scope, wire_api);
+    }
+}
+
+fn candidate_zone_for_scope(
+    scope: InputSlimmingScope,
+    index: usize,
+    latest_user_index: usize,
+) -> Option<CandidateZone> {
+    match scope {
+        InputSlimmingScope::HistoricalToolOutputs => {
+            if index == latest_user_index {
+                None
+            } else if index < latest_user_index {
+                Some(CandidateZone::HistoricalToolOutput)
+            } else {
+                Some(CandidateZone::LiveToolOutput)
+            }
+        }
+        InputSlimmingScope::LiveZoneToolOutputs => {
+            if index > latest_user_index {
+                Some(CandidateZone::LiveToolOutput)
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -541,6 +619,7 @@ impl From<InputSlimmingPersistedEntry> for InputSlimmingStoredInputItem {
 impl From<StoredInputMetadata> for InputSlimmingStoredInputMetadata {
     fn from(value: StoredInputMetadata) -> Self {
         Self {
+            scope: value.scope,
             strategy: value.strategy.as_str().to_string(),
             tool_name: value.tool_name,
             original_tokens: value.original_tokens,
@@ -561,6 +640,7 @@ impl TryFrom<InputSlimmingStoredInputMetadata> for StoredInputMetadata {
             ));
         };
         Ok(Self {
+            scope: value.scope,
             strategy,
             tool_name: value.tool_name,
             original_tokens: value.original_tokens,
@@ -899,6 +979,7 @@ mod tests {
     use lha_llm::api::provider::Provider;
     use lha_llm::api::provider::RetryConfig;
     use lha_llm::api::provider::WireApi;
+    use lha_llm::api::requests::chat::ChatRequestBuilder;
     use lha_llm::api::requests::messages::MessagesRequestBuilder;
     use lha_llm::api::requests::responses::ResponsesRequestBuilder;
     use lha_llm::types::ReasoningItemContent;
@@ -957,9 +1038,13 @@ mod tests {
     }
 
     fn tool_call(tool_name: &str) -> TranscriptItem {
+        tool_call_with_id("call", tool_name)
+    }
+
+    fn tool_call_with_id(call_id: &str, tool_name: &str) -> TranscriptItem {
         TranscriptItem::ToolCall {
             id: None,
-            call_id: "call".to_string(),
+            call_id: call_id.to_string(),
             tool_name: tool_name.to_string(),
             payload: ToolCallPayload::JsonArguments {
                 arguments: "{}".to_string(),
@@ -968,8 +1053,12 @@ mod tests {
     }
 
     fn tool_text(tool_name: &str, output: String) -> TranscriptItem {
+        tool_text_with_call("call", tool_name, output)
+    }
+
+    fn tool_text_with_call(call_id: &str, tool_name: &str, output: String) -> TranscriptItem {
         TranscriptItem::ToolResult {
-            call_id: "call".to_string(),
+            call_id: call_id.to_string(),
             tool_name: tool_name.to_string(),
             payload: ToolResultPayload::Text { output },
         }
@@ -979,8 +1068,16 @@ mod tests {
         content: String,
         content_items: Option<Vec<ToolResultContentItem>>,
     ) -> TranscriptItem {
+        structured_tool_with_call("call", content, content_items)
+    }
+
+    fn structured_tool_with_call(
+        call_id: &str,
+        content: String,
+        content_items: Option<Vec<ToolResultContentItem>>,
+    ) -> TranscriptItem {
         TranscriptItem::ToolResult {
-            call_id: "call".to_string(),
+            call_id: call_id.to_string(),
             tool_name: "shell".to_string(),
             payload: ToolResultPayload::Structured {
                 content,
@@ -1006,6 +1103,74 @@ mod tests {
             },
             stream_idle_timeout: Duration::from_secs(5),
         }
+    }
+
+    async fn slim_request_with_scope(
+        request: &TurnRequest,
+        scope: InputSlimmingScope,
+    ) -> InputSlimmingOutcome {
+        let store = InputSlimmingStore::default();
+        InputSlimmer::default()
+            .slim_request_with_context(
+                request,
+                InputSlimmingContext {
+                    store: &store,
+                    turn_id: "turn",
+                    estimate_request_tokens: None,
+                    mode: InputSlimmingMode::Apply,
+                    scope,
+                    wire_api: InputSlimmingWireApi::Responses,
+                    context_window: None,
+                    estimated_input_tokens: None,
+                },
+            )
+            .await
+            .expect("slimming succeeds")
+    }
+
+    #[test]
+    fn resolve_input_slimming_scope_returns_disabled_when_both_disabled() {
+        let features = Features::with_defaults();
+
+        assert_eq!(
+            resolve_input_slimming_scope(&features),
+            InputSlimmingActivation::Disabled
+        );
+    }
+
+    #[test]
+    fn resolve_input_slimming_scope_returns_historical_when_only_historical_enabled() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::InputSlimming);
+
+        assert_eq!(
+            resolve_input_slimming_scope(&features),
+            InputSlimmingActivation::Scope(InputSlimmingScope::HistoricalToolOutputs)
+        );
+    }
+
+    #[test]
+    fn resolve_input_slimming_scope_returns_live_zone_when_only_live_zone_enabled() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::InputSlimmingLiveZone);
+
+        assert_eq!(
+            resolve_input_slimming_scope(&features),
+            InputSlimmingActivation::Scope(InputSlimmingScope::LiveZoneToolOutputs)
+        );
+    }
+
+    #[test]
+    fn resolve_input_slimming_scope_reports_conflict_when_both_enabled() {
+        let mut features = Features::with_defaults();
+        features
+            .enable(Feature::InputSlimming)
+            .enable(Feature::InputSlimmingLiveZone);
+
+        assert_eq!(
+            resolve_input_slimming_scope(&features),
+            InputSlimmingActivation::Conflict
+        );
     }
 
     #[tokio::test]
@@ -1346,6 +1511,168 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn responses_live_zone_serialization_preserves_prefix_before_slimmed_output() {
+        let request = request_with(vec![
+            assistant("historical assistant"),
+            user("current prompt"),
+            tool_call("shell"),
+            structured_tool("responses live output ".repeat(5_000), None),
+        ]);
+        let before = ResponsesRequestBuilder::new("gpt-test", "inst", &request.conversation)
+            .build(&provider(WireApi::Responses))
+            .expect("provider request")
+            .body;
+
+        let outcome =
+            slim_request_with_scope(&request, InputSlimmingScope::LiveZoneToolOutputs).await;
+        let after = ResponsesRequestBuilder::new("gpt-test", "inst", &outcome.request.conversation)
+            .build(&provider(WireApi::Responses))
+            .expect("provider request")
+            .body;
+
+        let before_input = before["input"].as_array().expect("before input");
+        let after_input = after["input"].as_array().expect("after input");
+        let output_index = after_input
+            .iter()
+            .position(|item| item["type"] == "function_call_output")
+            .expect("function call output");
+        assert_eq!(&after_input[..output_index], &before_input[..output_index]);
+        assert!(
+            after_input[output_index]["output"]
+                .as_str()
+                .expect("slimmed output")
+                .contains("<<lha-input:")
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_live_zone_serialization_preserves_prefix_and_slims_parallel_tool_outputs() {
+        let request = request_with(vec![
+            user("current prompt"),
+            tool_call_with_id("call-1", "shell"),
+            tool_call_with_id("call-2", "rg"),
+            tool_text_with_call("call-1", "shell", "first chat output ".repeat(5_000)),
+            tool_text_with_call("call-2", "rg", "second chat output ".repeat(5_000)),
+        ]);
+        let before = ChatRequestBuilder::new("gpt-test", "inst", &request.conversation, &[])
+            .build(&provider(WireApi::Chat))
+            .expect("provider request")
+            .body;
+
+        let outcome =
+            slim_request_with_scope(&request, InputSlimmingScope::LiveZoneToolOutputs).await;
+        let after = ChatRequestBuilder::new("gpt-test", "inst", &outcome.request.conversation, &[])
+            .build(&provider(WireApi::Chat))
+            .expect("provider request")
+            .body;
+
+        let before_messages = before["messages"].as_array().expect("before messages");
+        let after_messages = after["messages"].as_array().expect("after messages");
+        let first_tool_index = after_messages
+            .iter()
+            .position(|message| message["role"] == "tool")
+            .expect("tool message");
+        assert_eq!(
+            &after_messages[..first_tool_index],
+            &before_messages[..first_tool_index]
+        );
+        let tool_contents = after_messages[first_tool_index..]
+            .iter()
+            .filter(|message| message["role"] == "tool")
+            .map(|message| message["content"].as_str().expect("tool content"))
+            .collect::<Vec<_>>();
+        assert_eq!(tool_contents.len(), 2);
+        assert!(
+            tool_contents
+                .iter()
+                .all(|content| content.contains("<<lha-input:"))
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_live_zone_serialization_preserves_prefix_before_tool_result_block() {
+        let request = request_with(vec![
+            user("current prompt"),
+            tool_call("shell"),
+            structured_tool("messages live output ".repeat(5_000), None),
+        ]);
+        let before = MessagesRequestBuilder::new("claude-test", "inst", &request.conversation, &[])
+            .build(&provider(WireApi::Messages))
+            .expect("provider request")
+            .body;
+
+        let outcome =
+            slim_request_with_scope(&request, InputSlimmingScope::LiveZoneToolOutputs).await;
+        let after =
+            MessagesRequestBuilder::new("claude-test", "inst", &outcome.request.conversation, &[])
+                .build(&provider(WireApi::Messages))
+                .expect("provider request")
+                .body;
+
+        let before_messages = before["messages"].as_array().expect("before messages");
+        let after_messages = after["messages"].as_array().expect("after messages");
+        let tool_result_index = after_messages
+            .iter()
+            .position(|message| {
+                message["content"]
+                    .as_array()
+                    .is_some_and(|blocks| blocks.iter().any(|block| block["type"] == "tool_result"))
+            })
+            .expect("tool result message");
+        assert_eq!(
+            &after_messages[..tool_result_index],
+            &before_messages[..tool_result_index]
+        );
+        let tool_result = after_messages[tool_result_index]["content"]
+            .as_array()
+            .expect("content")
+            .iter()
+            .find(|block| block["type"] == "tool_result")
+            .expect("tool result");
+        assert!(
+            tool_result["content"][0]["text"]
+                .as_str()
+                .expect("tool result text")
+                .contains("<<lha-input:")
+        );
+    }
+
+    #[tokio::test]
+    async fn responses_live_zone_content_items_preserve_images_and_slim_text() {
+        let image_url = "data:image/png;base64,abc".to_string();
+        let request = request_with(vec![
+            user("current prompt"),
+            structured_tool(
+                "Generated image".to_string(),
+                Some(vec![
+                    ToolResultContentItem::InputText {
+                        text: "image metadata ".repeat(5_000),
+                    },
+                    ToolResultContentItem::InputImage {
+                        image_url: image_url.clone(),
+                    },
+                ]),
+            ),
+        ]);
+
+        let outcome =
+            slim_request_with_scope(&request, InputSlimmingScope::LiveZoneToolOutputs).await;
+        let body = ResponsesRequestBuilder::new("gpt-test", "inst", &outcome.request.conversation)
+            .build(&provider(WireApi::Responses))
+            .expect("provider request")
+            .body;
+        let output = body["input"][1]["output"].as_array().expect("output items");
+
+        assert!(
+            output[0]["text"]
+                .as_str()
+                .expect("text output")
+                .contains("<<lha-input:")
+        );
+        assert_eq!(output[1]["image_url"], image_url);
+    }
+
+    #[tokio::test]
     async fn image_only_structured_content_items_are_skipped() {
         let request = request_with(vec![
             structured_tool(
@@ -1406,6 +1733,148 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn live_zone_scope_slims_same_turn_tool_output() {
+        let request = request_with(vec![
+            user("current prompt"),
+            tool_text("shell", "live output ".repeat(5_000)),
+        ]);
+
+        let outcome =
+            slim_request_with_scope(&request, InputSlimmingScope::LiveZoneToolOutputs).await;
+
+        assert_eq!(outcome.metrics.slimmed, 1);
+        let TranscriptItem::ToolResult {
+            payload: ToolResultPayload::Text { output },
+            ..
+        } = &outcome.request.conversation[1]
+        else {
+            panic!("expected live tool result");
+        };
+        assert!(output.contains("<<lha-input:"));
+        assert_eq!(outcome.metrics.refs[0].zone, CandidateZone::LiveToolOutput);
+    }
+
+    #[tokio::test]
+    async fn live_zone_scope_skips_historical_tool_output_and_slims_current_tool_output() {
+        let historical = "historical output ".repeat(5_000);
+        let live = "live output ".repeat(5_000);
+        let request = request_with(vec![
+            tool_text("shell", historical.clone()),
+            user("current prompt"),
+            tool_text("shell", live),
+        ]);
+
+        let outcome =
+            slim_request_with_scope(&request, InputSlimmingScope::LiveZoneToolOutputs).await;
+
+        assert_eq!(
+            outcome.request.conversation[0],
+            tool_text("shell", historical)
+        );
+        let TranscriptItem::ToolResult {
+            payload: ToolResultPayload::Text { output },
+            ..
+        } = &outcome.request.conversation[2]
+        else {
+            panic!("expected live tool result");
+        };
+        assert!(output.contains("<<lha-input:"));
+        assert_eq!(outcome.metrics.slimmed, 1);
+    }
+
+    #[tokio::test]
+    async fn live_zone_scope_slims_multiple_current_tool_results() {
+        let request = request_with(vec![
+            user("current prompt"),
+            tool_text("shell", "first live output ".repeat(5_000)),
+            tool_text("rg", "second live output ".repeat(5_000)),
+        ]);
+
+        let outcome =
+            slim_request_with_scope(&request, InputSlimmingScope::LiveZoneToolOutputs).await;
+
+        assert_eq!(outcome.metrics.slimmed, 2);
+        assert_eq!(
+            outcome
+                .metrics
+                .refs
+                .iter()
+                .map(|reference| reference.zone)
+                .collect::<Vec<_>>(),
+            vec![CandidateZone::LiveToolOutput, CandidateZone::LiveToolOutput]
+        );
+    }
+
+    #[tokio::test]
+    async fn live_zone_scope_skips_retrieve_output_and_existing_markers() {
+        let request = request_with(vec![
+            user("current prompt"),
+            tool_text(
+                INPUT_RETRIEVE_TOOL_NAME,
+                "retrieved original ".repeat(5_000),
+            ),
+            tool_text("shell", "already <<lha-input:abcdef>> slimmed".to_string()),
+        ]);
+
+        let outcome =
+            slim_request_with_scope(&request, InputSlimmingScope::LiveZoneToolOutputs).await;
+
+        assert_eq!(outcome.request.conversation, request.conversation);
+        assert_eq!(outcome.metrics.slimmed, 0);
+        assert_eq!(
+            outcome.metrics.skipped,
+            vec![
+                InputSlimmingSkip {
+                    reason: InputSlimmingSkipReason::CurrentUserTurn,
+                    tool_name: None,
+                },
+                InputSlimmingSkip {
+                    reason: InputSlimmingSkipReason::AlreadySlimmed,
+                    tool_name: Some(INPUT_RETRIEVE_TOOL_NAME.to_string()),
+                },
+                InputSlimmingSkip {
+                    reason: InputSlimmingSkipReason::AlreadySlimmed,
+                    tool_name: Some("shell".to_string()),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn live_zone_scope_skips_non_tool_items_and_user_text() {
+        let request = request_with(vec![
+            user("current prompt ".repeat(5_000).as_str()),
+            reasoning("private reasoning"),
+            hosted_activity(),
+            tool_call("shell"),
+            assistant("assistant note"),
+            tool_text("shell", "live output ".repeat(5_000)),
+        ]);
+
+        let outcome =
+            slim_request_with_scope(&request, InputSlimmingScope::LiveZoneToolOutputs).await;
+
+        assert_eq!(outcome.metrics.slimmed, 1);
+        assert_eq!(outcome.request.conversation[0], request.conversation[0]);
+        assert!(outcome.metrics.skipped.contains(&InputSlimmingSkip {
+            reason: InputSlimmingSkipReason::CurrentUserTurn,
+            tool_name: None,
+        }));
+        assert!(outcome.metrics.skipped.contains(&InputSlimmingSkip {
+            reason: InputSlimmingSkipReason::ProtectedRole,
+            tool_name: None,
+        }));
+        assert!(outcome.metrics.skipped.contains(&InputSlimmingSkip {
+            reason: InputSlimmingSkipReason::UnsupportedItem,
+            tool_name: None,
+        }));
+        assert!(outcome.metrics.skipped.contains(&InputSlimmingSkip {
+            reason: InputSlimmingSkipReason::RecentAssistant,
+            tool_name: None,
+        }));
     }
 
     #[tokio::test]
@@ -1483,6 +1952,8 @@ mod tests {
                     turn_id: "turn",
                     estimate_request_tokens: Some(&estimator),
                     mode: InputSlimmingMode::Apply,
+                    scope: InputSlimmingScope::HistoricalToolOutputs,
+                    wire_api: InputSlimmingWireApi::Responses,
                     context_window: None,
                     estimated_input_tokens: None,
                 },
@@ -1515,6 +1986,8 @@ mod tests {
                     turn_id: "turn",
                     estimate_request_tokens: Some(&estimator),
                     mode: InputSlimmingMode::Apply,
+                    scope: InputSlimmingScope::HistoricalToolOutputs,
+                    wire_api: InputSlimmingWireApi::Responses,
                     context_window: None,
                     estimated_input_tokens: None,
                 },
@@ -1545,6 +2018,8 @@ mod tests {
                     turn_id: "turn",
                     estimate_request_tokens: None,
                     mode: InputSlimmingMode::MeasureOnly,
+                    scope: InputSlimmingScope::HistoricalToolOutputs,
+                    wire_api: InputSlimmingWireApi::Responses,
                     context_window: None,
                     estimated_input_tokens: None,
                 },
@@ -1570,6 +2045,7 @@ mod tests {
             InputSlimmingStrategy::PlainTextHeadTail,
         ] {
             let metadata = StoredInputMetadata {
+                scope: InputSlimmingScope::HistoricalToolOutputs,
                 strategy,
                 tool_name: "shell".to_string(),
                 original_tokens: 10,
@@ -1588,6 +2064,7 @@ mod tests {
     #[test]
     fn unknown_stored_strategy_is_rejected() {
         let serialized = InputSlimmingStoredInputMetadata {
+            scope: InputSlimmingScope::HistoricalToolOutputs,
             strategy: "unknown".to_string(),
             tool_name: "shell".to_string(),
             original_tokens: 10,
@@ -1597,6 +2074,52 @@ mod tests {
 
         assert!(StoredInputMetadata::try_from(serialized).is_err());
         assert_eq!(InputSlimmingStrategy::from_str("unknown"), None);
+    }
+
+    #[test]
+    fn stored_metadata_without_scope_defaults_to_historical() {
+        let serialized: InputSlimmingStoredInputMetadata =
+            serde_json::from_value(serde_json::json!({
+                "strategy": "plain_text_head_tail",
+                "tool_name": "shell",
+                "original_tokens": 10,
+                "compressed_tokens": 3,
+                "created_turn_id": "turn-1",
+            }))
+            .expect("metadata without scope should deserialize");
+
+        let restored =
+            StoredInputMetadata::try_from(serialized).expect("default scope metadata restores");
+
+        assert_eq!(
+            restored,
+            StoredInputMetadata {
+                scope: InputSlimmingScope::HistoricalToolOutputs,
+                strategy: InputSlimmingStrategy::PlainTextHeadTail,
+                tool_name: "shell".to_string(),
+                original_tokens: 10,
+                compressed_tokens: 3,
+                created_turn_id: "turn-1".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn live_zone_stored_metadata_round_trips() {
+        let metadata = StoredInputMetadata {
+            scope: InputSlimmingScope::LiveZoneToolOutputs,
+            strategy: InputSlimmingStrategy::PlainTextHeadTail,
+            tool_name: "shell".to_string(),
+            original_tokens: 10,
+            compressed_tokens: 3,
+            created_turn_id: "turn-1".to_string(),
+        };
+
+        let serialized = InputSlimmingStoredInputMetadata::from(metadata.clone());
+        let restored =
+            StoredInputMetadata::try_from(serialized).expect("live scope metadata restores");
+
+        assert_eq!(restored, metadata);
     }
 
     #[tokio::test]
@@ -1616,6 +2139,8 @@ mod tests {
                     turn_id: "turn",
                     estimate_request_tokens: Some(&estimator),
                     mode: InputSlimmingMode::Apply,
+                    scope: InputSlimmingScope::HistoricalToolOutputs,
+                    wire_api: InputSlimmingWireApi::Responses,
                     context_window: None,
                     estimated_input_tokens: None,
                 },
@@ -1655,6 +2180,8 @@ mod tests {
                 turn_id: "turn",
                 estimate_request_tokens: Some(&estimator),
                 mode: InputSlimmingMode::Apply,
+                scope: InputSlimmingScope::HistoricalToolOutputs,
+                wire_api: InputSlimmingWireApi::Responses,
                 context_window: None,
                 estimated_input_tokens: None,
             },

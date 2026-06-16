@@ -191,6 +191,14 @@
         "last": {
           "$ref": "#/definitions/InputSlimmingTokenStats"
         },
+        "scope": {
+          "default": "historical_tool_outputs",
+          "allOf": [
+            {
+              "$ref": "#/definitions/InputSlimmingScope"
+            }
+          ]
+        },
         "total": {
           "$ref": "#/definitions/InputSlimmingTokenStats"
         },
@@ -2889,6 +2897,14 @@
             "last": {
               "$ref": "#/definitions/InputSlimmingTokenStats"
             },
+            "scope": {
+              "default": "historical_tool_outputs",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/InputSlimmingScope"
+                }
+              ]
+            },
             "total": {
               "$ref": "#/definitions/InputSlimmingTokenStats"
             },
@@ -5031,6 +5047,13 @@
           "type": "string"
         }
       }
+    },
+    "InputSlimmingScope": {
+      "type": "string",
+      "enum": [
+        "historical_tool_outputs",
+        "live_zone_tool_outputs"
+      ]
     },
     "InputSlimmingTokenStats": {
       "type": "object",

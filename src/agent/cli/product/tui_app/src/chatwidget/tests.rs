@@ -2028,6 +2028,7 @@ async fn sidebar_status_tracks_input_slimming_savings() {
     chat.handle_codex_event(Event {
         id: "input-slimming-empty".into(),
         msg: EventMsg::InputSlimming(crate::product::agent::protocol::InputSlimmingEvent {
+            scope: crate::product::agent::protocol::InputSlimmingScope::HistoricalToolOutputs,
             last: crate::product::agent::protocol::InputSlimmingTokenStats {
                 tokens_before: 1_000,
                 tokens_after: 1_000,
@@ -2054,6 +2055,7 @@ async fn sidebar_status_tracks_input_slimming_savings() {
     chat.handle_codex_event(Event {
         id: "input-slimming-saved".into(),
         msg: EventMsg::InputSlimming(crate::product::agent::protocol::InputSlimmingEvent {
+            scope: crate::product::agent::protocol::InputSlimmingScope::LiveZoneToolOutputs,
             last: crate::product::agent::protocol::InputSlimmingTokenStats {
                 tokens_before: 12_400,
                 tokens_after: 4_100,
@@ -2078,6 +2080,7 @@ async fn sidebar_status_tracks_input_slimming_savings() {
     assert_eq!(
         slimming,
         &crate::product::tui_app::sidebar::InputSlimmingPanelSnapshot {
+            scope: crate::product::agent::protocol::InputSlimmingScope::LiveZoneToolOutputs,
             last_before_tokens: 12_400,
             last_after_tokens: 4_100,
             last_saved_tokens: 8_300,
@@ -2086,7 +2089,7 @@ async fn sidebar_status_tracks_input_slimming_savings() {
     );
 
     let rendered = render_sidebar_snapshot(&snapshot);
-    assert!(rendered.contains("slim 12.4K -> 4.1K"));
+    assert!(rendered.contains("slim live 12.4K -> 4.1K"));
     assert!(rendered.contains("saved 18.7K context"));
     assert!(!rendered.contains("this /"));
 

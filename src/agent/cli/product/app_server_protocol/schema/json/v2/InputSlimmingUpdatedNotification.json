@@ -19,15 +19,26 @@
     }
   },
   "definitions": {
+    "InputSlimmingScope": {
+      "type": "string",
+      "enum": [
+        "historicalToolOutputs",
+        "liveZoneToolOutputs"
+      ]
+    },
     "InputSlimmingStats": {
       "type": "object",
       "required": [
         "last",
+        "scope",
         "total"
       ],
       "properties": {
         "last": {
           "$ref": "#/definitions/InputSlimmingTokenStats"
+        },
+        "scope": {
+          "$ref": "#/definitions/InputSlimmingScope"
         },
         "total": {
           "$ref": "#/definitions/InputSlimmingTokenStats"

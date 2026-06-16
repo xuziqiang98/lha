@@ -25,6 +25,7 @@ use crate::product::agent::dynamic_context_window::DynamicContextWindowState;
 use crate::product::agent::dynamic_context_window::DynamicContextWindowSuccess;
 use crate::product::agent::error::Result;
 use crate::product::agent::features::Feature;
+use crate::product::agent::input_slimming::InputSlimmingWireApi;
 use crate::product::agent::models_manager::manager::ModelsManager;
 use lha_llm::RuntimeEndpoint;
 
@@ -184,6 +185,17 @@ impl TurnRuntime {
 
     pub fn get_model_info(&self) -> ModelInfo {
         self.effective_model_info()
+    }
+
+    pub(crate) fn input_slimming_wire_api(&self) -> InputSlimmingWireApi {
+        if self.state.endpoint.uses_responses_api() {
+            InputSlimmingWireApi::Responses
+        } else if self.state.endpoint.uses_chat_completions_api() {
+            InputSlimmingWireApi::Chat
+        } else {
+            debug_assert!(self.state.endpoint.uses_messages_api());
+            InputSlimmingWireApi::Messages
+        }
     }
 
     pub fn get_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {

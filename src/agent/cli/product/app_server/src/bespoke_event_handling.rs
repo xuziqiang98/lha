@@ -1962,6 +1962,7 @@ mod tests {
             conversation_id,
             turn_id.clone(),
             InputSlimmingEvent {
+                scope: crate::product::agent::protocol::InputSlimmingScope::LiveZoneToolOutputs,
                 last: crate::product::agent::protocol::InputSlimmingTokenStats {
                     tokens_before: 12_400,
                     tokens_after: 4_100,
@@ -1989,6 +1990,10 @@ mod tests {
             )) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, turn_id);
+                assert_eq!(
+                    payload.input_slimming.scope,
+                    crate::product::app_server_protocol::InputSlimmingScope::LiveZoneToolOutputs
+                );
                 assert_eq!(payload.input_slimming.last.tokens_before, 12_400);
                 assert_eq!(payload.input_slimming.last.tokens_after, 4_100);
                 assert_eq!(payload.input_slimming.last.tokens_saved, 8_300);

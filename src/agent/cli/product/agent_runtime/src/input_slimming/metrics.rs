@@ -1,11 +1,25 @@
 use crate::product::agent::input_slimming::InputSlimmingMetrics;
+use crate::product::agent::input_slimming::InputSlimmingWireApi;
+use crate::product::agent::protocol::InputSlimmingScope;
 use crate::product::otel::OtelManager;
 
-pub(super) fn emit_metrics(metrics: &InputSlimmingMetrics, otel: &OtelManager, model: &str) {
+pub(super) fn emit_metrics(
+    metrics: &InputSlimmingMetrics,
+    otel: &OtelManager,
+    model: &str,
+    scope: InputSlimmingScope,
+    wire_api: InputSlimmingWireApi,
+) {
+    let common_labels = &[
+        ("model", model),
+        ("feature_enabled", "true"),
+        ("scope", scope.as_str()),
+        ("wire_api", wire_api.as_str()),
+    ];
     otel.counter(
         "lha.input_slimming.candidate",
         i64::try_from(metrics.candidates).unwrap_or(i64::MAX),
-        &[("model", model), ("feature_enabled", "true")],
+        common_labels,
     );
     for reference in &metrics.refs {
         otel.counter(
@@ -14,6 +28,8 @@ pub(super) fn emit_metrics(metrics: &InputSlimmingMetrics, otel: &OtelManager, m
             &[
                 ("model", model),
                 ("feature_enabled", "true"),
+                ("scope", scope.as_str()),
+                ("wire_api", wire_api.as_str()),
                 ("strategy", reference.strategy.as_str()),
                 ("tool_name", reference.tool_name.as_str()),
                 ("zone", reference.zone.as_str()),
@@ -23,12 +39,12 @@ pub(super) fn emit_metrics(metrics: &InputSlimmingMetrics, otel: &OtelManager, m
     otel.counter(
         "lha.input_slimming.measured_only",
         i64::try_from(metrics.measured_only).unwrap_or(i64::MAX),
-        &[("model", model), ("feature_enabled", "true")],
+        common_labels,
     );
     otel.counter(
         "lha.input_slimming.token_gate_fallback",
         i64::try_from(metrics.token_gate_fallbacks).unwrap_or(i64::MAX),
-        &[("model", model), ("feature_enabled", "true")],
+        common_labels,
     );
     for skipped in &metrics.skipped {
         otel.counter(
@@ -37,6 +53,8 @@ pub(super) fn emit_metrics(metrics: &InputSlimmingMetrics, otel: &OtelManager, m
             &[
                 ("model", model),
                 ("feature_enabled", "true"),
+                ("scope", scope.as_str()),
+                ("wire_api", wire_api.as_str()),
                 ("reason", skipped.reason.as_str()),
                 (
                     "tool_name",
@@ -48,22 +66,24 @@ pub(super) fn emit_metrics(metrics: &InputSlimmingMetrics, otel: &OtelManager, m
     otel.histogram(
         "lha.input_slimming.tokens_before",
         i64::try_from(metrics.approx_tokens_before).unwrap_or(i64::MAX),
-        &[("model", model), ("feature_enabled", "true")],
+        common_labels,
     );
     otel.histogram(
         "lha.input_slimming.tokens_after",
         i64::try_from(metrics.approx_tokens_after).unwrap_or(i64::MAX),
-        &[("model", model), ("feature_enabled", "true")],
+        common_labels,
     );
     otel.histogram(
         "lha.input_slimming.tokens_saved",
         i64::try_from(metrics.approx_tokens_saved).unwrap_or(i64::MAX),
-        &[("model", model), ("feature_enabled", "true")],
+        common_labels,
     );
     for metric in &metrics.strategy_metrics {
         let labels = &[
             ("model", model),
             ("feature_enabled", "true"),
+            ("scope", scope.as_str()),
+            ("wire_api", wire_api.as_str()),
             ("strategy", metric.strategy.as_str()),
             ("tool_name", metric.tool_name.as_str()),
             ("zone", metric.zone.as_str()),

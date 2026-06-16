@@ -3,6 +3,7 @@
 
 use crate::product::agent::features::Feature;
 use crate::product::agent::protocol::EventMsg;
+use crate::product::agent::protocol::InputSlimmingScope;
 use crate::product::agent::protocol::SandboxPolicy;
 use crate::test_support::core::responses::ev_assistant_message;
 use crate::test_support::core::responses::ev_completed;
@@ -17,6 +18,8 @@ use crate::test_support::core::wait_for_event_match;
 use anyhow::Result;
 use serde_json::Value;
 use serde_json::json;
+
+const INPUT_SLIMMING_CONFLICT_WARNING: &str = "Input slimming strategies are mutually exclusive; enable only one of input_slimming or input_slimming_live_zone.";
 
 fn body_text(body: &Value) -> String {
     serde_json::to_string(body).expect("request body serializes")
@@ -319,6 +322,202 @@ async fn input_slimming_feature_disabled_keeps_old_tool_output_unmodified() -> R
             .any(|tool| tool == "lha_input_retrieve")
     );
     assert!(!Feature::InputSlimming.default_enabled());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn input_slimming_live_zone_slims_same_turn_tool_outputs_and_preserves_historical_prefix()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "large-live-output";
+    let command = "for i in $(seq 1 5000); do echo live-zone-line-$i; done";
+    let args = json!({
+        "command": command,
+        "timeout_ms": 5_000,
+    });
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let same_turn_follow_up = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "first turn done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+    let later_turn = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-2", "later turn done"),
+            ev_completed("resp-3"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_model("gpt-5.1").with_config(|config| {
+        config.features.enable(Feature::InputSlimmingLiveZone);
+        config.tool_output_token_limit = Some(100_000);
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_policy("make a large shell output", SandboxPolicy::DangerFullAccess)
+        .await?;
+
+    let live_slimming = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::InputSlimming(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(live_slimming.scope, InputSlimmingScope::LiveZoneToolOutputs);
+    assert!(live_slimming.last.tokens_before > live_slimming.last.tokens_after);
+    assert!(live_slimming.last.replacements > 0);
+
+    let same_turn_body = same_turn_follow_up.single_request().body_json();
+    let same_turn_text = body_text(&same_turn_body);
+    assert!(same_turn_text.contains("<<lha-input:"));
+    assert!(same_turn_text.contains("Input Slimming"));
+    assert!(!same_turn_text.contains("live-zone-line-2500"));
+    assert!(
+        tool_identifiers(&same_turn_body)
+            .iter()
+            .any(|tool| tool == "lha_input_retrieve")
+    );
+
+    test.submit_turn("inspect the already handled output later")
+        .await?;
+    let no_later_slimming_event =
+        tokio::time::timeout(std::time::Duration::from_millis(100), async {
+            wait_for_event_match(&test.codex, |event| match event {
+                EventMsg::InputSlimming(event) => Some(event.clone()),
+                _ => None,
+            })
+            .await
+        })
+        .await;
+    assert!(
+        no_later_slimming_event.is_err(),
+        "historical prefix should not be re-slimmed by live-zone strategy"
+    );
+    let later_body = later_turn.single_request().body_json();
+    let later_text = body_text(&later_body);
+    assert!(later_text.contains("live-zone-line-2500"));
+    assert!(!later_text.contains("<<lha-input:"));
+
+    let hash = extract_input_slimming_hash(&same_turn_text);
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-4"),
+            ev_function_call(
+                "retrieve-call",
+                "lha_input_retrieve",
+                &serde_json::to_string(&json!({
+                    "hash": hash.clone(),
+                    "query": "live-zone-line-2500",
+                }))?,
+            ),
+            ev_completed("resp-4"),
+        ]),
+    )
+    .await;
+    let after_retrieve = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-3", "retrieved live-zone line"),
+            ev_completed("resp-5"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn(&format!("retrieve marker <<lha-input:{hash}>>"))
+        .await?;
+    let retrieve_follow_up = after_retrieve.single_request().body_json();
+    let retrieve_follow_up_text = body_text(&retrieve_follow_up);
+    assert!(retrieve_follow_up_text.contains("live-zone-line-2500"));
+    assert!(!retrieve_follow_up_text.contains("store miss"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn input_slimming_conflict_warns_and_disables_slimming() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "conflict-large-output";
+    let command = "for i in $(seq 1 5000); do echo conflict-line-$i; done";
+    let args = json!({
+        "command": command,
+        "timeout_ms": 5_000,
+    });
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let same_turn_follow_up = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "conflict turn done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_model("gpt-5.1").with_config(|config| {
+        config.features.enable(Feature::InputSlimming);
+        config.features.enable(Feature::InputSlimmingLiveZone);
+        config.tool_output_token_limit = Some(100_000);
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_policy("make a large shell output", SandboxPolicy::DangerFullAccess)
+        .await?;
+
+    let warning = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::Warning(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(warning.message, INPUT_SLIMMING_CONFLICT_WARNING);
+    let no_slimming_event = tokio::time::timeout(std::time::Duration::from_millis(100), async {
+        wait_for_event_match(&test.codex, |event| match event {
+            EventMsg::InputSlimming(event) => Some(event.clone()),
+            _ => None,
+        })
+        .await
+    })
+    .await;
+    assert!(
+        no_slimming_event.is_err(),
+        "conflicting strategies should disable input slimming"
+    );
+
+    let same_turn_body = same_turn_follow_up.single_request().body_json();
+    let same_turn_text = body_text(&same_turn_body);
+    assert!(same_turn_text.contains("conflict-line-2500"));
+    assert!(!same_turn_text.contains("<<lha-input:"));
+    assert!(
+        !tool_identifiers(&same_turn_body)
+            .iter()
+            .any(|tool| tool == "lha_input_retrieve")
+    );
 
     Ok(())
 }

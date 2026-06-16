@@ -24,19 +24,29 @@ Headroom 的 provider 代理实现。它不是现有 `/compact` 的替代品：`
 
 ## Implementation Status
 
-Input Slimming 已有首版 product-private 实现，默认关闭。启用方式：
+Input Slimming 已有 product-private 实现，默认关闭。目前有两个互斥策略：
 
 ```toml
 [features]
+# historical tool-output slimming
 input_slimming = true
+
+# live-zone tool-output slimming
+input_slimming_live_zone = true
 ```
+
+不要同时启用两个 key。`/experimental` 会在开启其中一个策略时自动关闭另一个策略；
+如果手写 config 同时开启，runtime 会发出 warning，并禁用本次 input slimming，避免
+消融实验数据混淆。
 
 当前实现范围：
 
-- 压缩 latest user message 之前的 historical tool results；
-- latest user message 之后的 live-zone tool results 默认受 recent output protection
-  window 保护，不在同 turn follow-up request 中立即压缩；下一次用户 turn 后，这些
-  output 变为 historical tool results 后仍可被压缩；
+- `input_slimming` 是 historical 策略：压缩 latest user message 之前的 historical
+  tool results；latest user message 之后的 live-zone tool results 受 recent output
+  protection window 保护，不在同 turn follow-up request 中立即压缩；
+- `input_slimming_live_zone` 是 live-zone 策略：只压缩 latest user message 之后、
+  会进入当前 provider live zone 的 tool results，用于保护旧缓存前缀并提高 provider
+  cached input token 命中率；
 - 跳过 user/system/developer/assistant/reasoning/hosted activity；
 - 只压缩当前 request 内安全的 tool results，不改写当前用户输入、reasoning、
   hosted activity、tool call 或 assistant message；
@@ -52,14 +62,56 @@ input_slimming = true
   seconds；
 - accepted replacements 会把原文和 metadata 写入 rollout sidecar item，用于 resume
   后恢复 session store；压缩后的 request clone 仍不写入 transcript history；
-- session-scoped replacement cache 会按原文 hash、tool、zone、策略版本和压缩参数复用
-  已生成的 slimmed replacement，避免跨 turn 对同一 tool output 重复执行压缩策略；
-- Sidebar `saved xxxK context` 表示当前 session 中已被 slimmed context 采用过的
+- session-scoped replacement cache 会按原文 hash、tool、scope、zone、策略版本和压缩
+  参数复用已生成的 slimmed replacement，避免跨 turn 对同一 tool output 重复执行压缩策略；
+- Sidebar `slim hist` / `slim live` 表示本次 savings 来自 historical 或 live-zone
+  策略；`saved xxxK context` 表示当前 session 中已被 slimmed context 采用过的
   tool-result occurrence 去重累计 saved，不是 provider billing / non-cached usage 的
   反事实节约值；同一 occurrence 跨 turn 复用 replacement 不重复累计，compact 后也不重置
   该 session 统计；
 - marker 格式为 `<<lha-input:{hash}>>`；
 - hash 使用 repo 已有的 `sha2::Sha256`，截断为 24 个 lowercase hex characters。
+
+## Historical vs Live-Zone Strategy
+
+两种策略都工作在 semantic `TurnRequest` 层，而不是 provider wire JSON 字节层；两者
+都会保留持久 transcript history 原文，并通过 `lha_input_retrieve` 恢复原始工具输出。
+
+| 策略 | config key | 候选内容 | 主要目标 |
+| --- | --- | --- | --- |
+| Historical tool outputs | `input_slimming` | latest user message 之前的旧 tool results | 降低长历史工具输出的 token 压力 |
+| Live-zone tool outputs | `input_slimming_live_zone` | latest user message 之后的当前 tool results | 保护旧缓存前缀，提高 cached input token 命中 |
+
+Live-zone v1 只压缩工具输出，不压缩 latest user text。用户原始请求优先保真，即使它也
+位于 provider live zone 内。
+
+启用任一策略并产生 marker 后，LHA 会向 `tools` 列表注入 `lha_input_retrieve`。这会
+改变 provider 看到的 tool schema 列表，是“更强恢复能力”和“更高 prefix cache 命中”
+之间的取舍；实验分析时应单独记录 retrieve tool 注入和实际 retrieval call 次数。
+
+## Wire API Live-Zone Boundaries
+
+普通模型 turn 目前走三类 wire API；`Compact` / `responses/compact` 是独立路径，不纳入
+live-zone slimming。
+
+- Responses：只考虑 latest user message 之后的 `ToolResult`。结构化结果会序列化成
+  `function_call_output.output`，custom text 结果会序列化成
+  `custom_tool_call_output.output`；content items 只压 text，image 保持不变。live
+  candidate 之前的 `input` items 必须保持 provider JSON value 相等。
+- Chat Completions：只考虑 latest user message 之后序列化为 `role: "tool"` 的
+  messages。system、developer/system-downgraded、历史 user/assistant/tool，以及当前
+  assistant `tool_calls` message 必须保持不变。
+- Anthropic Messages：只考虑 latest user message 之后序列化为 latest user/tool-result
+  block 的 `ToolResult` textual content。system prompt、历史 messages 和 preceding
+  assistant `tool_use` blocks 必须保持不变。
+
+推荐消融实验同时记录：
+
+- LHA 本地 `tokens_saved` / replacement count；
+- provider 返回的 cached input tokens / cache read tokens；
+- `lha_input_retrieve` 注入次数、实际 retrieval call 次数和额外 latency；
+- 任务恢复质量：模型是否能在需要时通过 query retrieve 找回被省略细节；
+- cache 收益与 retrieval 成本的净效果，尤其是“压缩后仍总是需要全文”的反例。
 
 ## Problem Statement
 
@@ -141,9 +193,9 @@ Headroom 的管线提供了五个适合迁移到 LHA 的思想。
 
 ### Safety Boundaries
 
-Headroom 会区分稳定上下文和可变压缩内容。LHA 首版不做 provider 侧缓存优化，但
-应继承这个边界意识：稳定指令、developer context、当前用户输入和 runtime reminders
-默认都属于保护区。
+Headroom 会区分稳定上下文和可变压缩内容。LHA 在 semantic `TurnRequest` 层实现这个
+边界：historical 策略优先降低旧工具输出 token 压力，live-zone 策略优先保护旧缓存
+前缀。稳定指令、developer context、当前用户输入和 runtime reminders 默认都属于保护区。
 
 ### Content Routing
 
@@ -188,7 +240,8 @@ turn。
 LHA 应迁移架构原则，而不是 Headroom 的具体 provider adapter 代码：
 
 - 先划定安全区，再选择候选片段；
-- 首批只处理旧工具结果，不处理用户消息或 assistant reasoning；
+- 只处理工具结果；historical 与 live-zone scope 决定处理旧工具输出还是当前
+  live-zone 工具输出，不处理用户消息或 assistant reasoning；
 - 按内容类型路由，而不是统一截断；
 - 每个 replacement 都必须通过 token accept gate；
 - 发出 marker 前，先把原文存入 retrieval store；
@@ -262,7 +315,7 @@ compactor 输出应包括：
 - hosted activity items；
 - 短于配置阈值的内容。
 
-首批候选应限制为旧工具结果：
+候选应限制为工具结果：
 
 - `ToolResultPayload::Text`；
 - `ToolResultPayload::Structured.content`；
@@ -382,23 +435,16 @@ retrieval 行为：
 
 ## Configuration And Rollout
 
-input slimming 是实验能力，默认关闭。
+input slimming 是实验能力，默认关闭。当前 feature flags 为
+`Feature::InputSlimming`（historical）和 `Feature::InputSlimmingLiveZone`
+（live-zone），二者互斥。实现保持 product-private，不新增 public `lha-llm` API。
+新增或调整 feature key 后必须运行 `just write-config-schema` 同步生成 config schema。
 
-首版 feature flag 候选名为：
-
-```text
-InputSlimming
-```
-
-首版实现应保持 product-private，不新增 public `lha-llm` API。首版也不应新增
-`ConfigToml` 字段；如果后续实现决定添加配置字段，必须运行 `just write-config-schema`
-同步生成 config schema。
-
-已实现 Headroom 核心机制迁移的主要 product-private 纵切：live-zone tool outputs、
-model-aware token gate、provider-visible structured content items、deterministic
-ContentRouter、CCR-like retrieval metadata/query、measure-only hooks、adaptive
-policy 和 focused eval tests。功能仍为 experimental 且默认关闭；是否默认开启需要
-更多真实会话 telemetry。
+已实现 Headroom 核心机制迁移的主要 product-private 纵切：historical 和 live-zone
+tool-output scopes、model-aware token gate、provider-visible structured content items、
+deterministic ContentRouter、CCR-like retrieval metadata/query、measure-only hooks、
+adaptive policy 和 focused eval tests。功能仍为 experimental 且默认关闭；是否默认开启
+需要更多真实会话 telemetry。
 
 ## Algorithm Parity Priorities
 
@@ -454,18 +500,21 @@ fail-open 护栏。
 
 已实现：
 
-- `idx < latest_user_index` 的 tool results 标记为 historical candidates。
-- `idx > latest_user_index` 的 tool results 受 recent output protection window 保护，
-  默认记录 `recent_assistant` skip，不进入压缩候选。
+- historical 策略把 `idx < latest_user_index` 的 tool results 标记为 historical
+  candidates。
+- historical 策略中 `idx > latest_user_index` 的 tool results 受 recent output
+  protection window 保护，默认记录 `recent_assistant` skip，不进入压缩候选。
+- live-zone 策略只把 `idx > latest_user_index` 的 tool results 标记为 live
+  candidates，用于 same-turn follow-up request 压缩。
 - latest user message、assistant/reasoning/hosted activity/tool call 等非 tool-result
   items 保持保护。
 - 只改写 `TurnRequest` clone，rollout 和 `ContextManager` history 仍保留原文。
 
 仍需后续评估：
 
-- configurable N / high-pressure override：当前默认保护 latest user message 之后的
-  全部 live-zone tool results，后续如 telemetry 证明有必要，再评估在高 context
-  pressure 下放开部分 live output。
+- configurable N / high-pressure override：historical 策略当前默认保护 latest user
+  message 之后的全部 live-zone tool results；后续如 telemetry 证明有必要，再评估在高
+  context pressure 下放开部分 live output，或直接使用独立 live-zone 策略做消融。
 
 ### Model-Aware Token Gate
 
@@ -548,8 +597,9 @@ fail-open 护栏。
 - shell/build/test、search、diff/apply_patch 等工具名有 product-private policy bias。
 - measure-only 模式会收集 candidate/gate/savings metrics，但不替换、不存储、不注入
   retrieval tool。
-- recent output protection window 默认保护 latest user message 之后的 live-zone tool
-  results，避免刚产生、可能正在被模型分析的输出被同 turn 立即压缩。
+- recent output protection window 只属于 historical 策略；live-zone 策略会压缩同
+  turn 当前 tool outputs，但仍跳过已有 marker、retrieve 输出、非文本 image blocks 和
+  不节省 token 的 replacement。
 
 ### Observability And Eval
 
@@ -678,8 +728,10 @@ product-private：
 - Telemetry：saved、skipped、fail-open、retrieval metrics 会被记录。
 - Resume-safe retrieval：resume 后已有 `<<lha-input:...>>` marker 的原文可通过
   sidecar-hydrated store 取回；旧 marker 无 sidecar 时返回明确 miss，不阻断请求。
-- Recent output protection window：latest user message 之后的 live-zone tool results
-  同 turn 保留原文；下一次用户 turn 后成为 historical tool result 时可被压缩。
+- Historical recent output protection：historical 策略中 latest user message 之后的
+  live-zone tool results 同 turn 保留原文。
+- Live-zone scope：live-zone 策略中 latest user message 之后的当前 tool results 可在
+  same-turn follow-up request 中压缩，同时旧 prefix 保持 provider JSON value 相等。
 
 待补测试场景：
 

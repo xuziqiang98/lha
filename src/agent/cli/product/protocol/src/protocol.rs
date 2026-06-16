@@ -1229,8 +1229,37 @@ pub struct TokenCountEvent {
     pub info: Option<TokenUsageInfo>,
 }
 
+#[derive(
+    Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, Hash, JsonSchema, TS,
+)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "protocol/")]
+pub enum InputSlimmingScope {
+    #[default]
+    HistoricalToolOutputs,
+    LiveZoneToolOutputs,
+}
+
+impl InputSlimmingScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::HistoricalToolOutputs => "historical_tool_outputs",
+            Self::LiveZoneToolOutputs => "live_zone_tool_outputs",
+        }
+    }
+
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Self::HistoricalToolOutputs => "hist",
+            Self::LiveZoneToolOutputs => "live",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct InputSlimmingEvent {
+    #[serde(default)]
+    pub scope: InputSlimmingScope,
     pub last: InputSlimmingTokenStats,
     pub total: InputSlimmingTokenStats,
 }
@@ -1738,6 +1767,8 @@ pub struct InputSlimmingStoredInputItem {
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS, PartialEq, Eq)]
 pub struct InputSlimmingStoredInputMetadata {
+    #[serde(default)]
+    pub scope: InputSlimmingScope,
     pub strategy: String,
     pub tool_name: String,
     pub original_tokens: usize,

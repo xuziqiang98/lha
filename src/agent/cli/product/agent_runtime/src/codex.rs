@@ -142,15 +142,18 @@ use crate::product::agent::exec::StreamOutput;
 use crate::product::agent::exec_policy::ExecPolicyUpdateError;
 use crate::product::agent::git_info::get_git_repo_root;
 use crate::product::agent::input_slimming::INPUT_RETRIEVE_TOOL_NAME;
+use crate::product::agent::input_slimming::INPUT_SLIMMING_CONFLICT_WARNING;
 use crate::product::agent::input_slimming::INPUT_SLIMMING_MARKER_PREFIX;
 use crate::product::agent::input_slimming::InputRetrieveHandler;
 use crate::product::agent::input_slimming::InputSlimmer;
+use crate::product::agent::input_slimming::InputSlimmingActivation;
 use crate::product::agent::input_slimming::InputSlimmingContext;
 use crate::product::agent::input_slimming::InputSlimmingContextStatCandidate;
 use crate::product::agent::input_slimming::InputSlimmingMode;
 use crate::product::agent::input_slimming::InputSlimmingOccurrenceKey;
 use crate::product::agent::input_slimming::InputSlimmingPersistedEntry;
 use crate::product::agent::input_slimming::create_lha_input_retrieve_tool;
+use crate::product::agent::input_slimming::resolve_input_slimming_scope;
 use crate::product::agent::instructions::UserInstructions;
 use crate::product::agent::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::product::agent::mcp::auth::compute_auth_statuses;
@@ -178,6 +181,7 @@ use crate::product::agent::protocol::ExecApprovalRequestEvent;
 use crate::product::agent::protocol::IDENTITY_CLOSE_TAG;
 use crate::product::agent::protocol::IDENTITY_OPEN_TAG;
 use crate::product::agent::protocol::InputSlimmingEvent;
+use crate::product::agent::protocol::InputSlimmingScope;
 use crate::product::agent::protocol::InputSlimmingTokenStats;
 use crate::product::agent::protocol::McpServerRefreshConfig;
 use crate::product::agent::protocol::Op;
@@ -4098,6 +4102,7 @@ impl Session {
     pub(crate) async fn record_input_slimming(
         &self,
         turn_context: &TurnContext,
+        scope: InputSlimmingScope,
         candidates: &[InputSlimmingContextStatCandidate],
     ) {
         let Some((last, total)) = ({
@@ -4108,7 +4113,7 @@ impl Session {
         };
         self.send_event(
             turn_context,
-            EventMsg::InputSlimming(InputSlimmingEvent { last, total }),
+            EventMsg::InputSlimming(InputSlimmingEvent { scope, last, total }),
         )
         .await;
     }
@@ -6104,9 +6109,25 @@ async fn run_sampling_request(
         .estimate_token_count(turn_context.as_ref())
         .map(|tokens| tokens.max(0));
     let mut slimming_fallback_tokens = None;
-    if sess.enabled(Feature::InputSlimming) {
+    let input_slimming_activation = resolve_input_slimming_scope(&sess.features());
+    let input_slimming_scope = match input_slimming_activation {
+        InputSlimmingActivation::Disabled => None,
+        InputSlimmingActivation::Scope(scope) => Some(scope),
+        InputSlimmingActivation::Conflict => {
+            sess.send_event(
+                turn_context.as_ref(),
+                EventMsg::Warning(WarningEvent {
+                    message: INPUT_SLIMMING_CONFLICT_WARNING.to_string(),
+                }),
+            )
+            .await;
+            None
+        }
+    };
+    if let Some(input_slimming_scope) = input_slimming_scope {
         let slimming_start = Instant::now();
         let model = turn_context.runtime.get_model();
+        let wire_api = turn_context.runtime.input_slimming_wire_api();
         let estimate_request_tokens = |request: &TurnRequest| {
             turn_context
                 .runtime
@@ -6121,6 +6142,8 @@ async fn run_sampling_request(
                     turn_id: turn_context.sub_id.as_str(),
                     estimate_request_tokens: Some(&estimate_request_tokens),
                     mode: InputSlimmingMode::Apply,
+                    scope: input_slimming_scope,
+                    wire_api,
                     context_window: turn_context.runtime.get_model_context_window(),
                     estimated_input_tokens: history_input_tokens,
                 },
@@ -6132,11 +6155,18 @@ async fn run_sampling_request(
                     &outcome,
                     &turn_context.runtime.get_otel_manager(),
                     model.as_str(),
+                    input_slimming_scope,
+                    wire_api,
                 );
                 turn_context.runtime.get_otel_manager().histogram(
                     "lha.input_slimming.latency_ms",
                     i64::try_from(slimming_start.elapsed().as_millis()).unwrap_or(i64::MAX),
-                    &[("model", model.as_str()), ("feature_enabled", "true")],
+                    &[
+                        ("model", model.as_str()),
+                        ("feature_enabled", "true"),
+                        ("scope", input_slimming_scope.as_str()),
+                        ("wire_api", wire_api.as_str()),
+                    ],
                 );
                 if outcome.approx_tokens_saved > 0 {
                     slimming_fallback_tokens = history_input_tokens.map(|tokens| {
@@ -6148,6 +6178,7 @@ async fn run_sampling_request(
                 if outcome.metrics.approx_tokens_saved > 0 && outcome.metrics.slimmed > 0 {
                     sess.record_input_slimming(
                         turn_context.as_ref(),
+                        input_slimming_scope,
                         outcome.context_stats_candidates.as_slice(),
                     )
                     .await;
@@ -6168,13 +6199,19 @@ async fn run_sampling_request(
                 turn_context.runtime.get_otel_manager().counter(
                     "lha.input_slimming.fail_open",
                     1,
-                    &[("model", model.as_str()), ("feature_enabled", "true")],
+                    &[
+                        ("model", model.as_str()),
+                        ("feature_enabled", "true"),
+                        ("scope", input_slimming_scope.as_str()),
+                        ("wire_api", wire_api.as_str()),
+                    ],
                 );
                 warn!("input slimming failed open: {err}");
             }
         }
     }
-    if sess.enabled(Feature::InputSlimming) && turn_request_contains_input_slimming_marker(&prompt)
+    if matches!(input_slimming_activation, InputSlimmingActivation::Scope(_))
+        && turn_request_contains_input_slimming_marker(&prompt)
     {
         ensure_input_retrieve_tool(&mut router);
         prompt.tools = router.specs();
@@ -8975,6 +9012,7 @@ mod tests {
 
         sess.record_input_slimming(
             tc.as_ref(),
+            InputSlimmingScope::HistoricalToolOutputs,
             &[InputSlimmingContextStatCandidate {
                 occurrence_key: input_slimming_occurrence("call-1"),
                 tokens_before: 1_000,
@@ -8996,6 +9034,7 @@ mod tests {
 
         sess.record_input_slimming(
             tc.as_ref(),
+            InputSlimmingScope::HistoricalToolOutputs,
             &[
                 InputSlimmingContextStatCandidate {
                     occurrence_key: input_slimming_occurrence("call-1"),
@@ -9014,6 +9053,7 @@ mod tests {
         .await;
         sess.record_input_slimming(
             tc.as_ref(),
+            InputSlimmingScope::HistoricalToolOutputs,
             &[
                 InputSlimmingContextStatCandidate {
                     occurrence_key: input_slimming_occurrence("call-2"),
@@ -9032,6 +9072,7 @@ mod tests {
         .await;
 
         let first = wait_for_input_slimming(&rx).await;
+        assert_eq!(first.scope, InputSlimmingScope::HistoricalToolOutputs);
         assert_eq!(
             first.last,
             InputSlimmingTokenStats {
@@ -9044,6 +9085,7 @@ mod tests {
         assert_eq!(first.total, first.last);
 
         let second = wait_for_input_slimming(&rx).await;
+        assert_eq!(second.scope, InputSlimmingScope::HistoricalToolOutputs);
         assert_eq!(
             second.last,
             InputSlimmingTokenStats {
@@ -9070,6 +9112,7 @@ mod tests {
 
         sess.record_input_slimming(
             tc.as_ref(),
+            InputSlimmingScope::LiveZoneToolOutputs,
             &[
                 InputSlimmingContextStatCandidate {
                     occurrence_key: input_slimming_occurrence_with_hash("call-1", "same-hash"),
@@ -9088,6 +9131,7 @@ mod tests {
         .await;
 
         let event = wait_for_input_slimming(&rx).await;
+        assert_eq!(event.scope, InputSlimmingScope::LiveZoneToolOutputs);
         assert_eq!(
             event.total,
             InputSlimmingTokenStats {
@@ -9105,6 +9149,7 @@ mod tests {
 
         sess.record_input_slimming(
             tc.as_ref(),
+            InputSlimmingScope::HistoricalToolOutputs,
             &[InputSlimmingContextStatCandidate {
                 occurrence_key: input_slimming_occurrence("call-1"),
                 tokens_before: 1_000,
@@ -9119,6 +9164,7 @@ mod tests {
         }
         sess.record_input_slimming(
             tc.as_ref(),
+            InputSlimmingScope::HistoricalToolOutputs,
             &[InputSlimmingContextStatCandidate {
                 occurrence_key: input_slimming_occurrence("call-2"),
                 tokens_before: 2_000,

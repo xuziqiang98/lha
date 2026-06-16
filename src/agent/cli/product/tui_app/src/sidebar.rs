@@ -1,5 +1,6 @@
 use crate::product::protocol::plan_tool::StepStatus;
 use crate::product::protocol::protocol::AgentJobDisplayStatus;
+use crate::product::protocol::protocol::InputSlimmingScope;
 use crate::product::tui_app::buddy;
 use crate::product::tui_app::buddy::state::BuddyState;
 use crate::product::tui_app::status::format_tokens_compact;
@@ -88,6 +89,7 @@ pub(crate) struct StatusPanelSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct InputSlimmingPanelSnapshot {
+    pub(crate) scope: InputSlimmingScope,
     pub(crate) last_before_tokens: i64,
     pub(crate) last_after_tokens: i64,
     pub(crate) last_saved_tokens: i64,
@@ -327,6 +329,8 @@ fn push_status(lines: &mut Vec<Line<'static>>, status: Option<&StatusPanelSnapsh
     if let Some(input_slimming) = &context.input_slimming {
         lines.push(Line::from(vec![
             "  slim ".dim(),
+            input_slimming.scope.short_label().into(),
+            " ".dim(),
             format_tokens_compact(input_slimming.last_before_tokens).into(),
             " -> ".dim(),
             format_tokens_compact(input_slimming.last_after_tokens).into(),
@@ -477,6 +481,7 @@ mod tests {
                 total_usage_tokens: 45,
                 cache_hit_percent: Some(25),
                 input_slimming: Some(InputSlimmingPanelSnapshot {
+                    scope: InputSlimmingScope::LiveZoneToolOutputs,
                     last_before_tokens: 12_400,
                     last_after_tokens: 4_100,
                     last_saved_tokens: 8_300,
@@ -517,7 +522,7 @@ mod tests {
         assert!(rendered.contains("left 55"));
         assert!(rendered.contains("total 45"));
         assert!(rendered.contains("cached 25%"));
-        assert!(rendered.contains("slim 12.4K -> 4.1K"));
+        assert!(rendered.contains("slim live 12.4K -> 4.1K"));
         assert!(rendered.contains("saved 18.7K context"));
         assert!(!rendered.contains("this /"));
         assert!(rendered.contains("compact 1"));

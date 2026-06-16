@@ -170,6 +170,8 @@ mod tests {
             .put(
                 "original payload".to_string(),
                 StoredInputMetadata {
+                    scope:
+                        crate::product::agent::protocol::InputSlimmingScope::HistoricalToolOutputs,
                     strategy: InputSlimmingStrategy::PlainTextHeadTail,
                     tool_name: "shell".to_string(),
                     original_tokens: 3,

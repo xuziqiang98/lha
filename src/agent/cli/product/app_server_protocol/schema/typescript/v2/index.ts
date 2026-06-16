@@ -46,6 +46,7 @@ export type { FileUpdateChange } from "./FileUpdateChange";
 export type { GitInfo } from "./GitInfo";
 export type { IdentityListParams } from "./IdentityListParams";
 export type { IdentityListResponse } from "./IdentityListResponse";
+export type { InputSlimmingScope } from "./InputSlimmingScope";
 export type { InputSlimmingStats } from "./InputSlimmingStats";
 export type { InputSlimmingTokenStats } from "./InputSlimmingTokenStats";
 export type { InputSlimmingUpdatedNotification } from "./InputSlimmingUpdatedNotification";

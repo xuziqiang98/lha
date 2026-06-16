@@ -24,6 +24,7 @@ use crate::product::protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use crate::product::protocol::protocol::AskForApproval as CoreAskForApproval;
 use crate::product::protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use crate::product::protocol::protocol::InputSlimmingEvent as CoreInputSlimmingEvent;
+use crate::product::protocol::protocol::InputSlimmingScope as CoreInputSlimmingScope;
 use crate::product::protocol::protocol::InputSlimmingTokenStats as CoreInputSlimmingTokenStats;
 use crate::product::protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use crate::product::protocol::protocol::SessionSource as CoreSessionSource;
@@ -225,6 +226,13 @@ v2_enum_from_core!(
         NotLoggedIn,
         BearerToken,
         OAuth
+    }
+);
+
+v2_enum_from_core!(
+    pub enum InputSlimmingScope from CoreInputSlimmingScope {
+        HistoricalToolOutputs,
+        LiveZoneToolOutputs
     }
 );
 
@@ -1543,6 +1551,7 @@ pub struct InputSlimmingUpdatedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct InputSlimmingStats {
+    pub scope: InputSlimmingScope,
     pub last: InputSlimmingTokenStats,
     pub total: InputSlimmingTokenStats,
 }
@@ -1550,6 +1559,7 @@ pub struct InputSlimmingStats {
 impl From<CoreInputSlimmingEvent> for InputSlimmingStats {
     fn from(value: CoreInputSlimmingEvent) -> Self {
         Self {
+            scope: value.scope.into(),
             last: value.last.into(),
             total: value.total.into(),
         }

@@ -1781,6 +1781,7 @@ impl ChatWidget {
         }
 
         self.input_slimming = Some(InputSlimmingPanelSnapshot {
+            scope: event.scope,
             last_before_tokens: event.last.tokens_before,
             last_after_tokens: event.last.tokens_after,
             last_saved_tokens: event.last.tokens_saved,

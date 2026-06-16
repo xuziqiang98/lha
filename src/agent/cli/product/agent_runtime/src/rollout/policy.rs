@@ -159,6 +159,7 @@ mod tests {
             hash: "abc123".to_string(),
             original: "original".to_string(),
             metadata: InputSlimmingStoredInputMetadata {
+                scope: crate::product::agent::protocol::InputSlimmingScope::HistoricalToolOutputs,
                 strategy: "plain_text_head_tail".to_string(),
                 tool_name: "shell".to_string(),
                 original_tokens: 10,

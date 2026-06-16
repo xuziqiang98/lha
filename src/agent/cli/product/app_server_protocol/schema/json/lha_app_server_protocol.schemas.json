@@ -4107,6 +4107,14 @@
             "last": {
               "$ref": "#/definitions/v2/InputSlimmingTokenStats"
             },
+            "scope": {
+              "default": "historical_tool_outputs",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/v2/InputSlimmingScope"
+                }
+              ]
+            },
             "total": {
               "$ref": "#/definitions/v2/InputSlimmingTokenStats"
             },
@@ -11190,15 +11198,26 @@
           }
         }
       },
+      "InputSlimmingScope": {
+        "type": "string",
+        "enum": [
+          "historicalToolOutputs",
+          "liveZoneToolOutputs"
+        ]
+      },
       "InputSlimmingStats": {
         "type": "object",
         "required": [
           "last",
+          "scope",
           "total"
         ],
         "properties": {
           "last": {
             "$ref": "#/definitions/v2/InputSlimmingTokenStats"
+          },
+          "scope": {
+            "$ref": "#/definitions/v2/InputSlimmingScope"
           },
           "total": {
             "$ref": "#/definitions/v2/InputSlimmingTokenStats"
@@ -12993,6 +13012,13 @@
           "type": "string"
         }
       }
+    },
+    "InputSlimmingScope": {
+      "type": "string",
+      "enum": [
+        "historical_tool_outputs",
+        "live_zone_tool_outputs"
+      ]
     },
     "InputSlimmingTokenStats": {
       "type": "object",

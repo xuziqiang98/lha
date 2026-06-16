@@ -238,6 +238,9 @@
             "input_slimming": {
               "type": "boolean"
             },
+            "input_slimming_live_zone": {
+              "type": "boolean"
+            },
             "memories": {
               "type": "boolean"
             },
@@ -1299,6 +1302,9 @@
           "type": "boolean"
         },
         "input_slimming": {
+          "type": "boolean"
+        },
+        "input_slimming_live_zone": {
           "type": "boolean"
         },
         "memories": {

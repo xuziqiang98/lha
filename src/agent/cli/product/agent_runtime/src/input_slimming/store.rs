@@ -16,6 +16,7 @@ use crate::product::agent::input_slimming::InputSlimmingRef;
 use crate::product::agent::input_slimming::InputSlimmingStrategy;
 use crate::product::agent::input_slimming::InputSlimmingTokenGateDecision;
 use crate::product::agent::input_slimming::candidate::CandidateZone;
+use crate::product::agent::protocol::InputSlimmingScope;
 use crate::product::agent::truncate::TruncationPolicy;
 use crate::product::agent::truncate::truncate_text;
 
@@ -44,6 +45,7 @@ pub(crate) struct StoredInput {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StoredInputMetadata {
+    pub(crate) scope: InputSlimmingScope,
     pub(crate) strategy: InputSlimmingStrategy,
     pub(crate) tool_name: String,
     pub(crate) original_tokens: usize,
@@ -55,6 +57,7 @@ pub(crate) struct StoredInputMetadata {
 pub(crate) struct SlimmedReplacementCacheKey {
     pub(crate) original_hash: String,
     pub(crate) tool_name: String,
+    pub(crate) scope: InputSlimmingScope,
     pub(crate) zone: CandidateZone,
     pub(crate) success: Option<bool>,
     pub(crate) strategy_version: u32,
@@ -291,7 +294,8 @@ fn retrieve_query(entry: &StoredInput, hash: &str, query: &str) -> QueryRetrieve
 
 fn metadata_header(entry: &StoredInput, hash: &str) -> String {
     format!(
-        "Original input for <<lha-input:{hash}>>:\nstrategy={}\ntool_name={}\noriginal_tokens={}\ncompressed_tokens={}\ncreated_turn_id={}",
+        "Original input for <<lha-input:{hash}>>:\nscope={}\nstrategy={}\ntool_name={}\noriginal_tokens={}\ncompressed_tokens={}\ncreated_turn_id={}",
+        entry.metadata.scope.as_str(),
         entry.metadata.strategy.as_str(),
         entry.metadata.tool_name,
         entry.metadata.original_tokens,
@@ -460,6 +464,7 @@ mod tests {
 
     fn metadata() -> StoredInputMetadata {
         StoredInputMetadata {
+            scope: InputSlimmingScope::HistoricalToolOutputs,
             strategy: InputSlimmingStrategy::PlainTextHeadTail,
             tool_name: "shell".to_string(),
             original_tokens: 42,

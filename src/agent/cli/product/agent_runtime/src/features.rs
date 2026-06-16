@@ -139,6 +139,8 @@ pub enum Feature {
     ResponsesWebsockets,
     /// Slim large old tool results in model requests without rewriting history.
     InputSlimming,
+    /// Slim current live-zone tool outputs while preserving cached history prefixes.
+    InputSlimmingLiveZone,
 }
 
 impl Feature {
@@ -531,9 +533,19 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::InputSlimming,
         key: "input_slimming",
         stage: Stage::Experimental {
-            name: "Input slimming",
-            menu_description: "Slim large tool results in model requests to reduce token usage while keeping originals retrievable.",
+            name: "Input slimming (historical)",
+            menu_description: "Slim large historical tool results in model requests while keeping originals retrievable.",
             announcement: "NEW: Input slimming can reduce model input size for large tool outputs. Enable in /experimental.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::InputSlimmingLiveZone,
+        key: "input_slimming_live_zone",
+        stage: Stage::Experimental {
+            name: "Input slimming (live zone)",
+            menu_description: "Slim current live tool outputs while preserving cached history prefixes.",
+            announcement: "NEW: Live-zone input slimming can preserve cached history prefixes. Enable in /experimental.",
         },
         default_enabled: false,
     },
@@ -861,17 +873,20 @@ mod tests {
 
         assert_eq!(
             Stage::Experimental {
-                name: "Input slimming",
-                menu_description: "Slim large tool results in model requests to reduce token usage while keeping originals retrievable.",
+                name: "Input slimming (historical)",
+                menu_description: "Slim large historical tool results in model requests while keeping originals retrievable.",
                 announcement: "NEW: Input slimming can reduce model input size for large tool outputs. Enable in /experimental.",
             },
             stage
         );
         assert!(!Feature::InputSlimming.default_enabled());
-        assert_eq!(Some("Input slimming"), stage.experimental_menu_name());
+        assert_eq!(
+            Some("Input slimming (historical)"),
+            stage.experimental_menu_name()
+        );
         assert_eq!(
             Some(
-                "Slim large tool results in model requests to reduce token usage while keeping originals retrievable.",
+                "Slim large historical tool results in model requests while keeping originals retrievable.",
             ),
             stage.experimental_menu_description()
         );
@@ -885,10 +900,43 @@ mod tests {
     }
 
     #[test]
+    fn input_slimming_live_zone_feature_defaults_off() {
+        let stage = Feature::InputSlimmingLiveZone.stage();
+
+        assert_eq!(
+            Stage::Experimental {
+                name: "Input slimming (live zone)",
+                menu_description: "Slim current live tool outputs while preserving cached history prefixes.",
+                announcement: "NEW: Live-zone input slimming can preserve cached history prefixes. Enable in /experimental.",
+            },
+            stage
+        );
+        assert!(!Feature::InputSlimmingLiveZone.default_enabled());
+        assert_eq!(
+            Some("Input slimming (live zone)"),
+            stage.experimental_menu_name()
+        );
+        assert_eq!(
+            Some("Slim current live tool outputs while preserving cached history prefixes."),
+            stage.experimental_menu_description()
+        );
+        assert_eq!(
+            Some(
+                "NEW: Live-zone input slimming can preserve cached history prefixes. Enable in /experimental.",
+            ),
+            stage.experimental_announcement()
+        );
+        assert!(!Features::with_defaults().enabled(Feature::InputSlimmingLiveZone));
+    }
+
+    #[test]
     fn features_table_accepts_input_slimming() {
         let cfg = ConfigToml {
             features: Some(FeaturesToml {
-                entries: BTreeMap::from([("input_slimming".to_string(), true)]),
+                entries: BTreeMap::from([
+                    ("input_slimming".to_string(), true),
+                    ("input_slimming_live_zone".to_string(), true),
+                ]),
             }),
             ..Default::default()
         };
@@ -897,6 +945,7 @@ mod tests {
             Features::from_config(&cfg, &ConfigProfile::default(), FeatureOverrides::default());
 
         assert!(features.enabled(Feature::InputSlimming));
+        assert!(features.enabled(Feature::InputSlimmingLiveZone));
     }
 
     #[test]
@@ -904,6 +953,7 @@ mod tests {
         let schema = include_str!("../config.schema.json");
 
         assert!(schema.contains("\"input_slimming\""));
+        assert!(schema.contains("\"input_slimming_live_zone\""));
     }
 
     #[test]
