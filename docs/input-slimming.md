@@ -57,7 +57,9 @@ input_slimming_live_zone = true
 - deterministic ContentRouter 已拆成 JSON、log、search、diff、plain text 策略；
 - query retrieval 支持 path-aware、section-aware 和 line-context fallback；
 - 支持 product-private measure-only 模式和 context-pressure adaptive policy；
-- 只在至少一个 payload 被接受压缩时注入 `lha_input_retrieve`；
+- historical 策略在已有 marker 或本次接受压缩后注入 `lha_input_retrieve`；
+  live-zone 策略从本轮首个 request 起广告该工具，保持 same-turn follow-up 的
+  tool schema 稳定；
 - 原文存入 session-scoped in-memory store，默认 capacity 为 1000，TTL 为 300
   seconds；
 - accepted replacements 会把原文和 metadata 写入 rollout sidecar item，用于 resume

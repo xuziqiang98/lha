@@ -339,7 +339,7 @@ async fn input_slimming_live_zone_slims_same_turn_tool_outputs_and_preserves_his
         "timeout_ms": 5_000,
     });
 
-    mount_sse_once(
+    let first_turn = mount_sse_once(
         &server,
         sse(vec![
             ev_response_created("resp-1"),
@@ -373,6 +373,15 @@ async fn input_slimming_live_zone_slims_same_turn_tool_outputs_and_preserves_his
 
     test.submit_turn_with_policy("make a large shell output", SandboxPolicy::DangerFullAccess)
         .await?;
+
+    let first_turn_body = first_turn.single_request().body_json();
+    let first_turn_text = body_text(&first_turn_body);
+    assert!(!first_turn_text.contains("<<lha-input:"));
+    assert!(
+        tool_identifiers(&first_turn_body)
+            .iter()
+            .any(|tool| tool == "lha_input_retrieve")
+    );
 
     let live_slimming = wait_for_event_match(&test.codex, |event| match event {
         EventMsg::InputSlimming(event) => Some(event.clone()),

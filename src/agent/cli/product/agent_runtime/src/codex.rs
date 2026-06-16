@@ -457,8 +457,12 @@ fn should_advertise_input_retrieve_tool(
     input_slimming_activation: InputSlimmingActivation,
     request_contains_marker: bool,
 ) -> bool {
-    !matches!(input_slimming_activation, InputSlimmingActivation::Disabled)
-        && request_contains_marker
+    match input_slimming_activation {
+        InputSlimmingActivation::Disabled => false,
+        InputSlimmingActivation::Scope(InputSlimmingScope::LiveZoneToolOutputs) => true,
+        InputSlimmingActivation::Scope(InputSlimmingScope::HistoricalToolOutputs)
+        | InputSlimmingActivation::Conflict => request_contains_marker,
+    }
 }
 
 fn transcript_item_contains_input_slimming_marker(item: &TranscriptItem) -> bool {
@@ -7412,10 +7416,22 @@ mod tests {
     use std::time::Duration as StdDuration;
 
     #[test]
-    fn input_retrieve_tool_is_advertised_for_existing_markers_during_conflict() {
+    fn input_retrieve_tool_advertisement_matches_slimming_scope() {
         assert!(should_advertise_input_retrieve_tool(
             InputSlimmingActivation::Scope(InputSlimmingScope::HistoricalToolOutputs),
             true,
+        ));
+        assert!(!should_advertise_input_retrieve_tool(
+            InputSlimmingActivation::Scope(InputSlimmingScope::HistoricalToolOutputs),
+            false,
+        ));
+        assert!(should_advertise_input_retrieve_tool(
+            InputSlimmingActivation::Scope(InputSlimmingScope::LiveZoneToolOutputs),
+            true,
+        ));
+        assert!(should_advertise_input_retrieve_tool(
+            InputSlimmingActivation::Scope(InputSlimmingScope::LiveZoneToolOutputs),
+            false,
         ));
         assert!(should_advertise_input_retrieve_tool(
             InputSlimmingActivation::Conflict,
