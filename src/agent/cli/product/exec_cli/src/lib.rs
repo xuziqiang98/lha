@@ -24,6 +24,7 @@ use crate::product::agent::config_loader::ConfigLoadError;
 use crate::product::agent::config_loader::format_config_error_with_source;
 use crate::product::agent::env::LHA_AGENT_JOB_AUTH_TOKEN_ENV_VAR;
 use crate::product::agent::env::LHA_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR;
+use crate::product::agent::env::LHA_AGENT_JOB_REASONING_EFFORT_ENV_VAR;
 use crate::product::agent::env::LHA_AGENT_JOB_SANDBOX_POLICY_ENV_VAR;
 use crate::product::agent::env::LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR;
 use crate::product::agent::git_info::get_git_repo_root;
@@ -108,6 +109,7 @@ struct AgentJobStartupContext {
     model_provider_overrides: HashMap<String, RuntimeEndpoint>,
     sandbox_policy: Option<SandboxPolicy>,
     windows_sandbox_level: Option<WindowsSandboxLevel>,
+    reasoning_effort: Option<Option<ReasoningEffort>>,
 }
 
 fn take_agent_job_startup_context() -> anyhow::Result<AgentJobStartupContext> {
@@ -117,6 +119,7 @@ fn take_agent_job_startup_context() -> anyhow::Result<AgentJobStartupContext> {
         .filter(|token| !token.trim().is_empty());
     let sandbox_policy = std::env::var(LHA_AGENT_JOB_SANDBOX_POLICY_ENV_VAR).ok();
     let windows_sandbox_level = std::env::var(LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR).ok();
+    let reasoning_effort = std::env::var(LHA_AGENT_JOB_REASONING_EFFORT_ENV_VAR).ok();
     clear_agent_job_context_env();
 
     let model_provider_overrides = match provider_context {
@@ -139,11 +142,16 @@ fn take_agent_job_startup_context() -> anyhow::Result<AgentJobStartupContext> {
         LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR,
         windows_sandbox_level,
     )?;
+    let reasoning_effort = parse_agent_job_env_json::<Option<ReasoningEffort>>(
+        LHA_AGENT_JOB_REASONING_EFFORT_ENV_VAR,
+        reasoning_effort,
+    )?;
 
     Ok(AgentJobStartupContext {
         model_provider_overrides,
         sandbox_policy,
         windows_sandbox_level,
+        reasoning_effort,
     })
 }
 
@@ -168,6 +176,7 @@ fn clear_agent_job_context_env() {
         std::env::remove_var(LHA_AGENT_JOB_AUTH_TOKEN_ENV_VAR);
         std::env::remove_var(LHA_AGENT_JOB_SANDBOX_POLICY_ENV_VAR);
         std::env::remove_var(LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR);
+        std::env::remove_var(LHA_AGENT_JOB_REASONING_EFFORT_ENV_VAR);
     }
 }
 
@@ -253,6 +262,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         model_provider_overrides,
         sandbox_policy: inherited_sandbox_policy,
         windows_sandbox_level: inherited_windows_sandbox_level,
+        reasoning_effort: inherited_reasoning_effort,
     } = take_agent_job_startup_context()?;
 
     let (sandbox_policy, sandbox_mode) = startup_sandbox_overrides(
@@ -387,7 +397,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let default_sandbox_policy = inherited_sandbox_policy
         .clone()
         .unwrap_or_else(|| config.sandbox_policy.get().clone());
-    let default_effort = config.model_reasoning_effort;
+    let configured_effort = config.model_reasoning_effort;
+    let default_effort = inherited_reasoning_effort.unwrap_or(configured_effort);
     let default_summary = config.model_reasoning_summary;
 
     // When --yolo (dangerously_bypass_approvals_and_sandbox) is set, also skip the git repo check
@@ -415,9 +426,14 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             CatalogRefreshStrategy::OnlineIfUncached,
         )
         .await?;
-    let selected_identity = identity_cli_arg
-        .map(IdentityKind::from)
-        .map(|kind| identity_for_kind(kind, default_model.clone(), default_effort));
+    let selected_identity = identity_cli_arg.map(IdentityKind::from).map(|kind| {
+        identity_for_kind_with_inherited_effort(
+            kind,
+            default_model.clone(),
+            default_effort,
+            inherited_reasoning_effort,
+        )
+    });
 
     // Handle resume subcommand by resolving a rollout path and using explicit resume API.
     let NewThread {
@@ -764,6 +780,20 @@ fn identity_for_kind(
         IdentityKind::Reviewer => crate::product::identity::reviewer_preset(),
     };
     base.apply_mask(&mask)
+}
+
+fn identity_for_kind_with_inherited_effort(
+    kind: IdentityKind,
+    model: String,
+    effective_effort: Option<ReasoningEffort>,
+    inherited_effort: Option<Option<ReasoningEffort>>,
+) -> Identity {
+    let identity = identity_for_kind(kind, model, effective_effort);
+    if inherited_effort.is_some() {
+        identity.with_updates(None, Some(effective_effort), None)
+    } else {
+        identity
+    }
 }
 
 fn review_identity_override_op(identity: Option<Identity>) -> Option<Op> {
@@ -1191,6 +1221,54 @@ mod tests {
         });
 
         assert_eq!(op, expected);
+    }
+
+    #[test]
+    fn inherited_effort_overrides_explorer_identity_preset() {
+        let identity = identity_for_kind_with_inherited_effort(
+            IdentityKind::Explorer,
+            "gpt-5.1".to_string(),
+            Some(ReasoningEffort::High),
+            Some(Some(ReasoningEffort::High)),
+        );
+
+        assert_eq!(identity.reasoning_effort(), Some(ReasoningEffort::High));
+    }
+
+    #[test]
+    fn inherited_null_effort_clears_reviewer_identity_preset() {
+        let identity = identity_for_kind_with_inherited_effort(
+            IdentityKind::Reviewer,
+            "gpt-5.1".to_string(),
+            None,
+            Some(None),
+        );
+
+        assert_eq!(identity.reasoning_effort(), None);
+    }
+
+    #[test]
+    fn absent_inherited_effort_keeps_explorer_identity_preset() {
+        let identity = identity_for_kind_with_inherited_effort(
+            IdentityKind::Explorer,
+            "gpt-5.1".to_string(),
+            Some(ReasoningEffort::High),
+            None,
+        );
+
+        assert_eq!(identity.reasoning_effort(), Some(ReasoningEffort::Low));
+    }
+
+    #[test]
+    fn absent_inherited_effort_keeps_reviewer_identity_preset() {
+        let identity = identity_for_kind_with_inherited_effort(
+            IdentityKind::Reviewer,
+            "gpt-5.1".to_string(),
+            None,
+            None,
+        );
+
+        assert_eq!(identity.reasoning_effort(), Some(ReasoningEffort::Medium));
     }
 
     #[test]

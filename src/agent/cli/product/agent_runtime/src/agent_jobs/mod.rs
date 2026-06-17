@@ -2,11 +2,13 @@ use crate::product::agent::client::TurnRuntime;
 use crate::product::agent::config::model_ref::ModelRef;
 use crate::product::agent::env::LHA_AGENT_JOB_AUTH_TOKEN_ENV_VAR;
 use crate::product::agent::env::LHA_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR;
+use crate::product::agent::env::LHA_AGENT_JOB_REASONING_EFFORT_ENV_VAR;
 use crate::product::agent::env::LHA_AGENT_JOB_SANDBOX_POLICY_ENV_VAR;
 use crate::product::agent::env::LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR;
 use crate::product::agent::error::CodexErr;
 use crate::product::protocol::ThreadId;
 use crate::product::protocol::config_types::WindowsSandboxLevel;
+use crate::product::protocol::openai_models::ReasoningEffort;
 use crate::product::protocol::protocol::AgentJobDisplayStatus;
 use crate::product::protocol::protocol::AgentJobKind;
 use crate::product::protocol::protocol::AgentJobStatusEvent;
@@ -152,6 +154,7 @@ pub(crate) struct AgentJobExecConfig {
     pub(crate) auth_token: Option<String>,
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
+    pub(crate) reasoning_effort: Option<ReasoningEffort>,
 }
 
 pub(crate) enum AgentJobOutputMode {
@@ -204,6 +207,7 @@ impl AgentJobExecConfig {
             auth_token,
             sandbox_policy,
             windows_sandbox_level,
+            reasoning_effort: runtime.get_reasoning_effort(),
         }
     }
 }
@@ -748,6 +752,12 @@ fn build_lha_exec_command(
         LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR,
         windows_sandbox_level_json,
     );
+    let reasoning_effort_json = serde_json::to_string(&exec_config.reasoning_effort)
+        .map_err(|err| CodexErr::Fatal(format!("failed to serialize agent job effort: {err}")))?;
+    command.env(
+        LHA_AGENT_JOB_REASONING_EFFORT_ENV_VAR,
+        reasoning_effort_json,
+    );
     if internal_raw_events {
         command.arg("--internal-raw-events");
     }
@@ -1001,6 +1011,7 @@ mod tests {
             auth_token: None,
             sandbox_policy: SandboxPolicy::ReadOnly,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            reasoning_effort: None,
         }
     }
 
@@ -1401,6 +1412,7 @@ out=""
   printf "PROVIDER_CONTEXT=%s\n" "$LHA_AGENT_JOB_PROVIDER_CONTEXT"
   printf "SANDBOX_POLICY=%s\n" "$LHA_AGENT_JOB_SANDBOX_POLICY"
   printf "WINDOWS_SANDBOX_LEVEL=%s\n" "$LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL"
+  printf "REASONING_EFFORT=%s\n" "$LHA_AGENT_JOB_REASONING_EFFORT"
 } > "$script_dir/env.txt"
 for arg in "$@"; do
   printf "%s\n" "$arg" >> "$script_dir/args.txt"
@@ -1443,6 +1455,7 @@ printf "args result" > "$out"
                         exclude_slash_tmp: false,
                     },
                     windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                    reasoning_effort: Some(ReasoningEffort::High),
                 },
                 AgentJobSpawnOptions::log_only(None),
             )
@@ -1493,6 +1506,7 @@ printf "args result" > "$out"
         assert!(child_env.contains("provider-a.main"));
         assert!(child_env.contains("SANDBOX_POLICY={\"type\":\"workspace-write\""));
         assert!(child_env.contains("WINDOWS_SANDBOX_LEVEL=\"disabled\""));
+        assert!(child_env.contains("REASONING_EFFORT=\"high\""));
 
         let job_dir = lha_home
             .path()
@@ -1513,6 +1527,54 @@ printf "args result" > "$out"
                 "{name} should not persist delegated job auth token"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn job_passes_null_reasoning_effort_to_lha_exec() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lha_home = tempfile::tempdir().expect("lha home");
+        let script = write_script(
+            &dir,
+            "lha-exec-fake",
+            r#"#!/bin/sh
+script_dir=$(dirname "$0")
+out=""
+printf "REASONING_EFFORT=%s\n" "$LHA_AGENT_JOB_REASONING_EFFORT" > "$script_dir/env.txt"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    out="$2"
+    shift 2
+  else
+    shift
+  fi
+done
+cat >/dev/null
+printf "null effort result" > "$out"
+"#,
+        );
+        let manager = AgentJobManager::new(lha_home.path().to_path_buf(), Some(1), Some(5))
+            .with_exec_bin_for_tests(script);
+        let snapshot = manager
+            .spawn(
+                ThreadId::new(),
+                AgentJobType::Explorer,
+                "inspect this".to_string(),
+                dir.path().to_path_buf(),
+                test_exec_config(lha_home.path(), "test-provider.main:test-model"),
+                AgentJobSpawnOptions::log_only(None),
+            )
+            .await
+            .expect("spawn job");
+        let snapshots = manager
+            .wait(std::slice::from_ref(&snapshot.id), Duration::from_secs(5))
+            .await;
+
+        assert!(matches!(
+            &snapshots[0].status,
+            AgentJobStatus::Completed { .. }
+        ));
+        let child_env = std::fs::read_to_string(dir.path().join("env.txt")).expect("child env log");
+        assert_eq!(child_env, "REASONING_EFFORT=null\n");
     }
 
     #[tokio::test]

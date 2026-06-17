@@ -18,6 +18,7 @@ use crate::product::agent::protocol::RolloutLine;
 use crate::product::agent::protocol::SandboxPolicy;
 use crate::product::agent::review_format::render_review_output_text;
 use crate::product::protocol::models::TranscriptItem;
+use crate::product::protocol::openai_models::ReasoningEffort;
 use crate::product::protocol::user_input::UserInput;
 use crate::test_support::core::load_sse_fixture_with_id_from_str;
 use crate::test_support::core::responses::ResponseMock;
@@ -81,6 +82,7 @@ raw_events=0
 {{
   printf "SANDBOX_POLICY=%s\n" "$LHA_AGENT_JOB_SANDBOX_POLICY"
   printf "WINDOWS_SANDBOX_LEVEL=%s\n" "$LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL"
+  printf "REASONING_EFFORT=%s\n" "$LHA_AGENT_JOB_REASONING_EFFORT"
 }} > "{env_log}"
 while [ "$#" -gt 0 ]; do
   printf "%s\n" "$1" >> "{args_log}"
@@ -291,6 +293,7 @@ async fn review_op_uses_cli_backed_reviewer_job() {
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         });
+        config.model_reasoning_effort = Some(ReasoningEffort::High);
     })
     .await;
 
@@ -364,6 +367,10 @@ async fn review_op_uses_cli_backed_reviewer_job() {
     assert!(
         child_env.contains("WINDOWS_SANDBOX_LEVEL=\"disabled\""),
         "expected inherited windows sandbox level: {child_env:?}"
+    );
+    assert!(
+        child_env.contains("REASONING_EFFORT=\"high\""),
+        "expected inherited reasoning effort: {child_env:?}"
     );
 
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

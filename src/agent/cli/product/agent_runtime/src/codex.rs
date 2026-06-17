@@ -5316,6 +5316,7 @@ async fn start_cli_backed_review_turn(
     // Build per‑turn client with the requested model/family.
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
+    per_turn_config.model_reasoning_effort = parent_turn_context.runtime.get_reasoning_effort();
     per_turn_config.features = review_features.clone();
     per_turn_config.web_search_mode = Some(review_web_search_mode);
 
@@ -9466,6 +9467,7 @@ mod tests {
         let lha_home = tempfile::tempdir().expect("create temp dir");
         let mut config = build_test_config(lha_home.path()).await;
         config.model_provider.bearer_token = Some("provider-token".to_string());
+        config.model_reasoning_effort = Some(ReasoningEffort::High);
         let (_session, turn_context) = make_session_and_context_for_config(config).await;
 
         let exec_config = crate::product::agent::agent_jobs::AgentJobExecConfig::from_runtime(
@@ -9477,6 +9479,7 @@ mod tests {
 
         assert_eq!(exec_config.auth_token.as_deref(), Some("provider-token"));
         assert_eq!(exec_config.model_provider.bearer_token, None);
+        assert_eq!(exec_config.reasoning_effort, Some(ReasoningEffort::High));
     }
 
     #[tokio::test]

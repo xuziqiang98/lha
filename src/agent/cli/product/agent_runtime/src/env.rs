@@ -17,6 +17,10 @@ pub const LHA_AGENT_JOB_SANDBOX_POLICY_ENV_VAR: &str = "LHA_AGENT_JOB_SANDBOX_PO
 /// startup.
 pub const LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR: &str = "LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL";
 
+/// Serialized reasoning effort passed from a parent LHA session to a delegated
+/// `lha exec` job. The child consumes and removes this during startup.
+pub const LHA_AGENT_JOB_REASONING_EFFORT_ENV_VAR: &str = "LHA_AGENT_JOB_REASONING_EFFORT";
+
 fn env_var_set(key: &str) -> bool {
     std::env::var(key).is_ok_and(|v| !v.trim().is_empty())
 }
