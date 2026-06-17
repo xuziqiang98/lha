@@ -353,19 +353,19 @@ impl HistoryCell for StatusHistoryCell {
     }
 }
 
-fn format_model_provider(config: &Config) -> Option<String> {
+pub(crate) fn format_model_provider_name(config: &Config) -> String {
     let provider = &config.model_provider;
     let name = provider.name.trim();
-    let provider_name = if name.is_empty() {
-        config.model_provider_id.as_str()
+    if name.is_empty() {
+        display_model_provider_ref(&config.model_provider_id)
     } else {
-        name
-    };
-    let provider_name = if name.is_empty() {
-        display_model_provider_ref(provider_name)
-    } else {
-        provider_name.to_string()
-    };
+        name.to_string()
+    }
+}
+
+fn format_model_provider(config: &Config) -> Option<String> {
+    let provider = &config.model_provider;
+    let provider_name = format_model_provider_name(config);
     let base_url = provider.base_url.as_deref().and_then(sanitize_base_url);
     let is_default_openai = provider.is_openai() && base_url.is_none();
     if is_default_openai {
@@ -397,6 +397,9 @@ fn sanitize_base_url(raw: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::product::agent::config::ConfiguredProviderDialect;
+    use crate::product::agent::config::model_provider_variant_ref;
+    use lha_llm::RuntimeEndpoint;
     use pretty_assertions::assert_eq;
 
     fn cell_for_usage(token_usage: StatusTokenUsageData) -> StatusHistoryCell {
@@ -415,6 +418,42 @@ mod tests {
             context_compact_count: 0,
             token_usage,
         }
+    }
+
+    #[test]
+    fn format_model_provider_name_uses_friendly_name_without_base_url() {
+        let mut config = crate::product::agent::config::test_config();
+        config.model_provider_id = "custom_provider".to_string();
+        config.model_provider =
+            RuntimeEndpoint::openai_compatible_responses("Custom Provider", "https://example.com");
+
+        assert_eq!(format_model_provider_name(&config), "Custom Provider");
+    }
+
+    #[test]
+    fn format_model_provider_name_falls_back_to_display_provider_ref() {
+        let mut config = crate::product::agent::config::test_config();
+        config.model_provider_id =
+            model_provider_variant_ref("custom_1", ConfiguredProviderDialect::Responses);
+        config.model_provider =
+            RuntimeEndpoint::openai_compatible_responses("   ", "https://example.com");
+
+        assert_eq!(format_model_provider_name(&config), "custom_1 (responses)");
+    }
+
+    #[test]
+    fn format_model_provider_keeps_status_base_url_details() {
+        let mut config = crate::product::agent::config::test_config();
+        config.model_provider_id = "custom_provider".to_string();
+        config.model_provider = RuntimeEndpoint::openai_compatible_responses(
+            "Custom Provider",
+            "https://user:pass@example.com/v1?token=secret#fragment",
+        );
+
+        assert_eq!(
+            format_model_provider(&config),
+            Some("Custom Provider - https://example.com/v1".to_string())
+        );
     }
 
     #[test]

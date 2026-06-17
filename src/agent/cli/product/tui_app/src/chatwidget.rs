@@ -109,6 +109,7 @@ use crate::product::protocol::parse_command::ParsedCommand;
 use crate::product::protocol::request_user_input::RequestUserInputEvent;
 use crate::product::protocol::user_input::TextElement;
 use crate::product::protocol::user_input::UserInput;
+use crate::product::tui_app::status::format_model_provider_name;
 use crate::product::tui_app::version::CODEX_CLI_VERSION;
 use crate::product::utils_sleep_inhibitor::SleepInhibitor;
 use crossterm::event::KeyCode;
@@ -7215,6 +7216,7 @@ impl ChatWidget {
 
         let status = Some(StatusPanelSnapshot {
             model: self.current_model().to_string(),
+            provider: format_model_provider_name(&self.config),
             identity: format!("{:?}", self.active_identity_kind()),
             left_context_tokens: self.token_info.as_ref().and_then(|info| {
                 info.model_context_window.map(|window| {

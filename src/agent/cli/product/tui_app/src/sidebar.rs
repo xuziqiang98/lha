@@ -79,6 +79,7 @@ pub(crate) struct McpPanelSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StatusPanelSnapshot {
     pub(crate) model: String,
+    pub(crate) provider: String,
     pub(crate) identity: String,
     pub(crate) left_context_tokens: Option<i64>,
     pub(crate) total_usage_tokens: i64,
@@ -307,6 +308,10 @@ fn push_status(lines: &mut Vec<Line<'static>>, status: Option<&StatusPanelSnapsh
         context.model.clone().into(),
     ]));
     lines.push(Line::from(vec![
+        "  provider ".dim(),
+        context.provider.clone().into(),
+    ]));
+    lines.push(Line::from(vec![
         "  identity ".dim(),
         context.identity.clone().into(),
     ]));
@@ -476,6 +481,7 @@ mod tests {
             }),
             status: Some(StatusPanelSnapshot {
                 model: "gpt-5".to_string(),
+                provider: "Custom Provider".to_string(),
                 identity: "Planner".to_string(),
                 left_context_tokens: Some(55),
                 total_usage_tokens: 45,
@@ -519,6 +525,14 @@ mod tests {
         assert!(!agent_line.contains("●"));
         assert!(rendered.contains("skill-creator"));
         assert!(rendered.contains("model gpt-5"));
+        assert!(rendered.contains("provider Custom Provider"));
+        let model_position = rendered.find("model gpt-5").expect("model line");
+        let provider_position = rendered
+            .find("provider Custom Provider")
+            .expect("provider line");
+        let identity_position = rendered.find("identity Planner").expect("identity line");
+        assert!(model_position < provider_position);
+        assert!(provider_position < identity_position);
         assert!(rendered.contains("left 55"));
         assert!(rendered.contains("total 45"));
         assert!(rendered.contains("cached 25%"));
@@ -536,6 +550,7 @@ mod tests {
         let snapshot = SidebarSnapshot {
             status: Some(StatusPanelSnapshot {
                 model: "gpt-5".to_string(),
+                provider: "OpenAI".to_string(),
                 identity: "Planner".to_string(),
                 left_context_tokens: Some(19_800),
                 total_usage_tokens: 12_345,
@@ -548,6 +563,7 @@ mod tests {
 
         let rendered = render_sidebar(&snapshot);
 
+        assert!(rendered.contains("provider OpenAI"));
         assert!(rendered.contains("left 19.8K"));
         assert!(rendered.contains("total 12.3K"));
         assert!(rendered.contains("cached 25%"));
@@ -560,6 +576,7 @@ mod tests {
         let snapshot = SidebarSnapshot {
             status: Some(StatusPanelSnapshot {
                 model: "gpt-5".to_string(),
+                provider: "OpenAI".to_string(),
                 identity: "Planner".to_string(),
                 left_context_tokens: None,
                 total_usage_tokens: 12_345,

@@ -1982,6 +1982,7 @@ async fn sidebar_status_uses_status_token_semantics() {
         status,
         crate::product::tui_app::sidebar::StatusPanelSnapshot {
             model: chat.current_model().to_string(),
+            provider: crate::product::tui_app::status::format_model_provider_name(&chat.config),
             identity: format!("{:?}", chat.active_identity_kind()),
             left_context_tokens: Some(19_800),
             total_usage_tokens: 17_000,
@@ -2016,6 +2017,7 @@ async fn sidebar_status_omits_cache_hit_percent_when_cached_input_is_zero() {
         status,
         crate::product::tui_app::sidebar::StatusPanelSnapshot {
             model: chat.current_model().to_string(),
+            provider: crate::product::tui_app::status::format_model_provider_name(&chat.config),
             identity: format!("{:?}", chat.active_identity_kind()),
             left_context_tokens: None,
             total_usage_tokens: 22_000,
