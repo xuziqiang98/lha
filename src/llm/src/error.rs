@@ -101,7 +101,9 @@ fn map_transport_error(err: TransportError) -> Error {
             let body_text = body.unwrap_or_default();
 
             if status == StatusCode::BAD_REQUEST {
-                if body_text
+                if body_text.contains("context_length_exceeded") {
+                    Error::ContextWindowExceeded
+                } else if body_text
                     .contains("The image data you provided does not represent a valid image")
                 {
                     Error::InvalidImageRequest
@@ -198,4 +200,23 @@ struct UsageErrorBody {
     #[serde(rename = "type")]
     error_type: Option<String>,
     resets_at: Option<i64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bad_request_context_length_error_maps_to_context_window_exceeded() {
+        let err = map_transport_error(TransportError::Http {
+            status: StatusCode::BAD_REQUEST,
+            url: None,
+            headers: None,
+            body: Some(
+                r#"{"error":{"code":"context_length_exceeded","message":"too large"}}"#.to_string(),
+            ),
+        });
+
+        assert!(matches!(err, Error::ContextWindowExceeded));
+    }
 }

@@ -9,6 +9,7 @@ use crate::product::agent::compact::last_backfillable_update_plan_from_history;
 use crate::product::agent::compact::last_completed_plan_from_history;
 use crate::product::agent::compact::proposed_plan_backfill_items;
 use crate::product::agent::compact::recent_backfillable_skills_from_history;
+use crate::product::agent::error::CodexErr;
 use crate::product::agent::error::Result as CodexResult;
 use crate::product::agent::protocol::CompactedItem;
 use crate::product::agent::protocol::EventMsg;
@@ -51,7 +52,7 @@ async fn run_remote_compact_task_inner_impl(
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
-    let history = sess.clone_history().await;
+    let mut history = sess.clone_history().await;
     let active_goal_plan_path = sess.active_proposed_plan_goal_path().await;
     let backfilled_plan_text = active_goal_plan_path
         .is_none()
@@ -60,14 +61,39 @@ async fn run_remote_compact_task_inner_impl(
     let backfilled_update_plan = last_backfillable_update_plan_from_history(history.raw_items());
     let backfilled_skills = recent_backfillable_skills_from_history(history.raw_items());
 
-    let prompt = TurnRequest {
-        conversation: history.for_compaction_prompt().into_iter().collect(),
-        base_instructions: sess.get_base_instructions().await,
-        personality: turn_context.personality,
-        ..Default::default()
-    };
+    let mut truncated_count = 0usize;
+    let mut new_history = loop {
+        let turn_input = history.clone().for_compaction_prompt();
+        let turn_input_len = turn_input.len();
+        let prompt = TurnRequest {
+            conversation: turn_input.into_iter().collect(),
+            base_instructions: sess.get_base_instructions().await,
+            personality: turn_context.personality,
+            ..Default::default()
+        };
 
-    let mut new_history = turn_context.runtime.compact_turn_request(&prompt).await?;
+        match turn_context.runtime.compact_turn_request(&prompt).await {
+            Ok(new_history) => break new_history,
+            Err(e @ CodexErr::ContextWindowExceeded) => {
+                if turn_input_len > 1 {
+                    history.remove_first_item();
+                    truncated_count += 1;
+                    continue;
+                }
+                return Err(e);
+            }
+            Err(e) => return Err(e),
+        }
+    };
+    if truncated_count > 0 {
+        sess.notify_background_event(
+            turn_context,
+            format!(
+                "Trimmed {truncated_count} older thread item(s) before compacting so the prompt fits the model context window."
+            ),
+        )
+        .await;
+    }
 
     match active_goal_plan_path.as_deref() {
         Some(path) => {

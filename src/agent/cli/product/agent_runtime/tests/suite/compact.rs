@@ -3594,6 +3594,130 @@ async fn auto_compact_triggers_when_tool_output_pushes_next_step_over_limit() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn input_slimming_raw_history_pressure_triggers_auto_compact() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let first_call_id = "raw-history-output-1";
+    let second_call_id = "raw-history-output-2";
+    let first_command = "for i in $(seq 1 1500); do echo raw-sentinel-output-1-line-$i; done";
+    let second_command = "for i in $(seq 1 5000); do echo raw-sentinel-output-2-line-$i; done";
+    let first_args = json!({
+        "command": first_command,
+        "timeout_ms": 5_000,
+    })
+    .to_string();
+    let second_args = json!({
+        "command": second_command,
+        "timeout_ms": 5_000,
+    })
+    .to_string();
+
+    let first_tool_turn = sse(vec![
+        ev_function_call(first_call_id, "shell_command", &first_args),
+        ev_completed_with_tokens("r1", 1_000),
+    ]);
+    let first_follow_up = sse(vec![
+        ev_assistant_message("m1", "first raw output recorded"),
+        ev_completed_with_tokens("r2", 1_000),
+    ]);
+    let second_tool_turn = sse(vec![
+        ev_function_call(second_call_id, "shell_command", &second_args),
+        ev_completed_with_tokens("r3", 1_000),
+    ]);
+    let auto_summary_payload = auto_summary(AUTO_SUMMARY_TEXT);
+    let auto_compact_turn = sse(vec![
+        ev_assistant_message("m2", &auto_summary_payload),
+        ev_completed_with_tokens("r4", 10),
+    ]);
+    let post_compact_follow_up = sse(vec![
+        ev_assistant_message("m3", FINAL_REPLY),
+        ev_completed_with_tokens("r5", 10),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            first_tool_turn,
+            first_follow_up,
+            second_tool_turn,
+            auto_compact_turn,
+            post_compact_follow_up,
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_model("gpt-5.1")
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.features.enable(Feature::InputSlimming);
+            config.tool_output_token_limit = Some(200_000);
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(50_000);
+        });
+    let test = builder.build(&server).await.unwrap();
+
+    test.submit_turn_with_policy("make the first raw output", SandboxPolicy::DangerFullAccess)
+        .await
+        .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.submit_turn_with_policy(
+        "make the second raw output",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await
+    .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        5,
+        "expected first tool turn, first follow-up, second tool turn, raw-pressure compact, and post-compact follow-up"
+    );
+
+    let second_turn_body = requests[2].body_json().to_string();
+    assert!(
+        second_turn_body.contains("<<lha-input:"),
+        "historical first output should be slimmed in the ordinary second request"
+    );
+
+    let compact_body = requests[3].body_json().to_string();
+    assert!(
+        body_contains_text(&compact_body, SUMMARIZATION_PROMPT),
+        "fourth request should be the raw-pressure auto compact request"
+    );
+    assert!(
+        compact_body.contains("raw-sentinel-output-1-line-1500"),
+        "compact should include the raw first tool output"
+    );
+    assert!(
+        compact_body.contains("raw-sentinel-output-2-line-2500"),
+        "compact should include the raw second tool output"
+    );
+    assert!(
+        !compact_body.contains("<<lha-input:"),
+        "compact request should not use input-slimmed replacements"
+    );
+    assert!(
+        !compact_body.contains("lha_input_retrieve"),
+        "compact request should not advertise the input-slimming retrieval tool"
+    );
+
+    let follow_up_body = requests[4].body_json().to_string();
+    assert!(
+        body_contains_text(&follow_up_body, &summary_with_prefix(&auto_summary_payload)),
+        "post-compact follow-up should use compacted history"
+    );
+    assert!(
+        !follow_up_body.contains("raw-sentinel-output-2-line-2500"),
+        "post-compact follow-up should drop the raw tool output"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn preflight_auto_compact_runs_before_initial_request_when_input_exceeds_effective_context_window()
  {
     skip_if_no_network!();

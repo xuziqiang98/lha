@@ -5494,7 +5494,25 @@ pub(crate) async fn run_turn(
             decision = "turn_start_auto_compact_check",
         );
     }
-    if !should_defer_auto_compact && total_usage_tokens >= compact_limit {
+    let raw_compaction_tokens = estimate_raw_auto_compact_tokens(&sess, &turn_context).await;
+    let raw_compaction_limit_reached =
+        raw_compaction_pressure_compacts(turn_context.as_ref(), raw_compaction_tokens);
+    if let Some(status) = turn_context.runtime.dynamic_context_window_status() {
+        debug!(
+            model = %turn_context.runtime.get_model(),
+            endpoint = %turn_context.runtime.endpoint_name(),
+            dynamic_locked = status.locked,
+            dynamic_window = status.current_context_window,
+            effective_window_limit = compact_limit,
+            raw_compaction_tokens,
+            raw_compaction_limit_reached,
+            should_defer_auto_compact,
+            decision = "turn_start_raw_compaction_check",
+        );
+    }
+    if !should_defer_auto_compact
+        && (total_usage_tokens >= compact_limit || raw_compaction_limit_reached)
+    {
         run_auto_compact(&sess, &turn_context).await;
     }
 
@@ -5682,6 +5700,13 @@ pub(crate) async fn run_turn(
                 };
                 let compact_limit = auto_compact_limit(turn_context.as_ref());
                 let token_limit_reached = total_usage_tokens >= compact_limit;
+                let raw_compaction_tokens = if needs_follow_up {
+                    estimate_raw_auto_compact_tokens(sess.as_ref(), turn_context.as_ref()).await
+                } else {
+                    None
+                };
+                let raw_compaction_limit_reached =
+                    raw_compaction_pressure_compacts(turn_context.as_ref(), raw_compaction_tokens);
                 if let Some(status) = turn_context.runtime.dynamic_context_window_status() {
                     debug!(
                         model = %turn_context.runtime.get_model(),
@@ -5694,12 +5719,14 @@ pub(crate) async fn run_turn(
                         tool_output_tokens,
                         needs_follow_up,
                         effective_prompt_pressure = total_usage_tokens,
+                        raw_compaction_tokens,
+                        raw_compaction_limit_reached,
                         decision = "post_response_compact_check",
                     );
                 }
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                if token_limit_reached && needs_follow_up {
+                if needs_follow_up && (token_limit_reached || raw_compaction_limit_reached) {
                     run_auto_compact(&sess, &turn_context).await;
                     continue;
                 }
@@ -5817,6 +5844,12 @@ fn auto_compact_limit(turn_context: &TurnContext) -> i64 {
         .unwrap_or(i64::MAX)
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct PreflightCompactPressure {
+    request_input_tokens: Option<i64>,
+    raw_compaction_tokens: Option<i64>,
+}
+
 fn effective_prompt_pressure(
     request_input_tokens: Option<i64>,
     response_total_tokens: Option<i64>,
@@ -5831,8 +5864,30 @@ fn effective_prompt_pressure(
     })
 }
 
-fn should_preflight_compact(turn_context: &TurnContext, request_input_tokens: Option<i64>) -> bool {
-    let decision = request_input_tokens.is_some_and(|input_tokens| {
+fn raw_compaction_pressure_compacts(
+    turn_context: &TurnContext,
+    raw_compaction_tokens: Option<i64>,
+) -> bool {
+    raw_compaction_tokens.is_some_and(|tokens| {
+        if turn_context
+            .runtime
+            .dynamic_context_window_auto_compact_limit()
+            .is_some()
+        {
+            return turn_context
+                .runtime
+                .should_preflight_dynamic_context_window_compact(tokens);
+        }
+
+        tokens >= auto_compact_limit(turn_context)
+    })
+}
+
+fn request_pressure_compacts(
+    turn_context: &TurnContext,
+    request_input_tokens: Option<i64>,
+) -> bool {
+    request_input_tokens.is_some_and(|input_tokens| {
         if turn_context
             .runtime
             .dynamic_context_window_auto_compact_limit()
@@ -5847,7 +5902,18 @@ fn should_preflight_compact(turn_context: &TurnContext, request_input_tokens: Op
             .runtime
             .get_model_context_window()
             .is_some_and(|context_window| input_tokens >= context_window)
-    });
+    })
+}
+
+fn should_preflight_compact(
+    turn_context: &TurnContext,
+    pressure: PreflightCompactPressure,
+) -> bool {
+    let request_should_compact =
+        request_pressure_compacts(turn_context, pressure.request_input_tokens);
+    let raw_should_compact =
+        raw_compaction_pressure_compacts(turn_context, pressure.raw_compaction_tokens);
+    let decision = request_should_compact || raw_should_compact;
     if let Some(status) = turn_context.runtime.dynamic_context_window_status() {
         debug!(
             model = %turn_context.runtime.get_model(),
@@ -5855,12 +5921,42 @@ fn should_preflight_compact(turn_context: &TurnContext, request_input_tokens: Op
             dynamic_locked = status.locked,
             dynamic_window = status.current_context_window,
             effective_window_limit = auto_compact_limit(turn_context),
-            request_input_tokens,
+            request_input_tokens = pressure.request_input_tokens,
+            raw_compaction_tokens = pressure.raw_compaction_tokens,
+            request_pressure_compacts = request_should_compact,
+            raw_compaction_pressure_compacts = raw_should_compact,
             decision = "preflight_compact_check",
             should_compact = decision,
         );
     }
     decision
+}
+
+async fn estimate_raw_auto_compact_tokens(
+    sess: &Session,
+    turn_context: &TurnContext,
+) -> Option<i64> {
+    let mut history = sess.clone_history().await;
+    if !should_use_remote_compact_task(sess, &turn_context.runtime.runtime_capabilities()) {
+        let compact_input = transcript_item_from_user_input(vec![UserInput::Text {
+            text: turn_context.compact_prompt().to_string(),
+            text_elements: Vec::new(),
+        }]);
+        history.record_items([&compact_input], turn_context.truncation_policy);
+    }
+
+    let fallback_tokens = history.estimate_token_count(turn_context);
+    let prompt = TurnRequest {
+        conversation: history.for_compaction_prompt().into_iter().collect(),
+        base_instructions: sess.get_base_instructions().await,
+        personality: turn_context.personality,
+        ..Default::default()
+    };
+
+    turn_context
+        .runtime
+        .estimated_input_tokens_for_turn_request(&prompt)
+        .or(fallback_tokens)
 }
 
 async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
@@ -6235,9 +6331,20 @@ async fn run_sampling_request(
         .estimated_input_tokens_for_turn_request(&prompt)
         .or(slimming_fallback_tokens)
         .or(history_input_tokens);
+    let raw_compaction_tokens = if tool_selection.allow_preflight_compact {
+        estimate_raw_auto_compact_tokens(sess.as_ref(), turn_context.as_ref()).await
+    } else {
+        None
+    };
 
     if tool_selection.allow_preflight_compact
-        && should_preflight_compact(turn_context.as_ref(), request_input_tokens)
+        && should_preflight_compact(
+            turn_context.as_ref(),
+            PreflightCompactPressure {
+                request_input_tokens,
+                raw_compaction_tokens,
+            },
+        )
     {
         return Err(SamplingRequestError::PreflightCompactRequired);
     }
@@ -7416,6 +7523,13 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
 
+    fn request_pressure(request_input_tokens: i64) -> PreflightCompactPressure {
+        PreflightCompactPressure {
+            request_input_tokens: Some(request_input_tokens),
+            raw_compaction_tokens: None,
+        }
+    }
+
     #[test]
     fn input_retrieve_tool_advertisement_matches_slimming_scope() {
         assert!(should_advertise_input_retrieve_tool(
@@ -8468,6 +8582,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preflight_compact_uses_slimmed_request_pressure() {
+        let (_session, turn_context) = make_session_and_context().await;
+        let context_window = turn_context
+            .runtime
+            .get_model_context_window()
+            .expect("model context window");
+
+        assert!(should_preflight_compact(
+            &turn_context,
+            PreflightCompactPressure {
+                request_input_tokens: Some(context_window),
+                raw_compaction_tokens: None,
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn preflight_compact_uses_raw_compaction_pressure() {
+        let (_session, turn_context) = make_session_and_context().await;
+        let context_window = turn_context
+            .runtime
+            .get_model_context_window()
+            .expect("model context window");
+        let compact_limit = auto_compact_limit(&turn_context);
+
+        assert!(should_preflight_compact(
+            &turn_context,
+            PreflightCompactPressure {
+                request_input_tokens: Some(context_window.saturating_sub(1)),
+                raw_compaction_tokens: Some(compact_limit),
+            }
+        ));
+    }
+
+    #[tokio::test]
     async fn preflight_compact_uses_dynamic_context_window() {
         let (session, mut turn_context) = make_session_and_context().await;
         let mut model_info = turn_context.runtime.get_model_info();
@@ -8497,11 +8646,76 @@ mod tests {
             .expect("dynamic context window");
         assert!(!should_preflight_compact(
             &turn_context,
-            Some(context_window)
+            request_pressure(context_window)
         ));
         assert!(!should_preflight_compact(
             &turn_context,
-            Some(context_window - 1)
+            request_pressure(context_window - 1)
+        ));
+    }
+
+    #[tokio::test]
+    async fn preflight_compact_ignores_raw_pressure_before_dynamic_window_locks() {
+        let (session, mut turn_context) = make_session_and_context().await;
+        let mut model_info = turn_context.runtime.get_model_info();
+        model_info.context_window = None;
+
+        turn_context.runtime = TurnRuntime::new_with_dynamic_context_window(
+            turn_context.runtime.config(),
+            turn_context.runtime.auth_manager(),
+            Arc::clone(&session.services.runtime_factory),
+            model_info,
+            Some(Arc::new(std::sync::Mutex::new(
+                DynamicContextWindowState::new(),
+            ))),
+            turn_context.runtime.get_otel_manager(),
+            turn_context.runtime.endpoint(),
+            turn_context.runtime.get_reasoning_effort(),
+            turn_context.runtime.get_reasoning_summary(),
+            session.conversation_id,
+            turn_context.runtime.get_session_source(),
+        );
+
+        assert!(!should_preflight_compact(
+            &turn_context,
+            PreflightCompactPressure {
+                request_input_tokens: Some(1),
+                raw_compaction_tokens: Some(100_000),
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn preflight_compact_uses_raw_pressure_after_dynamic_window_locks() {
+        let (session, mut turn_context) = make_session_and_context().await;
+        let mut model_info = turn_context.runtime.get_model_info();
+        model_info.context_window = None;
+
+        turn_context.runtime = TurnRuntime::new_with_dynamic_context_window(
+            turn_context.runtime.config(),
+            turn_context.runtime.auth_manager(),
+            Arc::clone(&session.services.runtime_factory),
+            model_info,
+            Some(Arc::new(std::sync::Mutex::new(
+                DynamicContextWindowState::new(),
+            ))),
+            turn_context.runtime.get_otel_manager(),
+            turn_context.runtime.endpoint(),
+            turn_context.runtime.get_reasoning_effort(),
+            turn_context.runtime.get_reasoning_summary(),
+            session.conversation_id,
+            turn_context.runtime.get_session_source(),
+        );
+        let _ = turn_context
+            .runtime
+            .record_dynamic_context_window_probe_failure(&turn_context.sub_id, 100_000);
+
+        assert!(should_preflight_compact(
+            &turn_context,
+            PreflightCompactPressure {
+                request_input_tokens: Some(1),
+                raw_compaction_tokens: Some(100_000),
+            }
         ));
     }
 
@@ -8564,7 +8778,7 @@ mod tests {
         let upgradeable_input_tokens = 100_000;
         assert!(!should_preflight_compact(
             turn_context.as_ref(),
-            Some(upgradeable_input_tokens)
+            request_pressure(upgradeable_input_tokens)
         ));
 
         let _ = turn_context
@@ -8575,7 +8789,7 @@ mod tests {
             );
         assert!(should_preflight_compact(
             turn_context.as_ref(),
-            Some(upgradeable_input_tokens)
+            request_pressure(upgradeable_input_tokens)
         ));
     }
 
@@ -8604,7 +8818,7 @@ mod tests {
         let upgradeable_input_tokens = 100_000;
         assert!(!should_preflight_compact(
             &turn_context,
-            Some(upgradeable_input_tokens)
+            request_pressure(upgradeable_input_tokens)
         ));
 
         let _ = turn_context
@@ -8615,7 +8829,7 @@ mod tests {
             );
         assert!(should_preflight_compact(
             &turn_context,
-            Some(upgradeable_input_tokens)
+            request_pressure(upgradeable_input_tokens)
         ));
     }
 
@@ -8642,7 +8856,10 @@ mod tests {
         );
 
         let first_probe = 40_000;
-        assert!(!should_preflight_compact(&turn_context, Some(first_probe)));
+        assert!(!should_preflight_compact(
+            &turn_context,
+            request_pressure(first_probe)
+        ));
 
         let _ = turn_context
             .runtime
@@ -8651,7 +8868,10 @@ mod tests {
         let _ = turn_context
             .runtime
             .record_dynamic_context_window_probe_failure(&turn_context.sub_id, second_probe);
-        assert!(should_preflight_compact(&turn_context, Some(first_probe)));
+        assert!(should_preflight_compact(
+            &turn_context,
+            request_pressure(first_probe)
+        ));
     }
 
     #[tokio::test]
@@ -8685,11 +8905,17 @@ mod tests {
         let _ = turn_context
             .runtime
             .record_dynamic_context_window_success(130_000);
-        assert!(!should_preflight_compact(&turn_context, Some(190_001)));
+        assert!(!should_preflight_compact(
+            &turn_context,
+            request_pressure(190_001)
+        ));
         let _ = turn_context
             .runtime
             .record_dynamic_context_window_success(190_001);
-        assert!(should_preflight_compact(&turn_context, Some(190_001)));
+        assert!(should_preflight_compact(
+            &turn_context,
+            request_pressure(190_001)
+        ));
     }
 
     #[tokio::test]
