@@ -89,7 +89,9 @@ A real-provider runtime requires these `RuntimeBuildSpec` fields:
 `lha-llm` currently expects callers to provide a complete `ModelInfo` for the
 selected model. The SDK does not require you to use LHA's product model catalog.
 The helper below is documentation-only code you can copy into your application
-and adjust for the model you select.
+and adjust for the model you select. These examples enumerate the current public
+fields; if your application does not provide billing metadata, set
+`pricing: None`.
 
 ```rust
 fn model_info(model: &str) -> lha_llm::ModelInfo {
@@ -126,6 +128,7 @@ fn model_info(model: &str) -> lha_llm::ModelInfo {
         context_window: Some(272_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
+        pricing: None,
     }
 }
 ```
@@ -361,6 +364,7 @@ fn model_info(model: &str) -> ModelInfo {
         context_window: Some(272_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
+        pricing: None,
     }
 }
 
