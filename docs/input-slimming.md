@@ -118,6 +118,105 @@ live-zone slimming。
 - 任务恢复质量：模型是否能在需要时通过 query retrieve 找回被省略细节；
 - cache 收益与 retrieval 成本的净效果，尤其是“压缩后仍总是需要全文”的反例。
 
+## Formal Problem Definition
+
+更抽象地说，input slimming 是在任务效用保持约束下，最小化 agent 输入成本的
+上下文表示压缩问题。对多步 agent 来说，input slimming 不是一次性把初始上下文
+压成 `Z`，而是一种插入 agent loop 的 request-time context transformation policy。
+
+设 `tau` 是当前任务，`X_tau` 是该任务的初始可观测上下文，`H_t` 是第 `t` 步前的
+agent 历史或状态。runtime 先从历史构建原始模型请求，然后 input slimming 在模型调用前
+改写这个 request：
+
+```text
+R_t = B(H_t)
+\tilde{R}_t = C_t(R_t, tau)
+```
+
+其中 `B` 是 build-request 过程，`R_t` 是第 `t` 步原始模型请求，`C_t` 是第 `t` 步
+request-time slimming policy，`\tilde{R}_t` 是实际发送给模型的 slimmed request。
+`C_t` 可以隐式依赖之前的压缩决策、retrieval store、replacement cache 或预算状态；这些状态
+属于实现细节，不进入主公式。
+
+用 `A_C` 表示每一步模型请求前都应用 `C_t` 的 agent 系统，用 `A_0` 表示 no-slimming
+baseline，则压缩轨迹和 baseline 轨迹可以写成：
+
+```text
+pi_C = A_C(X_tau)
+pi_0 = A_0(X_tau)
+```
+
+其中 `pi_C` 是使用 input slimming 后的完整 agent 轨迹，`pi_0` 是不使用 input slimming 的
+baseline 轨迹。轨迹包含模型 action、工具/环境反馈和最终输出，但这些细节不需要在主公式里
+展开。
+
+主优化目标因此应写成整条轨迹的期望成本最小化：
+
+```text
+C* = argmin_C E_{tau ~ D}[ CostTrajectory(pi_C) ]
+
+subject to
+
+E_{tau ~ D}[ U_tau(pi_C) ]
+  >=
+E_{tau ~ D}[ U_tau(pi_0) ] - epsilon
+```
+
+这里 `D` 是任务分布，`CostTrajectory(pi_C)` 是整条轨迹的有效输入成本。最简单时，
+它可以近似为每一步 slimmed request 的 total input tokens；在 cache-sensitive setting
+下，它应区分 cached input tokens 和 uncached input tokens：
+
+```text
+CostTrajectory(pi_C)
+  =
+sum_t EffectiveInputCost(\tilde{R}_t)
++ optional_overhead(pi_C)
+
+EffectiveInputCost(\tilde{R}_t)
+  =
+uncached_tokens_t
++ alpha * cached_tokens_t
+```
+
+其中 `uncached_tokens_t` 是第 `t` 步没有命中 provider cache、需要重新处理的输入 token；
+`cached_tokens_t` 是命中 provider cache 的输入 token；`alpha` 是 cached token 相对
+uncached token 的成本权重。`alpha = 1` 时退化为普通上下文 token 压力；`alpha < 1`
+时表达 provider cache 命中带来的成本折扣。
+
+`optional_overhead(pi_C)` 可用于实验中纳入 retrieve tool schema、retrieve call、取回内容、
+压缩计算、latency 等额外成本。cache hit rate 可以作为 live-zone 策略的诊断指标或可选
+guardrail，但不替代 `CostTrajectory`，因为命中率是比例，不能单独反映总成本。`U_tau`
+是任务效用函数，而不是文本相似度；`epsilon` 是允许的平均效用损失上界。
+
+我们不要求 `pi_C = pi_0`，也不要求模型走相同路径、调用相同工具或输出相同字符串；只要求
+压缩轨迹的任务效用接近 no-slimming baseline。
+
+单次模型调用可以看成上述定义的退化情况：当 agent 只有一步时，`pi_C` 近似退化为
+`F(C(X, tau))`。对 LHA 这类多步 agent，主定义应使用 `pi_C` 和 `CostTrajectory`。
+
+因此 input slimming 不是普通文本压缩：文本相似度不是目标，agent 轨迹不要求相同，最终输出路径
+也不要求相同；它只要求最终任务效用近似保持。对某些任务来说，一行关键证据可能比上千行冗余
+日志更重要。
+
+这个问题也不宜严格称为凸优化。`C` 通常是离散策略，`A_C` 是黑盒、随机、不可微的序贯决策过程，
+`U` 也常常来自测试结果、人评或 judge。更准确的表述是 constrained black-box optimization，或者
+task-conditioned rate-distortion problem：
+
+```text
+Input slimming is the problem of designing a request-time context transformation
+policy C that minimizes the expected cost of an agent trajectory while preserving
+expected task utility.
+```
+
+换句话说，input slimming 是设计一种 request-time 上下文变换策略 `C` 的问题；该策略在 agent 每一步
+模型请求前作用，目标是在保持预期任务效用的同时，最小化整条 agent 轨迹的期望输入成本。
+
+当前 LHA 的 historical strategy 和 live-zone strategy 是这个多步抽象问题在 LHA request 边界上的两个
+工程近似。protected context、retrieve side channel、whole-request token gate 和 fail-open 都是为了约束
+`U_tau(pi_C)` 相对 `U_tau(pi_0)` 的损失；sidebar saved tokens 和 token gates 是 `CostTrajectory` 中 token
+成本的一部分可观测 proxy，而不是完整目标函数。后续算法和消融实验应围绕 `CostTrajectory`、`U`、
+`epsilon`、retrieval overhead 和 cache effect 展开。
+
 ## Problem Statement
 
 长会话中真正推高上下文窗口压力的，往往不是用户意图本身，而是机器生成内容：
