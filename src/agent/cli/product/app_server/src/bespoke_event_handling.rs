@@ -1968,12 +1968,14 @@ mod tests {
                     tokens_after: 4_100,
                     tokens_saved: 8_300,
                     replacements: 2,
+                    saved_usd_micros: Some(4_700),
                 },
                 total: crate::product::agent::protocol::InputSlimmingTokenStats {
                     tokens_before: 27_800,
                     tokens_after: 9_100,
                     tokens_saved: 18_700,
                     replacements: 5,
+                    saved_usd_micros: Some(9_400),
                 },
             },
             &outgoing,
@@ -1998,8 +2000,10 @@ mod tests {
                 assert_eq!(payload.input_slimming.last.tokens_after, 4_100);
                 assert_eq!(payload.input_slimming.last.tokens_saved, 8_300);
                 assert_eq!(payload.input_slimming.last.replacements, 2);
+                assert_eq!(payload.input_slimming.last.saved_usd_micros, Some(4_700));
                 assert_eq!(payload.input_slimming.total.tokens_saved, 18_700);
                 assert_eq!(payload.input_slimming.total.replacements, 5);
+                assert_eq!(payload.input_slimming.total.saved_usd_micros, Some(9_400));
             }
             other => bail!("unexpected notification: {other:?}"),
         }

@@ -141,6 +141,7 @@ use crate::product::agent::error::Result as CodexResult;
 use crate::product::agent::exec::StreamOutput;
 use crate::product::agent::exec_policy::ExecPolicyUpdateError;
 use crate::product::agent::git_info::get_git_repo_root;
+use crate::product::agent::input_slimming::CandidateZone;
 use crate::product::agent::input_slimming::INPUT_RETRIEVE_TOOL_NAME;
 use crate::product::agent::input_slimming::INPUT_SLIMMING_CONFLICT_WARNING;
 use crate::product::agent::input_slimming::INPUT_SLIMMING_MARKER_PREFIX;
@@ -1328,9 +1329,10 @@ impl SessionConfiguration {
         let mut config = (*self.original_config_do_not_use).clone();
         if provider_changed || model_changed {
             match config.resolve_model_context_limits(&model_provider_id, &model) {
-                Ok((model_context_window, model_auto_compact_token_limit)) => {
+                Ok((model_context_window, model_auto_compact_token_limit, model_pricing)) => {
                     config.model_context_window = model_context_window;
                     config.model_auto_compact_token_limit = model_auto_compact_token_limit;
+                    config.model_pricing = model_pricing;
                 }
                 Err(err) => {
                     warn!(
@@ -1341,6 +1343,7 @@ impl SessionConfiguration {
                     );
                     config.model_context_window = None;
                     config.model_auto_compact_token_limit = None;
+                    config.model_pricing = None;
                 }
             }
         }
@@ -4119,7 +4122,7 @@ impl Session {
     ) {
         let Some((last, total)) = ({
             let mut state = self.state.lock().await;
-            state.record_input_slimming_context(candidates)
+            state.record_input_slimming_context(&turn_context.sub_id, scope, candidates)
         }) else {
             return;
         };
@@ -4128,6 +4131,39 @@ impl Session {
             EventMsg::InputSlimming(InputSlimmingEvent { scope, last, total }),
         )
         .await;
+    }
+
+    pub(crate) async fn complete_input_slimming_billing(
+        &self,
+        turn_context: &TurnContext,
+        token_usage: Option<&TokenUsage>,
+    ) {
+        let model_info = turn_context.runtime.get_model_info();
+        let completed = {
+            let mut state = self.state.lock().await;
+            state.complete_input_slimming_billing(
+                &turn_context.sub_id,
+                model_info.pricing.as_ref(),
+                token_usage,
+            )
+        };
+        let Some(completed) = completed else {
+            return;
+        };
+        self.send_event(
+            turn_context,
+            EventMsg::InputSlimming(InputSlimmingEvent {
+                scope: completed.scope,
+                last: completed.last,
+                total: completed.total,
+            }),
+        )
+        .await;
+    }
+
+    pub(crate) async fn discard_input_slimming_billing(&self, turn_context: &TurnContext) {
+        let mut state = self.state.lock().await;
+        state.discard_input_slimming_billing(&turn_context.sub_id);
     }
 
     async fn maybe_start_ghost_snapshot(
@@ -7155,6 +7191,9 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
                 self.sess
                     .update_token_usage_info(&self.turn_context, token_usage.as_ref())
                     .await;
+                self.sess
+                    .complete_input_slimming_billing(&self.turn_context, token_usage.as_ref())
+                    .await;
                 self.should_emit_turn_diff = true;
                 self.response_total_tokens = token_usage.as_ref().map(|usage| usage.total_tokens);
 
@@ -7484,8 +7523,14 @@ mod tests {
     use crate::product::agent::tools::format_exec_output_str;
 
     use crate::product::protocol::ThreadId;
+    use lha_llm::ModelPricing;
+    use lha_llm::ModelPricingBand;
+    use lha_llm::ModelPricingBilling;
+    use lha_llm::ModelPricingCurrency;
+    use lha_llm::ModelPricingUnit;
     use lha_llm::ToolCallPayload;
     use lha_llm::ToolResultPayload;
+    use lha_llm::UsdPerMillionTokensMicros;
 
     use crate::product::agent::protocol::CompactedItem;
     use crate::product::agent::protocol::InitialHistory;
@@ -9287,6 +9332,7 @@ mod tests {
             InputSlimmingScope::HistoricalToolOutputs,
             &[InputSlimmingContextStatCandidate {
                 occurrence_key: input_slimming_occurrence("call-1"),
+                zone: CandidateZone::HistoricalToolOutput,
                 tokens_before: 1_000,
                 tokens_after: 1_000,
                 tokens_saved: 0,
@@ -9310,12 +9356,14 @@ mod tests {
             &[
                 InputSlimmingContextStatCandidate {
                     occurrence_key: input_slimming_occurrence("call-1"),
+                    zone: CandidateZone::HistoricalToolOutput,
                     tokens_before: 7_400,
                     tokens_after: 2_100,
                     tokens_saved: 5_300,
                 },
                 InputSlimmingContextStatCandidate {
                     occurrence_key: input_slimming_occurrence("call-2"),
+                    zone: CandidateZone::HistoricalToolOutput,
                     tokens_before: 5_000,
                     tokens_after: 2_000,
                     tokens_saved: 3_000,
@@ -9329,12 +9377,14 @@ mod tests {
             &[
                 InputSlimmingContextStatCandidate {
                     occurrence_key: input_slimming_occurrence("call-2"),
+                    zone: CandidateZone::HistoricalToolOutput,
                     tokens_before: 5_000,
                     tokens_after: 2_000,
                     tokens_saved: 3_000,
                 },
                 InputSlimmingContextStatCandidate {
                     occurrence_key: input_slimming_occurrence("call-3"),
+                    zone: CandidateZone::HistoricalToolOutput,
                     tokens_before: 15_400,
                     tokens_after: 5_000,
                     tokens_saved: 10_400,
@@ -9352,6 +9402,7 @@ mod tests {
                 tokens_after: 4_100,
                 tokens_saved: 8_300,
                 replacements: 2,
+                saved_usd_micros: None,
             }
         );
         assert_eq!(first.total, first.last);
@@ -9365,6 +9416,7 @@ mod tests {
                 tokens_after: 5_000,
                 tokens_saved: 10_400,
                 replacements: 1,
+                saved_usd_micros: None,
             }
         );
         assert_eq!(
@@ -9374,6 +9426,7 @@ mod tests {
                 tokens_after: 9_100,
                 tokens_saved: 18_700,
                 replacements: 3,
+                saved_usd_micros: None,
             }
         );
     }
@@ -9388,12 +9441,14 @@ mod tests {
             &[
                 InputSlimmingContextStatCandidate {
                     occurrence_key: input_slimming_occurrence_with_hash("call-1", "same-hash"),
+                    zone: CandidateZone::LiveToolOutput,
                     tokens_before: 1_000,
                     tokens_after: 250,
                     tokens_saved: 750,
                 },
                 InputSlimmingContextStatCandidate {
                     occurrence_key: input_slimming_occurrence_with_hash("call-2", "same-hash"),
+                    zone: CandidateZone::LiveToolOutput,
                     tokens_before: 1_000,
                     tokens_after: 250,
                     tokens_saved: 750,
@@ -9411,8 +9466,67 @@ mod tests {
                 tokens_after: 500,
                 tokens_saved: 1_500,
                 replacements: 2,
+                saved_usd_micros: None,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn complete_input_slimming_billing_emits_saved_usd_update() {
+        let lha_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(lha_home.path()).await;
+        config.model_pricing = Some(input_slimming_test_pricing());
+        let (session, turn_context) = make_session_and_context_for_config(config).await;
+        let (tx_event, rx) = async_channel::unbounded();
+        let sess = Arc::new(Session {
+            tx_event,
+            ..session
+        });
+        let tc = Arc::new(turn_context);
+
+        sess.record_input_slimming(
+            tc.as_ref(),
+            InputSlimmingScope::HistoricalToolOutputs,
+            &[
+                InputSlimmingContextStatCandidate {
+                    occurrence_key: input_slimming_occurrence("call-1"),
+                    zone: CandidateZone::HistoricalToolOutput,
+                    tokens_before: 2_000,
+                    tokens_after: 1_000,
+                    tokens_saved: 1_000,
+                },
+                InputSlimmingContextStatCandidate {
+                    occurrence_key: input_slimming_occurrence("call-2"),
+                    zone: CandidateZone::LiveToolOutput,
+                    tokens_before: 4_000,
+                    tokens_after: 2_000,
+                    tokens_saved: 2_000,
+                },
+            ],
+        )
+        .await;
+
+        let token_only = wait_for_input_slimming(&rx).await;
+        assert_eq!(token_only.last.saved_usd_micros, None);
+        assert_eq!(token_only.total.saved_usd_micros, None);
+
+        sess.complete_input_slimming_billing(
+            tc.as_ref(),
+            Some(&TokenUsage {
+                input_tokens: 10_000,
+                cached_input_tokens: 1_000,
+                output_tokens: 500,
+                total_tokens: 10_500,
+                ..TokenUsage::default()
+            }),
+        )
+        .await;
+
+        let billed = wait_for_input_slimming(&rx).await;
+        assert_eq!(billed.last.tokens_saved, 3_000);
+        assert_eq!(billed.last.saved_usd_micros, Some(5_250));
+        assert_eq!(billed.total.tokens_saved, 3_000);
+        assert_eq!(billed.total.saved_usd_micros, Some(5_250));
     }
 
     #[tokio::test]
@@ -9424,6 +9538,7 @@ mod tests {
             InputSlimmingScope::HistoricalToolOutputs,
             &[InputSlimmingContextStatCandidate {
                 occurrence_key: input_slimming_occurrence("call-1"),
+                zone: CandidateZone::HistoricalToolOutput,
                 tokens_before: 1_000,
                 tokens_after: 250,
                 tokens_saved: 750,
@@ -9439,6 +9554,7 @@ mod tests {
             InputSlimmingScope::HistoricalToolOutputs,
             &[InputSlimmingContextStatCandidate {
                 occurrence_key: input_slimming_occurrence("call-2"),
+                zone: CandidateZone::HistoricalToolOutput,
                 tokens_before: 2_000,
                 tokens_after: 500,
                 tokens_saved: 1_500,
@@ -9456,6 +9572,7 @@ mod tests {
                 tokens_after: 750,
                 tokens_saved: 2_250,
                 replacements: 2,
+                saved_usd_micros: None,
             }
         );
     }
@@ -9472,6 +9589,21 @@ mod tests {
             call_id: call_id.to_string(),
             target: "text_tool_output".to_string(),
             original_hash: original_hash.to_string(),
+        }
+    }
+
+    fn input_slimming_test_pricing() -> ModelPricing {
+        ModelPricing {
+            currency: ModelPricingCurrency::Usd,
+            unit: ModelPricingUnit::UsdPerMillionTokens,
+            billing: ModelPricingBilling::Standard,
+            context_bands: vec![ModelPricingBand {
+                min_input_tokens: None,
+                max_input_tokens: None,
+                input: UsdPerMillionTokensMicros::from_micros(2_500_000),
+                cached_input: UsdPerMillionTokensMicros::from_micros(250_000),
+                output: UsdPerMillionTokensMicros::from_micros(15_000_000),
+            }],
         }
     }
 

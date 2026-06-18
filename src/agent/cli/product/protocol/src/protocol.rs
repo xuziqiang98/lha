@@ -1270,6 +1270,9 @@ pub struct InputSlimmingTokenStats {
     pub tokens_after: i64,
     pub tokens_saved: i64,
     pub replacements: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub saved_usd_micros: Option<i64>,
 }
 
 impl InputSlimmingTokenStats {
@@ -1278,6 +1281,13 @@ impl InputSlimmingTokenStats {
         self.tokens_after = self.tokens_after.saturating_add(other.tokens_after);
         self.tokens_saved = self.tokens_saved.saturating_add(other.tokens_saved);
         self.replacements = self.replacements.saturating_add(other.replacements);
+        if let Some(saved_usd_micros) = other.saved_usd_micros {
+            self.saved_usd_micros = Some(
+                self.saved_usd_micros
+                    .unwrap_or_default()
+                    .saturating_add(saved_usd_micros),
+            );
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod bench_eval;
+pub(crate) mod billing;
 mod candidate;
 mod metrics;
 mod store;
@@ -253,6 +254,7 @@ impl InputSlimmer {
                             .saturating_add(accepted.gate.tokens_saved);
                         context_stats_candidates.push(InputSlimmingContextStatCandidate {
                             occurrence_key: accepted.occurrence_key.clone(),
+                            zone: candidate.zone,
                             tokens_before: usize_to_i64(accepted.reference.original_tokens),
                             tokens_after: usize_to_i64(accepted.reference.compressed_tokens),
                             tokens_saved: usize_to_i64(
@@ -580,6 +582,7 @@ impl InputSlimmingOutcome {
             tokens_after: usize_to_i64(self.metrics.approx_tokens_after),
             tokens_saved: usize_to_i64(self.metrics.approx_tokens_saved),
             replacements: usize_to_i64(self.metrics.slimmed),
+            saved_usd_micros: None,
         }
     }
 }
@@ -594,6 +597,7 @@ pub(crate) struct InputSlimmingOccurrenceKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InputSlimmingContextStatCandidate {
     pub(crate) occurrence_key: InputSlimmingOccurrenceKey,
+    pub(crate) zone: CandidateZone,
     pub(crate) tokens_before: i64,
     pub(crate) tokens_after: i64,
     pub(crate) tokens_saved: i64,

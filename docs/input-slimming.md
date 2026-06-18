@@ -70,10 +70,15 @@ input_slimming_live_zone = true
 - session-scoped replacement cache 会按原文 hash、tool、scope、zone、策略版本和压缩
   参数复用已生成的 slimmed replacement，避免跨 turn 对同一 tool output 重复执行压缩策略；
 - Sidebar `slim hist` / `slim live` 表示本次 savings 来自 historical 或 live-zone
-  策略；`saved xxxK context` 表示当前 session 中已被 slimmed context 采用过的
-  tool-result occurrence 去重累计 saved，不是 provider billing / non-cached usage 的
-  反事实节约值，也不是 auto compact 的触发依据；同一 occurrence 跨 turn 复用
-  replacement 不重复累计，compact 后也不重置该 session 统计；
+  策略；`saved xxxK` 表示当前 session 中已被 slimmed context 采用过的
+  tool-result occurrence 去重累计 saved，不是 auto compact 的触发依据；同一
+  occurrence 跨 turn 复用 replacement 不重复累计，compact 后也不重置该 session
+  统计；
+- 如果当前模型卡片带有 standard API pricing，且本轮 provider 返回了实际
+  `TokenUsage`，Sidebar 会在 Completed 后补充显示 `saved xxxK / $yyy`；美元金额基于
+  actual usage 加上“未瘦身 input tokens”的反事实 usage 估算 avoided standard API cost，
+  不是保证的 invoice delta。没有 pricing、没有 actual usage、或找不到匹配 pricing band
+  时保留 token-only 的 `saved xxxK`；
 - marker 格式为 `<<lha-input:{hash}>>`；
 - hash 使用 repo 已有的 `sha2::Sha256`，截断为 24 个 lowercase hex characters。
 

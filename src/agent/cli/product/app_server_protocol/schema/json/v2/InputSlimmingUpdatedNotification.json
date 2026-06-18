@@ -58,6 +58,13 @@
           "type": "integer",
           "format": "int64"
         },
+        "savedUsdMicros": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
         "tokensAfter": {
           "type": "integer",
           "format": "int64"

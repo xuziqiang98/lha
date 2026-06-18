@@ -1788,7 +1788,9 @@ impl ChatWidget {
             last_before_tokens: event.last.tokens_before,
             last_after_tokens: event.last.tokens_after,
             last_saved_tokens: event.last.tokens_saved,
+            last_saved_usd_micros: event.last.saved_usd_micros,
             total_saved_tokens: event.total.tokens_saved,
+            total_saved_usd_micros: event.total.saved_usd_micros,
         });
         self.request_redraw();
     }

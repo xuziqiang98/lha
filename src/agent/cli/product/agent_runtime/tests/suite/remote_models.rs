@@ -88,6 +88,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         context_window: Some(272_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
+        pricing: None,
         experimental_supported_tools: Vec::new(),
     };
 
@@ -326,6 +327,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         context_window: Some(272_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
+        pricing: None,
         experimental_supported_tools: Vec::new(),
     };
     mount_models_once(
@@ -798,6 +800,7 @@ fn test_remote_model_with_policy(
         context_window: Some(272_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
+        pricing: None,
         experimental_supported_tools: Vec::new(),
     }
 }

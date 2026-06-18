@@ -65,6 +65,7 @@ macro_rules! model_info {
             context_window: Some(CONTEXT_WINDOW_272K),
             auto_compact_token_limit: None,
             effective_context_window_percent: 95,
+            pricing: None,
             experimental_supported_tools: Vec::new(),
         };
 
@@ -84,6 +85,9 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
     }
     if let Some(auto_compact_token_limit) = config.model_auto_compact_token_limit {
         model.auto_compact_token_limit = Some(auto_compact_token_limit);
+    }
+    if let Some(pricing) = &config.model_pricing {
+        model.pricing = Some(pricing.clone());
     }
     if let Some(token_limit) = config.tool_output_token_limit {
         model.truncation_policy = match model.truncation_policy.mode {

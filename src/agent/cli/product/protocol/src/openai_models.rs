@@ -9,11 +9,17 @@ use ts_rs::TS;
 pub use lha_llm::types::ModelInfoUpgrade;
 pub use lha_llm::types::ModelInstructionsVariables;
 pub use lha_llm::types::ModelMessages;
+pub use lha_llm::types::ModelPricing;
+pub use lha_llm::types::ModelPricingBand;
+pub use lha_llm::types::ModelPricingBilling;
+pub use lha_llm::types::ModelPricingCurrency;
+pub use lha_llm::types::ModelPricingUnit;
 pub use lha_llm::types::ModelVisibility;
 pub use lha_llm::types::ReasoningEffort;
 pub use lha_llm::types::ReasoningEffortPreset;
 pub use lha_llm::types::TruncationMode;
 pub use lha_llm::types::TruncationPolicyConfig;
+pub use lha_llm::types::UsdPerMillionTokensMicros;
 pub use lha_llm::types::reasoning_effort_mapping_from_presets;
 
 #[derive(
@@ -64,6 +70,8 @@ pub struct ModelInfo {
     pub auto_compact_token_limit: Option<i64>,
     #[serde(default = "default_effective_context_window_percent")]
     pub effective_context_window_percent: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<ModelPricing>,
     #[serde(default)]
     pub experimental_supported_tools: Vec<String>,
 }
@@ -113,6 +121,7 @@ impl ModelInfo {
             context_window: self.context_window,
             auto_compact_token_limit: self.auto_compact_token_limit,
             effective_context_window_percent: self.effective_context_window_percent,
+            pricing: self.pricing.clone(),
         }
     }
 }
@@ -141,6 +150,7 @@ impl From<lha_llm::types::ModelInfo> for ModelInfo {
             context_window: value.context_window,
             auto_compact_token_limit: value.auto_compact_token_limit,
             effective_context_window_percent: value.effective_context_window_percent,
+            pricing: value.pricing,
             experimental_supported_tools: Vec::new(),
         }
     }
@@ -313,6 +323,7 @@ mod tests {
             context_window: None,
             auto_compact_token_limit: None,
             effective_context_window_percent: 95,
+            pricing: None,
             experimental_supported_tools: vec![],
         }
     }

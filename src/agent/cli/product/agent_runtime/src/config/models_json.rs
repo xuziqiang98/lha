@@ -2,6 +2,7 @@ use crate::product::agent::config::model_ref::ModelRef;
 use crate::product::agent::path_utils::write_atomically;
 use crate::product::protocol::config_types::ReasoningSummary;
 use crate::product::protocol::config_types::Verbosity;
+use crate::product::protocol::openai_models::ModelPricing;
 use crate::product::protocol::openai_models::ReasoningEffort;
 use lha_llm::RuntimeEndpoint;
 use schemars::JsonSchema;
@@ -122,6 +123,8 @@ pub struct ModelMetadata {
     pub context_window: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_compact_token_limit: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<ModelPricing>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

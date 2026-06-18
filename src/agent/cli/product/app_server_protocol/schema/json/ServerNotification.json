@@ -3937,6 +3937,13 @@
           "type": "integer",
           "format": "int64"
         },
+        "savedUsdMicros": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
         "tokensAfter": {
           "type": "integer",
           "format": "int64"
@@ -3962,6 +3969,13 @@
       "properties": {
         "replacements": {
           "type": "integer",
+          "format": "int64"
+        },
+        "saved_usd_micros": {
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "int64"
         },
         "tokens_after": {

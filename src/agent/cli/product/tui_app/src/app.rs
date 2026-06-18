@@ -1319,9 +1319,10 @@ impl App {
 
         if refresh_context_limits || provider_changed || model_changed {
             match self.config.resolve_model_context_limits(provider_id, model) {
-                Ok((model_context_window, model_auto_compact_token_limit)) => {
+                Ok((model_context_window, model_auto_compact_token_limit, model_pricing)) => {
                     self.config.model_context_window = model_context_window;
                     self.config.model_auto_compact_token_limit = model_auto_compact_token_limit;
+                    self.config.model_pricing = model_pricing;
                 }
                 Err(err) => {
                     tracing::warn!(
@@ -1332,6 +1333,7 @@ impl App {
                     );
                     self.config.model_context_window = None;
                     self.config.model_auto_compact_token_limit = None;
+                    self.config.model_pricing = None;
                 }
             }
         }

@@ -519,6 +519,7 @@ async fn ignores_remote_personality_if_remote_models_disabled() -> anyhow::Resul
         context_window: Some(128_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
+        pricing: None,
         experimental_supported_tools: Vec::new(),
     };
 
@@ -637,6 +638,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
         context_window: Some(128_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
+        pricing: None,
         experimental_supported_tools: Vec::new(),
     };
 
@@ -750,6 +752,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         context_window: Some(128_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
+        pricing: None,
         experimental_supported_tools: Vec::new(),
     };
 

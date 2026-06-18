@@ -5068,6 +5068,13 @@
           "type": "integer",
           "format": "int64"
         },
+        "saved_usd_micros": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
         "tokens_after": {
           "type": "integer",
           "format": "int64"

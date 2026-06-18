@@ -247,6 +247,7 @@ impl Session {
         };
         self.emit_goal_accounting_update_if_needed(&turn_context, goal_accounting_outcome)
             .await;
+        self.discard_input_slimming_billing(&turn_context).await;
         let assistant_message_for_buddy = last_agent_message.clone();
         let event = EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message });
         self.send_event(turn_context.as_ref(), event).await;
@@ -408,6 +409,7 @@ impl Session {
             self.emit_goal_accounting_update_if_needed(&turn_context, accounting_outcome)
                 .await;
         }
+        self.discard_input_slimming_billing(&turn_context).await;
 
         if reason == TurnAbortReason::Interrupted {
             let marker = TranscriptItem::Message {

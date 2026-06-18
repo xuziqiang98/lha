@@ -94,7 +94,9 @@ pub(crate) struct InputSlimmingPanelSnapshot {
     pub(crate) last_before_tokens: i64,
     pub(crate) last_after_tokens: i64,
     pub(crate) last_saved_tokens: i64,
+    pub(crate) last_saved_usd_micros: Option<i64>,
     pub(crate) total_saved_tokens: i64,
+    pub(crate) total_saved_usd_micros: Option<i64>,
 }
 
 pub(crate) fn sidebar_width(total_width: u16) -> Option<u16> {
@@ -340,17 +342,37 @@ fn push_status(lines: &mut Vec<Line<'static>>, status: Option<&StatusPanelSnapsh
             " -> ".dim(),
             format_tokens_compact(input_slimming.last_after_tokens).into(),
         ]));
-        lines.push(Line::from(vec![
+        let mut saved_line = vec![
             "  saved ".dim(),
             format_tokens_compact(input_slimming.total_saved_tokens).into(),
-            " context".dim(),
-        ]));
+        ];
+        if let Some(saved_usd_micros) = input_slimming.total_saved_usd_micros {
+            saved_line.push(" / ".dim());
+            saved_line.push(format_usd_micros(saved_usd_micros).into());
+        }
+        lines.push(Line::from(saved_line));
     }
     if context.context_compact_count > 0 {
         lines.push(Line::from(vec![
             "  compact ".dim(),
             context.context_compact_count.to_string().into(),
         ]));
+    }
+}
+
+fn format_usd_micros(micros: i64) -> String {
+    if micros <= 0 {
+        return "$0.00".to_string();
+    }
+    let dollars = micros as f64 / 1_000_000.0;
+    if micros >= 1_000_000 {
+        format!("${dollars:.2}")
+    } else if micros >= 10_000 {
+        format!("${dollars:.3}")
+    } else if micros >= 1_000 {
+        format!("${dollars:.4}")
+    } else {
+        "<$0.001".to_string()
     }
 }
 
@@ -491,7 +513,9 @@ mod tests {
                     last_before_tokens: 12_400,
                     last_after_tokens: 4_100,
                     last_saved_tokens: 8_300,
+                    last_saved_usd_micros: Some(2_075),
                     total_saved_tokens: 18_700,
+                    total_saved_usd_micros: Some(4_675),
                 }),
                 context_compact_count: 1,
             }),
@@ -537,8 +561,9 @@ mod tests {
         assert!(rendered.contains("total 45"));
         assert!(rendered.contains("cached 25%"));
         assert!(rendered.contains("slim live 12.4K -> 4.1K"));
-        assert!(rendered.contains("saved 18.7K context"));
+        assert!(rendered.contains("saved 18.7K / $0.0047"));
         assert!(!rendered.contains("this /"));
+        assert!(!rendered.contains("context"));
         assert!(rendered.contains("compact 1"));
         assert!(!rendered.contains("used"));
         assert!(!rendered.contains("tokens"));

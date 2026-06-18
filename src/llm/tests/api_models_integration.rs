@@ -84,6 +84,7 @@ async fn models_client_hits_models_endpoint() {
             context_window: Some(272_000),
             auto_compact_token_limit: None,
             effective_context_window_percent: 95,
+            pricing: None,
         }],
     };
 

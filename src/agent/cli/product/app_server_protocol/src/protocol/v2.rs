@@ -1578,6 +1578,9 @@ pub struct InputSlimmingTokenStats {
     pub tokens_saved: i64,
     #[ts(type = "number")]
     pub replacements: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub saved_usd_micros: Option<i64>,
 }
 
 impl From<CoreInputSlimmingTokenStats> for InputSlimmingTokenStats {
@@ -1587,6 +1590,7 @@ impl From<CoreInputSlimmingTokenStats> for InputSlimmingTokenStats {
             tokens_after: value.tokens_after,
             tokens_saved: value.tokens_saved,
             replacements: value.replacements,
+            saved_usd_micros: value.saved_usd_micros,
         }
     }
 }

@@ -2041,12 +2041,14 @@ async fn sidebar_status_tracks_input_slimming_savings() {
                 tokens_after: 1_000,
                 tokens_saved: 0,
                 replacements: 1,
+                saved_usd_micros: None,
             },
             total: crate::product::agent::protocol::InputSlimmingTokenStats {
                 tokens_before: 1_000,
                 tokens_after: 1_000,
                 tokens_saved: 0,
                 replacements: 1,
+                saved_usd_micros: None,
             },
         }),
     });
@@ -2068,12 +2070,14 @@ async fn sidebar_status_tracks_input_slimming_savings() {
                 tokens_after: 4_100,
                 tokens_saved: 8_300,
                 replacements: 2,
+                saved_usd_micros: None,
             },
             total: crate::product::agent::protocol::InputSlimmingTokenStats {
                 tokens_before: 27_800,
                 tokens_after: 9_100,
                 tokens_saved: 18_700,
                 replacements: 5,
+                saved_usd_micros: None,
             },
         }),
     });
@@ -2091,14 +2095,50 @@ async fn sidebar_status_tracks_input_slimming_savings() {
             last_before_tokens: 12_400,
             last_after_tokens: 4_100,
             last_saved_tokens: 8_300,
+            last_saved_usd_micros: None,
             total_saved_tokens: 18_700,
+            total_saved_usd_micros: None,
         }
     );
 
     let rendered = render_sidebar_snapshot(&snapshot);
     assert!(rendered.contains("slim live 12.4K -> 4.1K"));
-    assert!(rendered.contains("saved 18.7K context"));
+    assert!(rendered.contains("saved 18.7K"));
+    assert!(!rendered.contains("context"));
+    assert!(!rendered.contains(" / $"));
     assert!(!rendered.contains("this /"));
+
+    chat.handle_codex_event(Event {
+        id: "input-slimming-billed".into(),
+        msg: EventMsg::InputSlimming(crate::product::agent::protocol::InputSlimmingEvent {
+            scope: crate::product::agent::protocol::InputSlimmingScope::LiveZoneToolOutputs,
+            last: crate::product::agent::protocol::InputSlimmingTokenStats {
+                tokens_before: 12_400,
+                tokens_after: 4_100,
+                tokens_saved: 8_300,
+                replacements: 2,
+                saved_usd_micros: Some(2_075),
+            },
+            total: crate::product::agent::protocol::InputSlimmingTokenStats {
+                tokens_before: 27_800,
+                tokens_after: 9_100,
+                tokens_saved: 18_700,
+                replacements: 5,
+                saved_usd_micros: Some(4_675),
+            },
+        }),
+    });
+
+    let billed_snapshot = chat.sidebar_snapshot();
+    let billed_slimming = billed_snapshot
+        .status
+        .as_ref()
+        .and_then(|status| status.input_slimming.as_ref())
+        .expect("input slimming should still be visible");
+    assert_eq!(billed_slimming.total_saved_usd_micros, Some(4_675));
+
+    let billed_rendered = render_sidebar_snapshot(&billed_snapshot);
+    assert!(billed_rendered.contains("saved 18.7K / $0.0047"));
 
     chat.handle_codex_event(Event {
         id: "token-usage".into(),

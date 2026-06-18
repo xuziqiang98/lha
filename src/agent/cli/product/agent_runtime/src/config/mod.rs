@@ -53,6 +53,7 @@ use crate::product::protocol::config_types::TrustLevel;
 use crate::product::protocol::config_types::Verbosity;
 use crate::product::protocol::config_types::WebSearchMode;
 use crate::product::protocol::config_types::WindowsSandboxLevel;
+use crate::product::protocol::openai_models::ModelPricing;
 use crate::product::protocol::openai_models::ReasoningEffort;
 use crate::product::rmcp_client::OAuthCredentialsStoreMode;
 use crate::product::utils_absolute_path::AbsolutePathBuf;
@@ -267,6 +268,9 @@ pub struct Config {
 
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
+
+    /// Optional standard API pricing metadata for the selected model.
+    pub model_pricing: Option<ModelPricing>,
 
     /// Key into the model_providers map that specifies which provider to use.
     pub model_provider_id: String,
@@ -623,7 +627,7 @@ impl Config {
         &self,
         model_provider_id: &str,
         model: &str,
-    ) -> std::io::Result<(Option<i64>, Option<i64>)> {
+    ) -> std::io::Result<(Option<i64>, Option<i64>, Option<ModelPricing>)> {
         let mut config_toml: ConfigToml = self
             .config_layer_stack
             .effective_config()
@@ -653,6 +657,7 @@ impl Config {
         Ok((
             config.model_context_window,
             config.model_auto_compact_token_limit,
+            config.model_pricing,
         ))
     }
 
@@ -1609,6 +1614,7 @@ impl Config {
             .as_ref()
             .and_then(|model_ref| models_json.model_metadata(model_ref));
         let model_context_window = model_metadata.and_then(|metadata| metadata.context_window);
+        let model_pricing = model_metadata.and_then(|metadata| metadata.pricing.clone());
         let model_auto_compact_token_limit = model_metadata
             .and_then(|metadata| metadata.auto_compact_token_limit)
             .or_else(|| {
@@ -1753,6 +1759,7 @@ impl Config {
             review_model,
             model_context_window,
             model_auto_compact_token_limit,
+            model_pricing,
             model_provider_id,
             model_provider,
             provider_config_required,

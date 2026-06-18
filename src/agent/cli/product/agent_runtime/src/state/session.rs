@@ -13,13 +13,18 @@ use crate::product::agent::codex::SessionConfiguration;
 use crate::product::agent::context_manager::ContextManager;
 use crate::product::agent::dynamic_context_window::DynamicContextWindowKey;
 use crate::product::agent::dynamic_context_window::DynamicContextWindowState;
+use crate::product::agent::input_slimming::CandidateZone;
 use crate::product::agent::input_slimming::InputSlimmingContextStatCandidate;
 use crate::product::agent::input_slimming::InputSlimmingOccurrenceKey;
+use crate::product::agent::input_slimming::billing::InputSlimmingBillingPending;
+use crate::product::agent::input_slimming::billing::input_slimming_saved_usd_micros;
+use crate::product::agent::protocol::InputSlimmingScope;
 use crate::product::agent::protocol::InputSlimmingTokenStats;
 use crate::product::agent::protocol::TokenUsage;
 use crate::product::agent::protocol::TokenUsageInfo;
 use crate::product::agent::truncate::TruncationPolicy;
 use crate::product::agent::workflow::WorkflowSession;
+use crate::product::protocol::openai_models::ModelPricing;
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
@@ -46,6 +51,21 @@ pub(crate) struct SessionState {
     pub(crate) pending_identity_clear_from_history: bool,
     pub(crate) input_slimming_total: InputSlimmingTokenStats,
     pub(crate) input_slimming_counted_occurrences: HashSet<InputSlimmingOccurrenceKey>,
+    pub(crate) pending_input_slimming_billing: HashMap<String, PendingInputSlimmingBilling>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CompletedInputSlimmingBilling {
+    pub(crate) scope: InputSlimmingScope,
+    pub(crate) last: InputSlimmingTokenStats,
+    pub(crate) total: InputSlimmingTokenStats,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PendingInputSlimmingBilling {
+    scope: InputSlimmingScope,
+    last: InputSlimmingTokenStats,
+    pending: InputSlimmingBillingPending,
 }
 
 impl SessionState {
@@ -67,6 +87,7 @@ impl SessionState {
             pending_identity_clear_from_history: false,
             input_slimming_total: InputSlimmingTokenStats::default(),
             input_slimming_counted_occurrences: HashSet::new(),
+            pending_input_slimming_billing: HashMap::new(),
         }
     }
 
@@ -139,9 +160,12 @@ impl SessionState {
 
     pub(crate) fn record_input_slimming_context(
         &mut self,
+        turn_id: &str,
+        scope: InputSlimmingScope,
         candidates: &[InputSlimmingContextStatCandidate],
     ) -> Option<(InputSlimmingTokenStats, InputSlimmingTokenStats)> {
         let mut last = InputSlimmingTokenStats::default();
+        let mut pending = InputSlimmingBillingPending::default();
         for candidate in candidates {
             if candidate.tokens_saved <= 0 {
                 continue;
@@ -156,12 +180,69 @@ impl SessionState {
             last.tokens_after = last.tokens_after.saturating_add(candidate.tokens_after);
             last.tokens_saved = last.tokens_saved.saturating_add(candidate.tokens_saved);
             last.replacements = last.replacements.saturating_add(1);
+            match candidate.zone {
+                CandidateZone::HistoricalToolOutput => {
+                    pending.saved_historical_tokens = pending
+                        .saved_historical_tokens
+                        .saturating_add(candidate.tokens_saved);
+                }
+                CandidateZone::LiveToolOutput => {
+                    pending.saved_live_tokens = pending
+                        .saved_live_tokens
+                        .saturating_add(candidate.tokens_saved);
+                }
+            }
         }
         if last.tokens_saved <= 0 || last.replacements <= 0 {
             return None;
         }
         self.input_slimming_total.add_assign(&last);
+        self.pending_input_slimming_billing
+            .entry(turn_id.to_string())
+            .and_modify(|existing| {
+                existing.last.add_assign(&last);
+                existing.pending.saved_historical_tokens = existing
+                    .pending
+                    .saved_historical_tokens
+                    .saturating_add(pending.saved_historical_tokens);
+                existing.pending.saved_live_tokens = existing
+                    .pending
+                    .saved_live_tokens
+                    .saturating_add(pending.saved_live_tokens);
+            })
+            .or_insert(PendingInputSlimmingBilling {
+                scope,
+                last,
+                pending,
+            });
         Some((last, self.input_slimming_total))
+    }
+
+    pub(crate) fn complete_input_slimming_billing(
+        &mut self,
+        turn_id: &str,
+        pricing: Option<&ModelPricing>,
+        usage: Option<&TokenUsage>,
+    ) -> Option<CompletedInputSlimmingBilling> {
+        let pending = self.pending_input_slimming_billing.remove(turn_id)?;
+        let usage = usage?;
+        let saved_usd_micros = input_slimming_saved_usd_micros(pricing, usage, pending.pending)?;
+        let mut last = pending.last;
+        last.saved_usd_micros = Some(saved_usd_micros);
+        self.input_slimming_total
+            .add_assign(&InputSlimmingTokenStats {
+                saved_usd_micros: Some(saved_usd_micros),
+                ..InputSlimmingTokenStats::default()
+            });
+        Some(CompletedInputSlimmingBilling {
+            scope: pending.scope,
+            last,
+            total: self.input_slimming_total,
+        })
+    }
+
+    pub(crate) fn discard_input_slimming_billing(&mut self, turn_id: &str) {
+        self.pending_input_slimming_billing.remove(turn_id);
     }
 
     pub(crate) fn get_total_token_usage(&self, server_reasoning_included: bool) -> i64 {

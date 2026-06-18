@@ -4,7 +4,10 @@ use crate::Personality;
 use crate::Verbosity;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::Serializer;
+use serde::de;
 use strum::IntoEnumIterator;
 use strum_macros::Display;
 use strum_macros::EnumIter;
@@ -86,6 +89,226 @@ impl TruncationPolicyConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, JsonSchema, TS)]
+#[serde(transparent)]
+#[schemars(with = "f64")]
+#[ts(type = "number")]
+pub struct UsdPerMillionTokensMicros(i64);
+
+impl UsdPerMillionTokensMicros {
+    const MICROS_PER_USD: i64 = 1_000_000;
+
+    pub const fn from_micros(micros: i64) -> Self {
+        Self(micros)
+    }
+
+    pub const fn as_micros(self) -> i64 {
+        self.0
+    }
+
+    pub fn as_usd(self) -> f64 {
+        self.0 as f64 / Self::MICROS_PER_USD as f64
+    }
+}
+
+impl Serialize for UsdPerMillionTokensMicros {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_f64(self.as_usd())
+    }
+}
+
+impl<'de> Deserialize<'de> for UsdPerMillionTokensMicros {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(UsdPerMillionTokensMicrosVisitor)
+    }
+}
+
+struct UsdPerMillionTokensMicrosVisitor;
+
+impl de::Visitor<'_> for UsdPerMillionTokensMicrosVisitor {
+    type Value = UsdPerMillionTokensMicros;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a non-negative USD price as a number or decimal string")
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        if value < 0 {
+            return Err(E::custom("USD price must be non-negative"));
+        }
+        value
+            .checked_mul(UsdPerMillionTokensMicros::MICROS_PER_USD)
+            .map(UsdPerMillionTokensMicros)
+            .ok_or_else(|| E::custom("USD price is too large"))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        let value = i64::try_from(value).map_err(|_| E::custom("USD price is too large"))?;
+        self.visit_i64(value)
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        if !value.is_finite() || value < 0.0 {
+            return Err(E::custom("USD price must be a finite non-negative number"));
+        }
+        let micros = (value * UsdPerMillionTokensMicros::MICROS_PER_USD as f64).round();
+        if !micros.is_finite() || micros > i64::MAX as f64 {
+            return Err(E::custom("USD price is too large"));
+        }
+        Ok(UsdPerMillionTokensMicros(micros as i64))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        parse_usd_price_micros(value).map_err(E::custom)
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        self.visit_str(&value)
+    }
+}
+
+fn parse_usd_price_micros(value: &str) -> Result<UsdPerMillionTokensMicros, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("USD price must not be empty".to_string());
+    }
+    if value.starts_with('-') {
+        return Err("USD price must be non-negative".to_string());
+    }
+
+    let mut parts = value.split('.');
+    let dollars = parts.next().unwrap_or_default();
+    let fractional = parts.next();
+    if parts.next().is_some() {
+        return Err("USD price must be a decimal number".to_string());
+    }
+    if dollars.is_empty() && fractional.is_none() {
+        return Err("USD price must be a decimal number".to_string());
+    }
+    if !dollars.chars().all(|ch| ch.is_ascii_digit()) {
+        return Err("USD price must be a decimal number".to_string());
+    }
+
+    let dollars = if dollars.is_empty() {
+        0
+    } else {
+        dollars
+            .parse::<i64>()
+            .map_err(|_| "USD price is too large".to_string())?
+    };
+    let dollars_micros = dollars
+        .checked_mul(UsdPerMillionTokensMicros::MICROS_PER_USD)
+        .ok_or_else(|| "USD price is too large".to_string())?;
+
+    let fractional_micros = if let Some(fractional) = fractional {
+        if fractional.len() > 6 {
+            return Err("USD price supports at most 6 decimal places".to_string());
+        }
+        if !fractional.chars().all(|ch| ch.is_ascii_digit()) {
+            return Err("USD price must be a decimal number".to_string());
+        }
+        let padded = format!("{fractional:0<6}");
+        padded
+            .parse::<i64>()
+            .map_err(|_| "USD price is too large".to_string())?
+    } else {
+        0
+    };
+
+    dollars_micros
+        .checked_add(fractional_micros)
+        .map(UsdPerMillionTokensMicros)
+        .ok_or_else(|| "USD price is too large".to_string())
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
+pub enum ModelPricingCurrency {
+    #[serde(rename = "USD")]
+    Usd,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelPricingUnit {
+    UsdPerMillionTokens,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelPricingBilling {
+    Standard,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+pub struct ModelPricing {
+    pub currency: ModelPricingCurrency,
+    pub unit: ModelPricingUnit,
+    pub billing: ModelPricingBilling,
+    pub context_bands: Vec<ModelPricingBand>,
+}
+
+impl ModelPricing {
+    pub fn band_for_input_tokens(&self, input_tokens: i64) -> Option<&ModelPricingBand> {
+        if input_tokens < 0 {
+            return None;
+        }
+        self.context_bands
+            .iter()
+            .find(|band| band.matches_input_tokens(input_tokens))
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+pub struct ModelPricingBand {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_input_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<i64>,
+    pub input: UsdPerMillionTokensMicros,
+    pub cached_input: UsdPerMillionTokensMicros,
+    pub output: UsdPerMillionTokensMicros,
+}
+
+impl ModelPricingBand {
+    pub fn matches_input_tokens(&self, input_tokens: i64) -> bool {
+        if input_tokens < 0 {
+            return false;
+        }
+        if let Some(min_input_tokens) = self.min_input_tokens
+            && input_tokens < min_input_tokens
+        {
+            return false;
+        }
+        if let Some(max_input_tokens) = self.max_input_tokens
+            && input_tokens > max_input_tokens
+        {
+            return false;
+        }
+        true
+    }
+}
+
 const fn default_effective_context_window_percent() -> i64 {
     95
 }
@@ -116,6 +339,8 @@ pub struct ModelInfo {
     pub auto_compact_token_limit: Option<i64>,
     #[serde(default = "default_effective_context_window_percent")]
     pub effective_context_window_percent: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<ModelPricing>,
 }
 
 impl ModelInfo {
@@ -253,4 +478,63 @@ fn nearest_effort(target: ReasoningEffort, supported: &[ReasoningEffort]) -> Rea
         .copied()
         .min_by_key(|candidate| (effort_rank(*candidate) - target_rank).abs())
         .unwrap_or(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn price_accepts_number_and_string_as_micro_usd_fixed_point() {
+        let number: UsdPerMillionTokensMicros =
+            serde_json::from_value(json!(2.50)).expect("number price parses");
+        let string: UsdPerMillionTokensMicros =
+            serde_json::from_value(json!("2.50")).expect("string price parses");
+
+        assert_eq!(number, UsdPerMillionTokensMicros::from_micros(2_500_000));
+        assert_eq!(string, number);
+        assert_eq!(
+            serde_json::to_value(number).expect("price serializes"),
+            json!(2.5)
+        );
+    }
+
+    #[test]
+    fn pricing_band_match_is_inclusive_and_ordered() {
+        let pricing = ModelPricing {
+            currency: ModelPricingCurrency::Usd,
+            unit: ModelPricingUnit::UsdPerMillionTokens,
+            billing: ModelPricingBilling::Standard,
+            context_bands: vec![
+                ModelPricingBand {
+                    min_input_tokens: None,
+                    max_input_tokens: Some(272_000),
+                    input: UsdPerMillionTokensMicros::from_micros(2_500_000),
+                    cached_input: UsdPerMillionTokensMicros::from_micros(250_000),
+                    output: UsdPerMillionTokensMicros::from_micros(15_000_000),
+                },
+                ModelPricingBand {
+                    min_input_tokens: Some(272_001),
+                    max_input_tokens: None,
+                    input: UsdPerMillionTokensMicros::from_micros(5_000_000),
+                    cached_input: UsdPerMillionTokensMicros::from_micros(500_000),
+                    output: UsdPerMillionTokensMicros::from_micros(22_500_000),
+                },
+            ],
+        };
+
+        assert_eq!(
+            pricing
+                .band_for_input_tokens(272_000)
+                .map(|band| band.input),
+            Some(UsdPerMillionTokensMicros::from_micros(2_500_000))
+        );
+        assert_eq!(
+            pricing
+                .band_for_input_tokens(272_001)
+                .map(|band| band.input),
+            Some(UsdPerMillionTokensMicros::from_micros(5_000_000))
+        );
+    }
 }

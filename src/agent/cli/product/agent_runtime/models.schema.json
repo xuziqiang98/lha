@@ -22,6 +22,9 @@
           },
           "type": "array"
         },
+        "pricing": {
+          "$ref": "#/definitions/ModelPricing"
+        },
         "reasoning_effort": {
           "$ref": "#/definitions/ReasoningEffort"
         },
@@ -39,6 +42,80 @@
         }
       },
       "type": "object"
+    },
+    "ModelPricing": {
+      "properties": {
+        "billing": {
+          "$ref": "#/definitions/ModelPricingBilling"
+        },
+        "context_bands": {
+          "items": {
+            "$ref": "#/definitions/ModelPricingBand"
+          },
+          "type": "array"
+        },
+        "currency": {
+          "$ref": "#/definitions/ModelPricingCurrency"
+        },
+        "unit": {
+          "$ref": "#/definitions/ModelPricingUnit"
+        }
+      },
+      "required": [
+        "billing",
+        "context_bands",
+        "currency",
+        "unit"
+      ],
+      "type": "object"
+    },
+    "ModelPricingBand": {
+      "properties": {
+        "cached_input": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "input": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "max_input_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "min_input_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "output": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cached_input",
+        "input",
+        "output"
+      ],
+      "type": "object"
+    },
+    "ModelPricingBilling": {
+      "enum": [
+        "standard"
+      ],
+      "type": "string"
+    },
+    "ModelPricingCurrency": {
+      "enum": [
+        "USD"
+      ],
+      "type": "string"
+    },
+    "ModelPricingUnit": {
+      "enum": [
+        "usd_per_million_tokens"
+      ],
+      "type": "string"
     },
     "ModelsDialect": {
       "enum": [
