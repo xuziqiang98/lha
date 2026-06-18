@@ -1779,19 +1779,39 @@ impl ChatWidget {
     }
 
     fn on_input_slimming(&mut self, event: InputSlimmingEvent) {
-        if event.last.tokens_saved <= 0 || event.last.replacements <= 0 {
+        let has_context_update = event.last.tokens_saved > 0 && event.last.replacements > 0;
+        let has_billing_update =
+            event.last.saved_usd_micros.is_some() || event.total.saved_usd_micros.is_some();
+
+        if !has_context_update && !has_billing_update {
             return;
         }
 
-        self.input_slimming = Some(InputSlimmingPanelSnapshot {
-            scope: event.scope,
-            last_before_tokens: event.last.tokens_before,
-            last_after_tokens: event.last.tokens_after,
-            last_saved_tokens: event.last.tokens_saved,
-            last_saved_usd_micros: event.last.saved_usd_micros,
-            total_saved_tokens: event.total.tokens_saved,
-            total_saved_usd_micros: event.total.saved_usd_micros,
-        });
+        if has_context_update {
+            self.input_slimming = Some(InputSlimmingPanelSnapshot {
+                scope: event.scope,
+                last_before_tokens: event.last.tokens_before,
+                last_after_tokens: event.last.tokens_after,
+                last_saved_tokens: event.last.tokens_saved,
+                last_saved_usd_micros: event.last.saved_usd_micros,
+                total_saved_tokens: event.total.tokens_saved,
+                total_saved_usd_micros: event.total.saved_usd_micros,
+            });
+        } else {
+            let snapshot = self
+                .input_slimming
+                .get_or_insert(InputSlimmingPanelSnapshot {
+                    scope: event.scope,
+                    last_before_tokens: event.last.tokens_before,
+                    last_after_tokens: event.last.tokens_after,
+                    last_saved_tokens: event.last.tokens_saved,
+                    last_saved_usd_micros: None,
+                    total_saved_tokens: event.total.tokens_saved,
+                    total_saved_usd_micros: None,
+                });
+            snapshot.last_saved_usd_micros = event.last.saved_usd_micros;
+            snapshot.total_saved_usd_micros = event.total.saved_usd_micros;
+        }
         self.request_redraw();
     }
 

@@ -979,7 +979,13 @@ mod tests {
     use crate::product::agent::config::ConfigBuilder;
     use crate::product::agent::config::ConfigOverrides;
     use crate::product::agent::features::Feature;
+    use crate::product::protocol::openai_models::ModelPricing;
+    use crate::product::protocol::openai_models::ModelPricingBand;
+    use crate::product::protocol::openai_models::ModelPricingBilling;
+    use crate::product::protocol::openai_models::ModelPricingCurrency;
+    use crate::product::protocol::openai_models::ModelPricingUnit;
     use crate::product::protocol::openai_models::ModelsResponse;
+    use crate::product::protocol::openai_models::UsdPerMillionTokensMicros;
     use crate::test_support::core::responses::mount_models_once;
     use chrono::Utc;
     use pretty_assertions::assert_eq;
@@ -1679,6 +1685,30 @@ mod tests {
         assert!(
             gpt55.supported_in_api,
             "gpt-5.5 should be visible for API key auth via bundled models"
+        );
+        assert_eq!(
+            gpt55.pricing,
+            Some(ModelPricing {
+                currency: ModelPricingCurrency::Usd,
+                unit: ModelPricingUnit::UsdPerMillionTokens,
+                billing: ModelPricingBilling::Standard,
+                context_bands: vec![
+                    ModelPricingBand {
+                        min_input_tokens: None,
+                        max_input_tokens: Some(272_000),
+                        input: UsdPerMillionTokensMicros::from_micros(5_000_000),
+                        cached_input: UsdPerMillionTokensMicros::from_micros(500_000),
+                        output: UsdPerMillionTokensMicros::from_micros(30_000_000),
+                    },
+                    ModelPricingBand {
+                        min_input_tokens: Some(272_001),
+                        max_input_tokens: None,
+                        input: UsdPerMillionTokensMicros::from_micros(10_000_000),
+                        cached_input: UsdPerMillionTokensMicros::from_micros(1_000_000),
+                        output: UsdPerMillionTokensMicros::from_micros(45_000_000),
+                    },
+                ],
+            })
         );
     }
 

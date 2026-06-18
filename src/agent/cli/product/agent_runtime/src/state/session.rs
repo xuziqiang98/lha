@@ -170,16 +170,6 @@ impl SessionState {
             if candidate.tokens_saved <= 0 {
                 continue;
             }
-            if !self
-                .input_slimming_counted_occurrences
-                .insert(candidate.occurrence_key.clone())
-            {
-                continue;
-            }
-            last.tokens_before = last.tokens_before.saturating_add(candidate.tokens_before);
-            last.tokens_after = last.tokens_after.saturating_add(candidate.tokens_after);
-            last.tokens_saved = last.tokens_saved.saturating_add(candidate.tokens_saved);
-            last.replacements = last.replacements.saturating_add(1);
             match candidate.zone {
                 CandidateZone::HistoricalToolOutput => {
                     pending.saved_historical_tokens = pending
@@ -192,29 +182,41 @@ impl SessionState {
                         .saturating_add(candidate.tokens_saved);
                 }
             }
+            if !self
+                .input_slimming_counted_occurrences
+                .insert(candidate.occurrence_key.clone())
+            {
+                continue;
+            }
+            last.tokens_before = last.tokens_before.saturating_add(candidate.tokens_before);
+            last.tokens_after = last.tokens_after.saturating_add(candidate.tokens_after);
+            last.tokens_saved = last.tokens_saved.saturating_add(candidate.tokens_saved);
+            last.replacements = last.replacements.saturating_add(1);
+        }
+        if pending.tokens_saved() > 0 {
+            self.pending_input_slimming_billing
+                .entry(turn_id.to_string())
+                .and_modify(|existing| {
+                    existing.last.add_assign(&last);
+                    existing.pending.saved_historical_tokens = existing
+                        .pending
+                        .saved_historical_tokens
+                        .saturating_add(pending.saved_historical_tokens);
+                    existing.pending.saved_live_tokens = existing
+                        .pending
+                        .saved_live_tokens
+                        .saturating_add(pending.saved_live_tokens);
+                })
+                .or_insert(PendingInputSlimmingBilling {
+                    scope,
+                    last,
+                    pending,
+                });
         }
         if last.tokens_saved <= 0 || last.replacements <= 0 {
             return None;
         }
         self.input_slimming_total.add_assign(&last);
-        self.pending_input_slimming_billing
-            .entry(turn_id.to_string())
-            .and_modify(|existing| {
-                existing.last.add_assign(&last);
-                existing.pending.saved_historical_tokens = existing
-                    .pending
-                    .saved_historical_tokens
-                    .saturating_add(pending.saved_historical_tokens);
-                existing.pending.saved_live_tokens = existing
-                    .pending
-                    .saved_live_tokens
-                    .saturating_add(pending.saved_live_tokens);
-            })
-            .or_insert(PendingInputSlimmingBilling {
-                scope,
-                last,
-                pending,
-            });
         Some((last, self.input_slimming_total))
     }
 

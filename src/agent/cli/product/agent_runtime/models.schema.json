@@ -72,12 +72,12 @@
     "ModelPricingBand": {
       "properties": {
         "cached_input": {
-          "format": "int64",
-          "type": "integer"
+          "format": "double",
+          "type": "number"
         },
         "input": {
-          "format": "int64",
-          "type": "integer"
+          "format": "double",
+          "type": "number"
         },
         "max_input_tokens": {
           "format": "int64",
@@ -88,8 +88,8 @@
           "type": "integer"
         },
         "output": {
-          "format": "int64",
-          "type": "integer"
+          "format": "double",
+          "type": "number"
         }
       },
       "required": [

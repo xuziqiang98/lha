@@ -89,9 +89,7 @@ impl TruncationPolicyConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, JsonSchema, TS)]
-#[serde(transparent)]
-#[schemars(with = "f64")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, TS)]
 #[ts(type = "number")]
 pub struct UsdPerMillionTokensMicros(i64);
 
@@ -117,6 +115,20 @@ impl Serialize for UsdPerMillionTokensMicros {
         S: Serializer,
     {
         serializer.serialize_f64(self.as_usd())
+    }
+}
+
+impl JsonSchema for UsdPerMillionTokensMicros {
+    fn schema_name() -> String {
+        "UsdPerMillionTokensMicros".to_string()
+    }
+
+    fn is_referenceable() -> bool {
+        false
+    }
+
+    fn json_schema(schema_gen: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        f64::json_schema(schema_gen)
     }
 }
 
@@ -498,6 +510,16 @@ mod tests {
             serde_json::to_value(number).expect("price serializes"),
             json!(2.5)
         );
+    }
+
+    #[test]
+    fn price_schema_is_usd_number_not_internal_micros_integer() {
+        let schema = schemars::schema_for!(UsdPerMillionTokensMicros);
+        let schema_value = serde_json::to_value(&schema.schema).expect("schema serializes");
+
+        assert_eq!(schema_value.get("type"), Some(&json!("number")));
+        assert_ne!(schema_value.get("type"), Some(&json!("integer")));
+        assert_ne!(schema_value.get("format"), Some(&json!("int64")));
     }
 
     #[test]

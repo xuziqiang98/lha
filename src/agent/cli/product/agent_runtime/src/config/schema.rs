@@ -125,6 +125,8 @@ pub fn write_config_schema(out_path: &Path) -> anyhow::Result<()> {
 mod tests {
     use super::canonicalize;
     use super::config_schema_json;
+    use super::schema_json_for;
+    use crate::product::agent::config::models_json::ModelsJson;
 
     use similar::TextDiff;
 
@@ -154,6 +156,54 @@ mod tests {
             panic!(
                 "Current schema for `config.toml` doesn't match the fixture. \
 Run `just write-config-schema` to overwrite with your changes.\n\n{diff}"
+            );
+        }
+    }
+
+    #[test]
+    fn models_schema_matches_fixture() {
+        let fixture_path = crate::test_support::cargo_bin::find_resource!(
+            "product/agent_runtime/models.schema.json"
+        )
+        .expect("resolve models schema fixture path");
+        let fixture = std::fs::read_to_string(fixture_path).expect("read models schema fixture");
+        let fixture_value: serde_json::Value =
+            serde_json::from_str(&fixture).expect("parse models schema fixture");
+        let schema_json = schema_json_for::<ModelsJson>().expect("serialize models schema");
+        let schema_value: serde_json::Value =
+            serde_json::from_slice(&schema_json).expect("decode models schema json");
+        let fixture_value = canonicalize(&fixture_value);
+        let schema_value = canonicalize(&schema_value);
+        if fixture_value != schema_value {
+            let expected =
+                serde_json::to_string_pretty(&fixture_value).expect("serialize fixture json");
+            let actual =
+                serde_json::to_string_pretty(&schema_value).expect("serialize schema json");
+            let diff = TextDiff::from_lines(&expected, &actual)
+                .unified_diff()
+                .header("fixture", "generated")
+                .to_string();
+            panic!(
+                "Current schema for `models.json` doesn't match the fixture. \
+Run `just write-models-schema` to overwrite with your changes.\n\n{diff}"
+            );
+        }
+
+        let band_properties = schema_value
+            .pointer("/definitions/ModelPricingBand/properties")
+            .expect("pricing band properties");
+        for field in ["input", "cached_input", "output"] {
+            assert_eq!(
+                band_properties.pointer(&format!("/{field}/type")),
+                Some(&serde_json::Value::String("number".to_string()))
+            );
+            assert_ne!(
+                band_properties.pointer(&format!("/{field}/type")),
+                Some(&serde_json::Value::String("integer".to_string()))
+            );
+            assert_ne!(
+                band_properties.pointer(&format!("/{field}/format")),
+                Some(&serde_json::Value::String("int64".to_string()))
             );
         }
     }

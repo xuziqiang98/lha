@@ -9530,6 +9530,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn complete_input_slimming_billing_counts_reused_occurrences_per_request() {
+        let lha_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(lha_home.path()).await;
+        config.model_pricing = Some(input_slimming_test_pricing());
+        let (session, turn_context) = make_session_and_context_for_config(config).await;
+        let (tx_event, rx) = async_channel::unbounded();
+        let sess = Arc::new(Session {
+            tx_event,
+            ..session
+        });
+        let tc = Arc::new(turn_context);
+        let usage = TokenUsage {
+            input_tokens: 10_000,
+            cached_input_tokens: 1_000,
+            output_tokens: 500,
+            total_tokens: 10_500,
+            ..TokenUsage::default()
+        };
+        let candidate = InputSlimmingContextStatCandidate {
+            occurrence_key: input_slimming_occurrence("call-1"),
+            zone: CandidateZone::HistoricalToolOutput,
+            tokens_before: 2_000,
+            tokens_after: 1_000,
+            tokens_saved: 1_000,
+        };
+
+        sess.record_input_slimming(
+            tc.as_ref(),
+            InputSlimmingScope::HistoricalToolOutputs,
+            std::slice::from_ref(&candidate),
+        )
+        .await;
+        assert_eq!(
+            wait_for_input_slimming(&rx).await,
+            InputSlimmingEvent {
+                scope: InputSlimmingScope::HistoricalToolOutputs,
+                last: InputSlimmingTokenStats {
+                    tokens_before: 2_000,
+                    tokens_after: 1_000,
+                    tokens_saved: 1_000,
+                    replacements: 1,
+                    saved_usd_micros: None,
+                },
+                total: InputSlimmingTokenStats {
+                    tokens_before: 2_000,
+                    tokens_after: 1_000,
+                    tokens_saved: 1_000,
+                    replacements: 1,
+                    saved_usd_micros: None,
+                },
+            }
+        );
+        sess.complete_input_slimming_billing(tc.as_ref(), Some(&usage))
+            .await;
+        assert_eq!(
+            wait_for_input_slimming(&rx).await,
+            InputSlimmingEvent {
+                scope: InputSlimmingScope::HistoricalToolOutputs,
+                last: InputSlimmingTokenStats {
+                    tokens_before: 2_000,
+                    tokens_after: 1_000,
+                    tokens_saved: 1_000,
+                    replacements: 1,
+                    saved_usd_micros: Some(250),
+                },
+                total: InputSlimmingTokenStats {
+                    tokens_before: 2_000,
+                    tokens_after: 1_000,
+                    tokens_saved: 1_000,
+                    replacements: 1,
+                    saved_usd_micros: Some(250),
+                },
+            }
+        );
+
+        sess.record_input_slimming(
+            tc.as_ref(),
+            InputSlimmingScope::HistoricalToolOutputs,
+            &[candidate],
+        )
+        .await;
+        assert!(
+            rx.try_recv().is_err(),
+            "reused occurrence should not emit a duplicate context-saved event"
+        );
+        sess.complete_input_slimming_billing(tc.as_ref(), Some(&usage))
+            .await;
+        assert_eq!(
+            wait_for_input_slimming(&rx).await,
+            InputSlimmingEvent {
+                scope: InputSlimmingScope::HistoricalToolOutputs,
+                last: InputSlimmingTokenStats {
+                    tokens_before: 0,
+                    tokens_after: 0,
+                    tokens_saved: 0,
+                    replacements: 0,
+                    saved_usd_micros: Some(250),
+                },
+                total: InputSlimmingTokenStats {
+                    tokens_before: 2_000,
+                    tokens_after: 1_000,
+                    tokens_saved: 1_000,
+                    replacements: 1,
+                    saved_usd_micros: Some(500),
+                },
+            }
+        );
+    }
+
+    #[tokio::test]
     async fn record_input_slimming_total_survives_token_usage_reset() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 

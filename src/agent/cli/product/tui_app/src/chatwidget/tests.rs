@@ -2141,6 +2141,49 @@ async fn sidebar_status_tracks_input_slimming_savings() {
     assert!(billed_rendered.contains("saved 18.7K / $0.0047"));
 
     chat.handle_codex_event(Event {
+        id: "input-slimming-billing-only".into(),
+        msg: EventMsg::InputSlimming(crate::product::agent::protocol::InputSlimmingEvent {
+            scope: crate::product::agent::protocol::InputSlimmingScope::LiveZoneToolOutputs,
+            last: crate::product::agent::protocol::InputSlimmingTokenStats {
+                tokens_before: 0,
+                tokens_after: 0,
+                tokens_saved: 0,
+                replacements: 0,
+                saved_usd_micros: Some(250),
+            },
+            total: crate::product::agent::protocol::InputSlimmingTokenStats {
+                tokens_before: 27_800,
+                tokens_after: 9_100,
+                tokens_saved: 18_700,
+                replacements: 5,
+                saved_usd_micros: Some(4_925),
+            },
+        }),
+    });
+
+    let billing_only_snapshot = chat.sidebar_snapshot();
+    let billing_only_slimming = billing_only_snapshot
+        .status
+        .as_ref()
+        .and_then(|status| status.input_slimming.as_ref())
+        .expect("input slimming should still be visible");
+    assert_eq!(
+        billing_only_slimming,
+        &crate::product::tui_app::sidebar::InputSlimmingPanelSnapshot {
+            scope: crate::product::agent::protocol::InputSlimmingScope::LiveZoneToolOutputs,
+            last_before_tokens: 12_400,
+            last_after_tokens: 4_100,
+            last_saved_tokens: 8_300,
+            last_saved_usd_micros: Some(250),
+            total_saved_tokens: 18_700,
+            total_saved_usd_micros: Some(4_925),
+        }
+    );
+
+    let billing_only_rendered = render_sidebar_snapshot(&billing_only_snapshot);
+    assert!(billing_only_rendered.contains("saved 18.7K / $0.0049"));
+
+    chat.handle_codex_event(Event {
         id: "token-usage".into(),
         msg: EventMsg::TokenCount(TokenCountEvent { info: None }),
     });
@@ -2151,6 +2194,51 @@ async fn sidebar_status_tracks_input_slimming_savings() {
             .expect("sidebar status should be present")
             .input_slimming
             .is_some()
+    );
+}
+
+#[tokio::test]
+async fn sidebar_status_tracks_input_slimming_billing_only_first_event() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "input-slimming-billing-only-first".into(),
+        msg: EventMsg::InputSlimming(crate::product::agent::protocol::InputSlimmingEvent {
+            scope: crate::product::agent::protocol::InputSlimmingScope::HistoricalToolOutputs,
+            last: crate::product::agent::protocol::InputSlimmingTokenStats {
+                tokens_before: 0,
+                tokens_after: 0,
+                tokens_saved: 0,
+                replacements: 0,
+                saved_usd_micros: Some(250),
+            },
+            total: crate::product::agent::protocol::InputSlimmingTokenStats {
+                tokens_before: 0,
+                tokens_after: 0,
+                tokens_saved: 0,
+                replacements: 0,
+                saved_usd_micros: Some(250),
+            },
+        }),
+    });
+
+    let snapshot = chat.sidebar_snapshot();
+    let slimming = snapshot
+        .status
+        .as_ref()
+        .and_then(|status| status.input_slimming.as_ref())
+        .expect("billing-only input slimming should be visible");
+    assert_eq!(
+        slimming,
+        &crate::product::tui_app::sidebar::InputSlimmingPanelSnapshot {
+            scope: crate::product::agent::protocol::InputSlimmingScope::HistoricalToolOutputs,
+            last_before_tokens: 0,
+            last_after_tokens: 0,
+            last_saved_tokens: 0,
+            last_saved_usd_micros: Some(250),
+            total_saved_tokens: 0,
+            total_saved_usd_micros: Some(250),
+        }
     );
 }
 
