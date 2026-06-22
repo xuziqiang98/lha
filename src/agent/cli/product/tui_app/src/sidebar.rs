@@ -14,6 +14,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Block;
 use ratatui::widgets::Borders;
+use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use std::path::PathBuf;
@@ -125,6 +126,12 @@ pub(crate) struct SidebarWidget<'a> {
 
 impl Widget for SidebarWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        Clear.render(area, buf);
+
         if area.width < SIDEBAR_MIN_WIDTH || area.height < 4 {
             return;
         }
@@ -439,6 +446,7 @@ fn append_ellipsis(value: &str, max: usize) -> String {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use ratatui::style::Color;
 
     fn render_sidebar(snapshot: &SidebarSnapshot) -> String {
         let area = Rect::new(0, 0, 42, 34);
@@ -460,6 +468,49 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn render_clears_existing_sidebar_background() {
+        let area = Rect::new(0, 0, 42, 12);
+        let mut buf = Buffer::empty(area);
+        buf.set_style(area, Style::default().bg(Color::Green));
+        let snapshot = SidebarSnapshot {
+            status: Some(StatusPanelSnapshot {
+                model: "gpt-5".to_string(),
+                provider: "OpenAI".to_string(),
+                identity: "Programmer".to_string(),
+                left_context_tokens: Some(77_600),
+                total_usage_tokens: 123_456,
+                cache_hit_percent: Some(94),
+                input_slimming: None,
+                context_compact_count: 0,
+            }),
+            ..Default::default()
+        };
+
+        SidebarWidget {
+            snapshot: &snapshot,
+            buddy_state: None,
+            animations_enabled: false,
+        }
+        .render(area, &mut buf);
+
+        let rendered = (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Status"));
+
+        for y in 0..area.height {
+            for x in 0..area.width {
+                assert_eq!(buf[(x, y)].bg, Color::Reset, "cell ({x}, {y})");
+            }
+        }
     }
 
     #[test]
