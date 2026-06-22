@@ -43,6 +43,7 @@ use crate::product::agent::protocol::McpStartupUpdateEvent;
 use crate::product::agent::protocol::Op;
 use crate::product::agent::protocol::PatchApplyBeginEvent;
 use crate::product::agent::protocol::PatchApplyEndEvent;
+use crate::product::agent::protocol::ReviewOutputEvent;
 use crate::product::agent::protocol::ReviewRequest;
 use crate::product::agent::protocol::ReviewTarget;
 use crate::product::agent::protocol::SessionSource;
@@ -10809,6 +10810,178 @@ async fn streamed_agent_message_preserves_feedback_commit_message_word_order() {
 
     let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
     assert_feedback_commit_message_word_order(&screen, "streamed committed VT100 screen");
+}
+
+#[tokio::test]
+async fn non_streamed_agent_message_turn_complete_separator_requests_viewport_repaint() {
+    let cfg = test_config().await;
+    let model = "gpt-5";
+    let otel_manager = test_otel_manager_with_runtime_reader(&cfg, model);
+    let (mut chat, mut rx, _op_rx) =
+        make_chatwidget_manual_inner_with_otel(Some(model), Some(otel_manager.clone())).await;
+
+    chat.on_task_started();
+    record_test_runtime_metrics(&otel_manager);
+    chat.on_agent_message(
+        "Review comment:\nFormatting the potential body with saved workflow details.".to_string(),
+    );
+    let _ = drain_events(&mut rx);
+
+    chat.on_task_complete(None, false);
+
+    let mut saw_separator = false;
+    for event in drain_events(&mut rx) {
+        let Some((cell, repaint_viewport)) = into_insert_history_cell_with_viewport_repaint(event)
+        else {
+            continue;
+        };
+        let rendered = lines_to_single_string(&cell.display_lines(120));
+        if rendered.contains("Inference:") {
+            saw_separator = true;
+            assert!(
+                repaint_viewport,
+                "turn-complete runtime separator should request viewport repaint: {rendered:?}"
+            );
+        }
+    }
+
+    assert!(
+        saw_separator,
+        "expected turn-complete runtime separator in history"
+    );
+}
+
+#[tokio::test]
+async fn review_exit_explanation_requests_viewport_repaint() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let explanation = "Review comment:\nFormatting the potential body\n\
+        Preserve saved default mining workflows on resume.";
+
+    chat.handle_codex_event(Event {
+        id: "review-exit-repaint".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: Some(ReviewOutputEvent {
+                findings: Vec::new(),
+                overall_correctness: "patch is correct".to_string(),
+                overall_explanation: explanation.to_string(),
+                overall_confidence_score: 0.9,
+            }),
+        }),
+    });
+
+    let mut saw_explanation = false;
+    let mut saw_finished_banner = false;
+    for event in drain_events(&mut rx) {
+        let Some((cell, repaint_viewport)) = into_insert_history_cell_with_viewport_repaint(event)
+        else {
+            continue;
+        };
+        let rendered = lines_to_single_string(&cell.display_lines(100));
+        if cell.as_any().is::<AgentMessageCell>() && rendered.contains("Review comment:") {
+            saw_explanation = true;
+            assert!(
+                repaint_viewport,
+                "review explanation should request viewport repaint: {rendered:?}"
+            );
+        }
+        if rendered.contains("<< Code review finished >>") {
+            saw_finished_banner = true;
+            assert!(
+                !repaint_viewport,
+                "review finished banner should keep ordinary history insertion"
+            );
+        }
+    }
+
+    assert!(saw_explanation, "expected review explanation in history");
+    assert!(
+        saw_finished_banner,
+        "expected ordinary review finished banner in history"
+    );
+}
+
+#[tokio::test]
+async fn turn_complete_separator_viewport_repaint_repairs_review_vt100_screen_divergence() {
+    let cfg = test_config().await;
+    let model = "gpt-5";
+    let otel_manager = test_otel_manager_with_runtime_reader(&cfg, model);
+    let (mut chat, mut rx, _op_rx) =
+        make_chatwidget_manual_inner_with_otel(Some(model), Some(otel_manager.clone())).await;
+    let width = 120;
+    let height = 48;
+    chat.last_rendered_width.set(Some(usize::from(width)));
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
+        VT100Backend::new(width, height),
+    )
+    .expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+    let review_text = "Review comment:\nFormatting the potential body\n\
+        For resumed runs, default_cybergym_mining_workflows() must preserve the saved config.";
+    let review_needle = "default_cybergym_mining_workflows()";
+
+    chat.on_task_started();
+    record_test_runtime_metrics(&otel_manager);
+    chat.on_agent_message(review_text.to_string());
+
+    for event in drain_events(&mut rx) {
+        if let Some((cell, repaint_viewport)) =
+            into_insert_history_cell_with_viewport_repaint(event)
+        {
+            let cell: Arc<dyn HistoryCell> = Arc::from(cell);
+            chat.insert_transcript_cell(cell);
+            if repaint_viewport {
+                terminal.invalidate_viewport();
+            }
+        }
+    }
+
+    let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    let review_row = screen_row_containing(&screen, review_needle);
+    let stale_row = "STALE prompt/status overlap default_cybergym_mining_workflows()";
+    corrupt_vt100_row(&mut terminal, review_row, stale_row);
+    let corrupted_screen = terminal.backend().vt100().screen().contents();
+    assert!(
+        corrupted_screen.contains(stale_row),
+        "test setup should corrupt review VT100 row: {corrupted_screen:?}"
+    );
+
+    chat.on_task_complete(None, false);
+
+    let mut saw_separator_repaint = false;
+    for event in drain_events(&mut rx) {
+        if let Some((cell, repaint_viewport)) =
+            into_insert_history_cell_with_viewport_repaint(event)
+        {
+            let rendered = lines_to_single_string(&cell.display_lines(width));
+            if rendered.contains("Inference:") {
+                saw_separator_repaint = true;
+                assert!(
+                    repaint_viewport,
+                    "turn-complete separator should request viewport repaint"
+                );
+            }
+            let cell: Arc<dyn HistoryCell> = Arc::from(cell);
+            chat.insert_transcript_cell(cell);
+            if repaint_viewport {
+                terminal.invalidate_viewport();
+            }
+        }
+    }
+    assert!(
+        saw_separator_repaint,
+        "expected turn-complete runtime separator repaint event"
+    );
+
+    let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    assert!(
+        screen.contains(review_needle),
+        "viewport repaint should restore review text: {screen:?}"
+    );
+    assert!(
+        !screen.contains(stale_row),
+        "viewport repaint kept stale review corruption: {screen:?}"
+    );
 }
 
 #[tokio::test]

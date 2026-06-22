@@ -1648,12 +1648,13 @@ impl ChatWidget {
         if self.pending_proposed_plan_text().is_some()
             && let Some(separator) = final_separator.take()
         {
-            self.app_event_tx.send_history_cell(Box::new(separator));
+            self.app_event_tx
+                .send_history_cell_with_viewport_repaint(Box::new(separator));
         }
         self.flush_pending_proposed_plan();
         if !from_replay {
             if let Some(separator) = final_separator {
-                self.add_to_history(separator);
+                self.add_to_history_with_viewport_repaint(separator);
             }
             self.needs_final_message_separator = false;
             self.had_work_activity = false;
@@ -4200,6 +4201,10 @@ impl ChatWidget {
         self.add_boxed_history(Box::new(cell));
     }
 
+    fn add_to_history_with_viewport_repaint(&mut self, cell: impl HistoryCell + 'static) {
+        self.add_boxed_history_with_viewport_repaint(Box::new(cell));
+    }
+
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
         self.add_boxed_history_impl(cell, false);
     }
@@ -4697,7 +4702,7 @@ impl ChatWidget {
         if let Some(output) = review.review_output {
             self.flush_answer_stream_with_separator();
             self.flush_interrupt_queue();
-            self.flush_active_cell();
+            self.flush_active_cell_with_viewport_repaint();
 
             if output.findings.is_empty() {
                 let explanation = output.overall_explanation.trim().to_string();
@@ -4711,7 +4716,8 @@ impl ChatWidget {
                     let mut rendered: Vec<ratatui::text::Line<'static>> = vec!["".into()];
                     append_markdown(&explanation, None, &mut rendered);
                     let body_cell = AgentMessageCell::new(rendered, false);
-                    self.app_event_tx.send_history_cell(Box::new(body_cell));
+                    self.app_event_tx
+                        .send_history_cell_with_viewport_repaint(Box::new(body_cell));
                 }
             }
             // Final message is rendered as part of the AgentMessage.
