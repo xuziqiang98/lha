@@ -10901,6 +10901,151 @@ async fn review_exit_explanation_requests_viewport_repaint() {
 }
 
 #[tokio::test]
+async fn review_reasoning_summary_before_review_output_is_not_visible() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let explanation = "No discrete correctness issues were found in the diff. The changes \
+        consistently route the affected final-history insertions through the existing viewport \
+        repaint event path and add focused regression coverage for those scenarios.";
+
+    chat.handle_codex_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: Some("current changes".to_string()),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "review-reasoning-delta".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Reasoning**\n\nsomething similar, so it should be fine.".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "review-reasoning-final".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "something similar, so it should be fine.".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "review-exit".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: Some(ReviewOutputEvent {
+                findings: Vec::new(),
+                overall_correctness: "patch is correct".to_string(),
+                overall_explanation: explanation.to_string(),
+                overall_confidence_score: 0.9,
+            }),
+        }),
+    });
+
+    let mut visible_history = String::new();
+    let mut saw_explanation = false;
+    let mut saw_finished_banner = false;
+    for event in drain_events(&mut rx) {
+        let Some((cell, repaint_viewport)) = into_insert_history_cell_with_viewport_repaint(event)
+        else {
+            continue;
+        };
+        let rendered = lines_to_single_string(&cell.display_lines(120));
+        visible_history.push_str(&rendered);
+
+        if rendered.contains("No discrete correctness issues") {
+            saw_explanation = true;
+            assert!(
+                repaint_viewport,
+                "review explanation should request viewport repaint: {rendered:?}"
+            );
+        }
+        if rendered.contains("<< Code review finished >>") {
+            saw_finished_banner = true;
+            assert!(
+                !repaint_viewport,
+                "review finished banner should keep ordinary history insertion"
+            );
+        }
+    }
+
+    assert!(saw_explanation, "expected review explanation in history");
+    assert!(
+        saw_finished_banner,
+        "expected ordinary review finished banner in history"
+    );
+    assert!(
+        !visible_history.contains("something similar"),
+        "review reasoning summary should stay hidden: {visible_history:?}"
+    );
+}
+
+#[tokio::test]
+async fn review_reasoning_delta_without_final_is_discarded_on_exit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: Some("current changes".to_string()),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "review-reasoning-delta".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Review reasoning**\n\nhidden review text".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "review-exit".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: Some(ReviewOutputEvent {
+                findings: Vec::new(),
+                overall_correctness: "patch is correct".to_string(),
+                overall_explanation: "Review output remains visible.".to_string(),
+                overall_confidence_score: 0.9,
+            }),
+        }),
+    });
+    // Do not send TurnStarted here: the review exit itself must discard
+    // unfinished reasoning buffers before the next visible summary is finalized.
+    chat.handle_codex_event(Event {
+        id: "ordinary-reasoning-delta".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Reasoning**\n\nVisible ordinary reasoning.".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "ordinary-reasoning-final".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "Visible ordinary reasoning.".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "ordinary-answer".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Final answer.".into(),
+            memory_citation: None,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let visible_history = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(
+        visible_history.contains("Review output remains visible."),
+        "review output should remain visible: {visible_history:?}"
+    );
+    assert!(
+        !visible_history.contains("hidden review text"),
+        "review reasoning delta leaked after review exit: {visible_history:?}"
+    );
+    assert!(
+        visible_history.contains("Visible ordinary reasoning."),
+        "ordinary reasoning summary should remain visible: {visible_history:?}"
+    );
+}
+
+#[tokio::test]
 async fn turn_complete_separator_viewport_repaint_repairs_review_vt100_screen_divergence() {
     let cfg = test_config().await;
     let model = "gpt-5";

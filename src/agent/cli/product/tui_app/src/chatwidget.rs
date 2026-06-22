@@ -1539,7 +1539,7 @@ impl ChatWidget {
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
         if !self.full_reasoning_buffer.is_empty() {
-            let cell = if self.answer_stream_started_this_turn {
+            let cell = if self.should_hide_reasoning_summary_from_display() {
                 history_cell::new_reasoning_summary_block_transcript_only(
                     self.full_reasoning_buffer.clone(),
                 )
@@ -1551,6 +1551,15 @@ impl ChatWidget {
         self.reasoning_buffer.clear();
         self.full_reasoning_buffer.clear();
         self.request_redraw();
+    }
+
+    fn should_hide_reasoning_summary_from_display(&self) -> bool {
+        self.answer_stream_started_this_turn || self.is_review_mode
+    }
+
+    fn clear_reasoning_buffers(&mut self) {
+        self.reasoning_buffer.clear();
+        self.full_reasoning_buffer.clear();
     }
 
     fn on_reasoning_section_break(&mut self) {
@@ -4723,6 +4732,7 @@ impl ChatWidget {
             // Final message is rendered as part of the AgentMessage.
         }
 
+        self.clear_reasoning_buffers();
         self.is_review_mode = false;
         self.restore_pre_review_token_info();
         // Append a finishing banner at the end of this turn.
