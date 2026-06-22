@@ -57,6 +57,8 @@ const DRAG_AUTOSCROLL_EDGE_ROWS: u16 = 1;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TranscriptLiveTailSource {
     ActiveCell,
+    PlanStream,
+    Composite,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

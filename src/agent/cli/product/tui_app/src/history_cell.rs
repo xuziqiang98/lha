@@ -2519,63 +2519,17 @@ impl ProposedPlanStreamCell {
         }
     }
 
-    pub(crate) fn is_streaming_markdown(&self) -> bool {
-        matches!(
-            &self.content,
-            ProposedPlanStreamContent::Markdown {
-                visible_rendered_lines: Some(_),
-                ..
-            }
-        )
-    }
-
-    pub(crate) fn set_markdown_stream_state(
-        &mut self,
-        source: String,
-        visible_lines: usize,
-    ) -> bool {
-        let ProposedPlanStreamContent::Markdown {
-            source: current_source,
-            visible_rendered_lines: current_visible_lines,
-            include_trailing_gap,
-        } = &mut self.content
-        else {
-            return false;
-        };
-
-        let changed = *current_source != source
-            || *current_visible_lines != Some(visible_lines)
-            || *include_trailing_gap;
-        if changed {
-            *current_source = source;
-            *current_visible_lines = Some(visible_lines);
-            *include_trailing_gap = false;
-            self.revision = self.revision.wrapping_add(1);
-            self.clear_lines_cache();
+    pub(crate) fn from_stream_state(source: String, visible_lines: usize) -> Self {
+        Self {
+            content: ProposedPlanStreamContent::Markdown {
+                source,
+                visible_rendered_lines: Some(visible_lines),
+                include_trailing_gap: false,
+            },
+            is_stream_continuation: false,
+            revision: 0,
+            lines_cache: Mutex::new(None),
         }
-        changed
-    }
-
-    pub(crate) fn set_visible_rendered_lines(&mut self, visible_lines: usize) -> bool {
-        let ProposedPlanStreamContent::Markdown {
-            visible_rendered_lines,
-            include_trailing_gap,
-            ..
-        } = &mut self.content
-        else {
-            return false;
-        };
-
-        let changed = *visible_rendered_lines != Some(visible_lines) || *include_trailing_gap;
-        if !changed {
-            return false;
-        }
-
-        *visible_rendered_lines = Some(visible_lines);
-        *include_trailing_gap = false;
-        self.revision = self.revision.wrapping_add(1);
-        self.clear_lines_cache();
-        true
     }
 
     pub(crate) fn show_all_markdown(&mut self, source: String) -> bool {

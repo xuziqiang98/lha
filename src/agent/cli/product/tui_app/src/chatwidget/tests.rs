@@ -2664,6 +2664,7 @@ async fn make_chatwidget_manual_inner_with_otel(
         stream_controller: None,
         pending_streamed_agent_message_echo: None,
         plan_stream_controller: None,
+        plan_stream_revision: 0,
         answer_stream_started_this_turn: false,
         running_commands: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
@@ -2844,6 +2845,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         stream_controller: None,
         pending_streamed_agent_message_echo: None,
         plan_stream_controller: None,
+        plan_stream_revision: 0,
         answer_stream_started_this_turn: false,
         running_commands: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
@@ -4120,6 +4122,11 @@ async fn proposed_plan_renders_after_streamed_intro() {
         1,
         "expected proposed plan once, got {rendered:?}"
     );
+    assert!(
+        chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+            .is_none(),
+        "expected no pending live tail after task completion"
+    );
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -4172,6 +4179,11 @@ async fn proposed_plan_renders_after_trailing_answer_text() {
         rendered.matches("# Plan").count(),
         1,
         "expected proposed plan once, got {rendered:?}"
+    );
+    assert!(
+        chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+            .is_none(),
+        "expected no pending live tail after task completion"
     );
 
     let popup = render_bottom_popup(&chat, 80);
@@ -4238,6 +4250,11 @@ async fn planner_runtime_metrics_separator_precedes_answer_and_plan() {
         1,
         "expected proposed plan once, got {rendered:?}"
     );
+    assert!(
+        chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+            .is_none(),
+        "expected no pending live tail after task completion"
+    );
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -4285,6 +4302,11 @@ async fn planner_runtime_metrics_separator_precedes_plan_without_answer() {
         1,
         "expected proposed plan once, got {rendered:?}"
     );
+    assert!(
+        chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+            .is_none(),
+        "expected no pending live tail after task completion"
+    );
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -4327,6 +4349,42 @@ async fn streamed_proposed_plan_background_fills_rendered_row() {
             buf[(x, plan_row)].style().bg,
             Some(plan_bg),
             "expected proposed plan background at x={x}, y={plan_row}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn pending_proposed_plan_live_tail_background_fills_rendered_row() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+
+    chat.on_task_started();
+    chat.on_plan_delta("- Step 1\n".to_string());
+
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+
+    let Some(plan_bg) = proposed_plan_style().bg else {
+        return;
+    };
+    let plan_row = (0..area.height)
+        .find(|y| {
+            (0..area.width)
+                .map(|x| buf[(x, *y)].symbol())
+                .collect::<String>()
+                .contains("Step 1")
+        })
+        .expect("expected rendered pending proposed plan row");
+
+    for x in 0..area.width {
+        assert_eq!(
+            buf[(x, plan_row)].style().bg,
+            Some(plan_bg),
+            "expected pending proposed plan background at x={x}, y={plan_row}"
         );
     }
 }
@@ -4565,11 +4623,257 @@ async fn streamed_proposed_plan_is_not_inserted_before_completion() {
     chat.on_plan_delta(format!("{source}\n"));
 
     assert!(drain_insert_history(&mut rx).is_empty());
+    let tail = chat
+        .transcript_live_tail_for_mode(32, TranscriptRenderMode::Display)
+        .expect("expected proposed plan live tail before completion");
+    let rendered = lines_to_single_string(&tail.lines);
     assert!(
-        chat.transcript_live_tail_for_mode(32, TranscriptRenderMode::Display)
-            .is_none(),
-        "expected no live tail while proposed plan is only pending"
+        rendered.contains("pending proposed plan"),
+        "expected live tail to contain pending proposed plan, got {rendered:?}"
     );
+}
+
+#[tokio::test]
+async fn streamed_answer_and_proposed_plan_share_live_tail_before_completion() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+    chat.last_rendered_width.set(Some(80));
+
+    chat.on_task_started();
+    chat.on_agent_message_delta("Intro\n".to_string());
+    chat.on_plan_delta("- Step 1\n".to_string());
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    let tail = chat
+        .transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+        .expect("expected combined answer and proposed plan live tail");
+    let rendered = lines_to_single_string(&tail.lines);
+    let intro_index = rendered
+        .find("Intro")
+        .unwrap_or_else(|| panic!("expected streamed answer in live tail, got {rendered:?}"));
+    let step_index = rendered
+        .find("Step 1")
+        .unwrap_or_else(|| panic!("expected proposed plan in live tail, got {rendered:?}"));
+    assert!(
+        intro_index < step_index,
+        "expected answer before proposed plan in live tail, got {rendered:?}"
+    );
+
+    let Some(plan_bg) = proposed_plan_style().bg else {
+        return;
+    };
+    let step_line = tail
+        .lines
+        .iter()
+        .find(|line| {
+            line.spans
+                .iter()
+                .any(|span| span.content.contains("Step 1"))
+        })
+        .expect("expected proposed plan step line");
+    assert_eq!(step_line.style.bg, Some(plan_bg));
+}
+
+#[tokio::test]
+async fn completing_pending_proposed_plan_stops_commit_animation() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+    chat.last_rendered_width.set(Some(80));
+
+    chat.on_task_started();
+    let plan = "- Step 1\n- Step 2\n- Step 3\n";
+    chat.on_plan_delta(plan.to_string());
+    assert!(
+        chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+            .is_some(),
+        "expected pending proposed plan live tail before completion"
+    );
+    let _ = drain_events(&mut rx);
+
+    chat.on_plan_item_completed(plan.to_string());
+    chat.on_task_complete(None, false);
+
+    assert!(
+        chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+            .is_none(),
+        "expected no pending live tail after task completion"
+    );
+    let events = drain_events(&mut rx);
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::StopCommitAnimation)),
+        "expected task completion to stop pending proposed plan reveal animation"
+    );
+
+    let cells = events
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .collect::<Vec<_>>();
+    let plan_cell_count = cells
+        .iter()
+        .filter(|cell| crate::product::tui_app::history_cell::is_proposed_plan_cell(cell.as_ref()))
+        .count();
+    assert_eq!(
+        plan_cell_count, 1,
+        "expected exactly one proposed plan cell"
+    );
+
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(&cell.display_lines(80)))
+        .collect::<String>();
+    assert!(
+        rendered.contains("Step 1") && rendered.contains("Step 2") && rendered.contains("Step 3"),
+        "expected final proposed plan history to contain all steps, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn finalize_turn_clears_pending_proposed_plan_live_tail() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+    chat.last_rendered_width.set(Some(80));
+
+    chat.on_task_started();
+    chat.on_plan_delta("- Step 1\n- Step 2\n".to_string());
+
+    assert!(
+        chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+            .is_some(),
+        "expected pending proposed plan live tail before finalizing turn"
+    );
+    assert!(chat.plan_stream_controller.is_some());
+    assert!(chat.plan_item_active);
+    let _ = drain_events(&mut rx);
+
+    chat.finalize_turn();
+
+    assert!(chat.plan_stream_controller.is_none());
+    assert!(chat.plan_delta_buffer.is_empty());
+    assert!(!chat.plan_item_active);
+    assert!(!chat.saw_plan_item_this_turn);
+    assert!(chat.latest_proposed_plan_text.is_none());
+    assert!(chat.latest_proposed_plan_title.is_none());
+    assert!(
+        chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+            .is_none(),
+        "expected no pending proposed plan live tail after finalizing turn"
+    );
+
+    let events = drain_events(&mut rx);
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::StopCommitAnimation)),
+        "expected finalizing turn to stop proposed plan reveal animation"
+    );
+    let plan_cell_count = events
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .filter(|cell| crate::product::tui_app::history_cell::is_proposed_plan_cell(cell.as_ref()))
+        .count();
+    assert_eq!(
+        plan_cell_count, 0,
+        "expected finalize_turn not to insert proposed plan history"
+    );
+}
+
+#[tokio::test]
+async fn flushing_answer_stream_keeps_plan_animation_running() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+    chat.last_rendered_width.set(Some(80));
+
+    chat.on_task_started();
+    chat.on_agent_message_delta("Intro\n".to_string());
+    chat.on_plan_delta("- Step 1\n- Step 2\n".to_string());
+    let _ = drain_events(&mut rx);
+
+    chat.flush_answer_stream_with_separator();
+
+    assert!(
+        chat.plan_stream_controller.is_some(),
+        "expected pending plan stream to survive answer flush"
+    );
+    let tail = chat
+        .transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+        .expect("expected pending proposed plan live tail after answer flush");
+    let rendered = lines_to_single_string(&tail.lines);
+    assert!(
+        rendered.contains("Step 1"),
+        "expected plan live tail after answer flush, got {rendered:?}"
+    );
+
+    let flush_events = drain_events(&mut rx);
+    assert!(
+        !flush_events
+            .iter()
+            .any(|event| matches!(event, AppEvent::StopCommitAnimation)),
+        "answer flush should not stop commit animation while plan stream remains"
+    );
+
+    let mut tick_events = Vec::new();
+    for _ in 0..5 {
+        chat.on_commit_tick();
+        tick_events.extend(drain_events(&mut rx));
+        if tick_events
+            .iter()
+            .any(|event| matches!(event, AppEvent::StopCommitAnimation))
+        {
+            break;
+        }
+    }
+    assert!(
+        tick_events
+            .iter()
+            .any(|event| matches!(event, AppEvent::StopCommitAnimation)),
+        "expected plan stream to stop commit animation once it becomes idle"
+    );
+}
+
+#[tokio::test]
+async fn streamed_proposed_plan_reveals_completed_lines_incrementally() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+    chat.last_rendered_width.set(Some(80));
+
+    chat.on_task_started();
+    chat.on_plan_delta("- Step 1\n".to_string());
+    let tail = chat
+        .transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+        .expect("expected proposed plan live tail after first line");
+    let rendered = lines_to_single_string(&tail.lines);
+    assert!(
+        rendered.contains("Step 1"),
+        "expected first completed line in live tail, got {rendered:?}"
+    );
+
+    chat.on_plan_delta("- Step 2\n".to_string());
+    let tail = chat
+        .transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+        .expect("expected proposed plan live tail after second line");
+    let rendered = lines_to_single_string(&tail.lines);
+    assert!(
+        rendered.contains("Step 2"),
+        "expected second completed line in live tail, got {rendered:?}"
+    );
+    assert!(drain_insert_history(&mut rx).is_empty());
 }
 
 #[tokio::test]

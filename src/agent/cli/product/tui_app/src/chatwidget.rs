@@ -6,8 +6,8 @@
 //! The UI has both committed transcript cells (finalized `HistoryCell`s) and an in-flight active
 //! cell (`ChatWidget.active_cell`) that can mutate in place while streaming (often representing a
 //! coalesced exec/tool group). The transcript overlay (`Ctrl+T`) renders committed cells plus a
-//! cached, render-only live tail derived from the current active cell so in-flight tool calls are
-//! visible immediately.
+//! cached, render-only live tail derived from the current active cell and pending plan streams so
+//! in-flight tool calls are visible immediately.
 //!
 //! The transcript overlay is kept in sync by `App::overlay_forward_event`, which syncs a live tail
 //! during draws using `transcript_live_tail_key()` and `transcript_live_tail_for_mode()`. The cache
@@ -557,6 +557,8 @@ pub(crate) struct ChatWidget {
     pending_streamed_agent_message_echo: Option<String>,
     // Stream lifecycle controller for proposed plan output.
     plan_stream_controller: Option<PlanStreamController>,
+    // Cache-busting counter for the render-only proposed plan live tail.
+    plan_stream_revision: u64,
     // Whether the current turn has started streaming visible assistant answer content.
     answer_stream_started_this_turn: bool,
     running_commands: HashMap<String, RunningCommand>,
@@ -949,7 +951,7 @@ impl ChatWidget {
             return (false, leading_separator);
         };
 
-        self.app_event_tx.send(AppEvent::StopCommitAnimation);
+        self.stop_commit_animation_if_no_stream_controllers();
 
         let source = controller.finalize();
         if source.is_empty() {
@@ -1048,88 +1050,75 @@ impl ChatWidget {
         }
     }
 
-    fn active_cell_is_plan_stream(&self) -> bool {
-        self.active_cell
+    fn bump_plan_stream_revision(&mut self) {
+        self.plan_stream_revision = self.plan_stream_revision.wrapping_add(1);
+    }
+
+    fn plan_stream_has_visible_tail(&self) -> bool {
+        self.plan_stream_controller
             .as_ref()
-            .and_then(|cell| cell.as_any().downcast_ref::<ProposedPlanStreamCell>())
-            .is_some_and(ProposedPlanStreamCell::is_streaming_markdown)
+            .is_some_and(|controller| !controller.completed_source().is_empty())
     }
 
-    fn active_plan_stream_cell_mut(&mut self) -> Option<&mut ProposedPlanStreamCell> {
-        let cell = self
-            .active_cell
-            .as_mut()?
-            .as_any_mut()
-            .downcast_mut::<ProposedPlanStreamCell>()?;
-        if cell.is_streaming_markdown() {
-            Some(cell)
-        } else {
-            None
-        }
+    fn plan_stream_live_tail_revision(&self) -> u64 {
+        let completed_source_len = self
+            .plan_stream_controller
+            .as_ref()
+            .map(|controller| controller.completed_source().len() as u64)
+            .unwrap_or(0);
+        self.plan_stream_revision
+            .wrapping_mul(31)
+            .wrapping_add(completed_source_len)
     }
 
-    fn ensure_plan_stream_active_cell(&mut self) {
-        if self.active_cell_is_plan_stream() {
-            return;
-        }
-        self.flush_active_cell();
-        self.active_cell = Some(Box::new(ProposedPlanStreamCell::new_streaming_markdown()));
-        self.bump_active_cell_revision();
-    }
-
-    fn sync_plan_stream_active_cell_from_controller(&mut self) {
-        let Some((source, visible_lines)) =
-            self.plan_stream_controller.as_ref().map(|controller| {
-                (
-                    controller.completed_source().to_string(),
-                    controller.visible_rendered_lines(),
-                )
-            })
-        else {
-            return;
-        };
-        if source.is_empty() {
-            return;
-        }
-
-        self.ensure_plan_stream_active_cell();
-        let changed = self
-            .active_plan_stream_cell_mut()
-            .is_some_and(|cell| cell.set_markdown_stream_state(source, visible_lines));
-        if changed {
-            self.bump_active_cell_revision();
-        }
-    }
-
-    fn set_plan_stream_visible_lines(&mut self, visible_lines: usize) {
-        let changed = self
-            .active_plan_stream_cell_mut()
-            .is_some_and(|cell| cell.set_visible_rendered_lines(visible_lines));
-        if changed {
-            self.bump_active_cell_revision();
+    fn clear_plan_stream_controller(&mut self) -> bool {
+        let cleared = self.plan_stream_controller.take().is_some();
+        if cleared {
+            self.bump_plan_stream_revision();
             self.request_redraw();
         }
+        cleared
     }
 
-    fn flush_plan_stream(&mut self) -> bool {
-        let Some(controller) = self.plan_stream_controller.take() else {
-            return false;
+    fn stop_commit_animation_if_no_stream_controllers(&self) {
+        if self.stream_controller.is_none() && self.plan_stream_controller.is_none() {
+            self.app_event_tx.send(AppEvent::StopCommitAnimation);
+        }
+    }
+
+    fn discard_pending_proposed_plan_turn_state(&mut self) -> bool {
+        let cleared_plan_stream = self.clear_plan_stream_controller();
+        self.plan_delta_buffer.clear();
+        self.plan_item_active = false;
+        self.saw_plan_item_this_turn = false;
+        self.pending_proposed_plan_rendered_this_turn = false;
+        self.latest_proposed_plan_text = None;
+        self.latest_proposed_plan_title = None;
+        cleared_plan_stream
+    }
+
+    fn plan_stream_lines_for_mode(
+        &self,
+        width: u16,
+        mode: TranscriptRenderMode,
+    ) -> Vec<Line<'static>> {
+        let Some(controller) = self.plan_stream_controller.as_ref() else {
+            return Vec::new();
         };
 
-        let source = controller.finalize();
+        let source = controller.completed_source();
         if source.is_empty() {
-            return false;
+            return Vec::new();
         }
 
-        self.ensure_plan_stream_active_cell();
-        let updated = self
-            .active_plan_stream_cell_mut()
-            .is_some_and(|cell| cell.show_all_markdown(source));
-        if updated {
-            self.bump_active_cell_revision();
+        let cell = ProposedPlanStreamCell::from_stream_state(
+            source.to_string(),
+            controller.visible_rendered_lines(),
+        );
+        match mode {
+            TranscriptRenderMode::Display => cell.display_lines(width),
+            TranscriptRenderMode::Transcript => cell.transcript_lines(width),
         }
-        self.flush_active_cell();
-        true
     }
 
     fn pending_proposed_plan_text(&self) -> Option<String> {
@@ -1149,7 +1138,10 @@ impl ChatWidget {
         let Some(plan_text) = self.pending_proposed_plan_text() else {
             return false;
         };
-        self.flush_plan_stream();
+        let cleared_plan_stream = self.clear_plan_stream_controller();
+        if cleared_plan_stream {
+            self.stop_commit_animation_if_no_stream_controllers();
+        }
         self.flush_active_cell();
         self.add_to_history(history_cell::new_proposed_plan(plan_text));
         self.pending_proposed_plan_rendered_this_turn = true;
@@ -1486,6 +1478,23 @@ impl ChatWidget {
             self.plan_delta_buffer.clear();
         }
         self.plan_delta_buffer.push_str(&delta);
+        self.flush_unified_exec_wait_streak();
+        if self.active_cell.is_some() && !self.active_cell_is_answer_stream() {
+            self.flush_active_cell();
+        }
+        if self.plan_stream_controller.is_none() {
+            self.plan_stream_controller = Some(PlanStreamController::new());
+            self.bump_plan_stream_revision();
+        }
+        let stream_width = self.last_rendered_width.get().map(|w| w.saturating_sub(4));
+        let should_start_animation = self
+            .plan_stream_controller
+            .as_mut()
+            .is_some_and(|controller| controller.push(&delta, stream_width));
+        if should_start_animation {
+            self.app_event_tx.send(AppEvent::StartCommitAnimation);
+            self.on_commit_tick();
+        }
         self.request_redraw();
     }
 
@@ -1598,11 +1607,10 @@ impl ChatWidget {
         self.turn_sleep_inhibitor
             .set_turn_running(/* turn_running */ true);
         self.saw_plan_update_this_turn = false;
-        self.saw_plan_item_this_turn = false;
-        self.pending_proposed_plan_rendered_this_turn = false;
-        self.plan_delta_buffer.clear();
-        self.plan_item_active = false;
-        self.plan_stream_controller = None;
+        let cleared_plan_stream = self.discard_pending_proposed_plan_turn_state();
+        if cleared_plan_stream {
+            self.stop_commit_animation_if_no_stream_controllers();
+        }
         self.answer_stream_started_this_turn = false;
         self.pending_streamed_agent_message_echo = None;
         self.otel_manager.reset_runtime_metrics();
@@ -1865,7 +1873,11 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
-        self.stream_controller = None;
+        let had_answer_stream = self.stream_controller.take().is_some();
+        let had_plan_stream = self.discard_pending_proposed_plan_turn_state();
+        if had_answer_stream || had_plan_stream {
+            self.app_event_tx.send(AppEvent::StopCommitAnimation);
+        }
         self.pending_streamed_agent_message_echo = None;
     }
 
@@ -2497,10 +2509,10 @@ impl ChatWidget {
         if let Some(controller) = self.plan_stream_controller.as_mut() {
             has_controller = true;
             let (advanced, is_idle) = controller.on_commit_tick();
-            let visible_lines = controller.visible_rendered_lines();
             if advanced {
                 self.bottom_pane.hide_status_indicator();
-                self.set_plan_stream_visible_lines(visible_lines);
+                self.bump_plan_stream_revision();
+                self.request_redraw();
             }
             all_idle &= is_idle;
         }
@@ -2965,6 +2977,7 @@ impl ChatWidget {
             stream_controller: None,
             pending_streamed_agent_message_echo: None,
             plan_stream_controller: None,
+            plan_stream_revision: 0,
             answer_stream_started_this_turn: false,
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
@@ -3144,6 +3157,7 @@ impl ChatWidget {
             stream_controller: None,
             pending_streamed_agent_message_echo: None,
             plan_stream_controller: None,
+            plan_stream_revision: 0,
             answer_stream_started_this_turn: false,
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
@@ -7087,16 +7101,34 @@ impl ChatWidget {
     }
 
     pub(crate) fn transcript_live_tail_key(&self) -> Option<TranscriptLiveTailKey> {
-        if let Some(key) = self.active_cell_transcript_key() {
-            return Some(TranscriptLiveTailKey::new(
+        let active_key = self.active_cell_transcript_key();
+        let has_plan_stream = self.plan_stream_has_visible_tail();
+        let plan_revision = self.plan_stream_live_tail_revision();
+
+        match (active_key, has_plan_stream) {
+            (Some(key), true) => Some(TranscriptLiveTailKey::new(
+                TranscriptLiveTailSource::Composite,
+                0,
+                key.revision.wrapping_mul(31).wrapping_add(plan_revision),
+                key.is_stream_continuation,
+                key.animation_tick,
+            )),
+            (Some(key), false) => Some(TranscriptLiveTailKey::new(
                 TranscriptLiveTailSource::ActiveCell,
                 0,
                 key.revision,
                 key.is_stream_continuation,
                 key.animation_tick,
-            ));
+            )),
+            (None, true) => Some(TranscriptLiveTailKey::new(
+                TranscriptLiveTailSource::PlanStream,
+                0,
+                plan_revision,
+                false,
+                None,
+            )),
+            (None, false) => None,
         }
-        None
     }
 
     pub(crate) fn transcript_live_tail_for_mode(
@@ -7104,19 +7136,34 @@ impl ChatWidget {
         width: u16,
         mode: TranscriptRenderMode,
     ) -> Option<TranscriptLiveTail> {
+        let mut lines = Vec::new();
+        let mut fill_line_backgrounds = false;
         if let Some(cell) = self.active_cell.as_ref() {
-            let fill_line_backgrounds = cell.fill_line_backgrounds();
-            let lines = match mode {
+            fill_line_backgrounds |= cell.fill_line_backgrounds();
+            lines.extend(match mode {
                 TranscriptRenderMode::Display => cell.display_lines(width),
                 TranscriptRenderMode::Transcript => cell.transcript_lines(width),
-            };
-            return if fill_line_backgrounds {
-                TranscriptView::live_tail_from_lines_with_backgrounds(lines, true)
-            } else {
-                TranscriptView::live_tail_from_lines(lines)
-            };
+            });
         }
-        None
+
+        let plan_lines = self.plan_stream_lines_for_mode(width, mode);
+        if !plan_lines.is_empty() {
+            if !lines.is_empty() {
+                lines.push(Line::default());
+            }
+            lines.extend(plan_lines);
+            fill_line_backgrounds = true;
+        }
+
+        if lines.is_empty() {
+            return None;
+        }
+
+        if fill_line_backgrounds {
+            TranscriptView::live_tail_from_lines_with_backgrounds(lines, true)
+        } else {
+            TranscriptView::live_tail_from_lines(lines)
+        }
     }
 
     /// Return a reference to the widget's current config (includes any
