@@ -265,6 +265,9 @@
             "responses_websockets": {
               "type": "boolean"
             },
+            "retrieval_aware_compact": {
+              "type": "boolean"
+            },
             "runtime_metrics": {
               "type": "boolean"
             },
@@ -1329,6 +1332,9 @@
           "type": "boolean"
         },
         "responses_websockets": {
+          "type": "boolean"
+        },
+        "retrieval_aware_compact": {
           "type": "boolean"
         },
         "runtime_metrics": {

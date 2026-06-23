@@ -9,19 +9,33 @@ use crate::product::agent::codex::runtime_notice_to_event_msg;
 use crate::product::agent::error::CodexErr;
 use crate::product::agent::error::Result as CodexResult;
 use crate::product::agent::features::Feature;
+use crate::product::agent::function_tool::FunctionCallError;
+use crate::product::agent::input_slimming::INPUT_RETRIEVE_TOOL_NAME;
+use crate::product::agent::input_slimming::INPUT_SLIMMING_MARKER_PREFIX;
+use crate::product::agent::input_slimming::InputRetrieveHandler;
+use crate::product::agent::input_slimming::InputSlimmer;
+use crate::product::agent::input_slimming::InputSlimmingContext;
+use crate::product::agent::input_slimming::InputSlimmingMode;
+use crate::product::agent::input_slimming::InputSlimmingWireApi;
+use crate::product::agent::input_slimming::create_lha_input_retrieve_tool;
 use crate::product::agent::instructions::SkillInstructionSource;
 use crate::product::agent::instructions::SkillInstructions;
 use crate::product::agent::proposed_plan_parser::extract_proposed_plan_text;
 use crate::product::agent::protocol::CompactedItem;
 use crate::product::agent::protocol::EventMsg;
+use crate::product::agent::protocol::InputSlimmingScope;
 use crate::product::agent::protocol::TurnContextItem;
 use crate::product::agent::protocol::TurnStartedEvent;
 use crate::product::agent::protocol::WarningEvent;
 use crate::product::agent::session_prefix::TURN_ABORTED_OPEN_TAG;
+use crate::product::agent::tools::context::ToolInvocation;
+use crate::product::agent::tools::context::ToolPayload;
 use crate::product::agent::tools::handlers::UPDATE_PLAN_SUCCESS_OUTPUT;
+use crate::product::agent::tools::registry::ToolHandler;
 use crate::product::agent::truncate::TruncationPolicy;
 use crate::product::agent::truncate::approx_token_count;
 use crate::product::agent::truncate::truncate_text;
+use crate::product::agent::turn_diff_tracker::TurnDiffTracker;
 use crate::product::protocol::items::ContextCompactionItem;
 use crate::product::protocol::items::TurnItem;
 use crate::product::protocol::models::ContentItem;
@@ -34,10 +48,17 @@ use crate::product::protocol::user_input::UserInput;
 use futures::prelude::*;
 use lha_llm::RuntimeCapabilities;
 use lha_llm::ToolCallPayload;
+use lha_llm::ToolCallRequest;
+use lha_llm::ToolDescriptor;
+use lha_llm::ToolResultItem;
 use lha_llm::ToolResultPayload;
 use lha_llm::TurnEvent;
 use lha_llm::TurnRequest;
+use serde::Deserialize;
+use tokio::sync::Mutex;
+use tracing::debug;
 use tracing::error;
+use tracing::warn;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
@@ -52,6 +73,49 @@ const ACTIVE_GOAL_PLAN_REMINDER_PREFIX: &str =
     "Runtime note: the active programmer goal references a user-provided proposed plan file at:";
 const LEGACY_ACTIVE_GOAL_PLAN_REMINDER_PREFIX: &str =
     "The active programmer goal references a proposed plan stored at:";
+const RETRIEVAL_AWARE_COMPACT_RETRIEVE_LIMIT: usize = 8;
+const RETRIEVAL_AWARE_COMPACT_TURN_LIMIT: usize = 12;
+const RETRIEVAL_AWARE_COMPACT_ADDENDUM: &str = r#"Retrieval-aware compact addendum:
+
+You are compacting an input-slimmed transcript. Markers like <<lha-input:hash>> refer to original tool outputs available through the lha_input_retrieve(hash, query?) tool.
+
+Retrieve marker originals when the surrounding compressed snippet is insufficient for correctness, especially for errors, stack traces, diffs, command output, test failures, or details the user referenced. Do not invent details from compressed snippets.
+
+If you do not retrieve a marker, preserve the marker in the final summary and explain what it likely contains. The final summary must include these sections:
+
+- Current task and decisions
+- Evidence retrieved
+- Unresolved retrievable markers
+- Next steps"#;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RetrievalAwareCompactEstimate {
+    pub(crate) input_tokens: Option<i64>,
+    pub(crate) slimmed_count: usize,
+    pub(crate) contains_marker: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompactInputMode {
+    Raw,
+    RetrievalAwareSlimmed,
+}
+
+struct RetrievalAwareCompactPrompt {
+    request: TurnRequest,
+    marker_hashes: HashSet<String>,
+    slimmed_count: usize,
+}
+
+struct RetrievalAwareCompactOutput {
+    summary: String,
+    retrieved_hashes: HashSet<String>,
+}
+
+#[derive(Deserialize)]
+struct RetrievalAwareRetrieveArgs {
+    hash: String,
+}
 
 pub(crate) enum ProposedPlanBackfill<'a> {
     FullText(&'a str),
@@ -77,7 +141,31 @@ pub(crate) async fn run_inline_auto_compact_task(
         text_elements: Vec::new(),
     }];
 
-    run_compact_task_inner(sess, turn_context, input).await;
+    run_compact_task_inner(sess, turn_context, input, CompactInputMode::Raw).await;
+}
+
+pub(crate) async fn run_inline_retrieval_aware_auto_compact_task(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+) {
+    let prompt = format!(
+        "{}\n\n{}",
+        turn_context.compact_prompt(),
+        RETRIEVAL_AWARE_COMPACT_ADDENDUM
+    );
+    let input = vec![UserInput::Text {
+        text: prompt,
+        // Compaction prompt is synthesized; no UI element ranges to preserve.
+        text_elements: Vec::new(),
+    }];
+
+    run_compact_task_inner(
+        sess,
+        turn_context,
+        input,
+        CompactInputMode::RetrievalAwareSlimmed,
+    )
+    .await;
 }
 
 pub(crate) async fn run_compact_task(
@@ -90,13 +178,14 @@ pub(crate) async fn run_compact_task(
         identity_kind: turn_context.identity.kind,
     });
     sess.send_event(&turn_context, start_event).await;
-    run_compact_task_inner(sess.clone(), turn_context, input).await;
+    run_compact_task_inner(sess.clone(), turn_context, input, CompactInputMode::Raw).await;
 }
 
 async fn run_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
+    mode: CompactInputMode,
 ) {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
@@ -136,20 +225,61 @@ async fn run_compact_task_inner(
     });
     sess.persist_rollout_items(&[rollout_item]).await;
 
+    let mut retrieval_summary_suffix: Option<String> = None;
+    let mut retrieval_marker_hashes = HashSet::new();
+    let mut retrieval_retrieved_hashes = HashSet::new();
     loop {
         // Clone is required because of the loop
         let turn_input = history.clone().for_compaction_prompt();
         let turn_input_len = turn_input.len();
-        let prompt = TurnRequest {
-            conversation: turn_input.into_iter().collect(),
-            base_instructions: sess.get_base_instructions().await,
-            personality: turn_context.personality,
-            ..Default::default()
+        let attempt_result = match mode {
+            CompactInputMode::Raw => {
+                let prompt = TurnRequest {
+                    conversation: turn_input.into_iter().collect(),
+                    base_instructions: sess.get_base_instructions().await,
+                    personality: turn_context.personality,
+                    ..Default::default()
+                };
+                drain_to_completed(&sess, turn_context.as_ref(), &prompt)
+                    .await
+                    .map(|()| None)
+            }
+            CompactInputMode::RetrievalAwareSlimmed => {
+                let raw_prompt = TurnRequest {
+                    conversation: turn_input.into_iter().collect(),
+                    base_instructions: sess.get_base_instructions().await,
+                    personality: turn_context.personality,
+                    ..Default::default()
+                };
+                match build_retrieval_aware_compact_prompt(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    &raw_prompt,
+                    InputSlimmingMode::Apply,
+                )
+                .await
+                {
+                    Ok(retrieval_prompt) => {
+                        retrieval_marker_hashes = retrieval_prompt.marker_hashes.clone();
+                        drain_retrieval_aware_compact_to_summary(
+                            Arc::clone(&sess),
+                            Arc::clone(&turn_context),
+                            retrieval_prompt.request,
+                        )
+                        .await
+                        .map(Some)
+                    }
+                    Err(err) => Err(err),
+                }
+            }
         };
-        let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), &prompt).await;
 
         match attempt_result {
-            Ok(()) => {
+            Ok(output) => {
+                if let Some(output) = output {
+                    retrieval_retrieved_hashes = output.retrieved_hashes;
+                    retrieval_summary_suffix = Some(output.summary);
+                }
                 if truncated_count > 0 {
                     sess.notify_background_event(
                         turn_context.as_ref(),
@@ -189,7 +319,27 @@ async fn run_compact_task_inner(
 
     let history_snapshot = sess.clone_history().await;
     let history_items = history_snapshot.raw_items();
-    let summary_suffix = get_last_assistant_message_from_turn(history_items).unwrap_or_default();
+    let mut summary_suffix = retrieval_summary_suffix
+        .unwrap_or_else(|| get_last_assistant_message_from_turn(history_items).unwrap_or_default());
+    if mode == CompactInputMode::RetrievalAwareSlimmed {
+        summary_suffix = preserve_unresolved_retrieval_markers(
+            summary_suffix,
+            &retrieval_marker_hashes,
+            &retrieval_retrieved_hashes,
+        );
+        let unresolved_count = unresolved_marker_count(&summary_suffix, &retrieval_marker_hashes);
+        debug!(
+            retrieved_marker_count = retrieval_retrieved_hashes.len(),
+            unresolved_marker_count = unresolved_count,
+            auto_compact_strategy = "retrieval_aware",
+            decision = "retrieval_aware_compact_summary_guard",
+        );
+        turn_context.runtime.get_otel_manager().counter(
+            "lha.compact.retrieval_aware.unresolved_markers",
+            i64::try_from(unresolved_count).unwrap_or(i64::MAX),
+            &[],
+        );
+    }
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
     let user_messages = collect_user_messages(history_items);
     let built_initial_context = sess
@@ -252,6 +402,383 @@ pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
     } else {
         Some(pieces.join("\n"))
     }
+}
+
+pub(crate) async fn estimate_retrieval_aware_auto_compact_tokens(
+    sess: &Session,
+    turn_context: &TurnContext,
+) -> RetrievalAwareCompactEstimate {
+    let mut history = sess.clone_history().await;
+    let compact_input = transcript_item_from_user_input(vec![UserInput::Text {
+        text: format!(
+            "{}\n\n{}",
+            turn_context.compact_prompt(),
+            RETRIEVAL_AWARE_COMPACT_ADDENDUM
+        ),
+        text_elements: Vec::new(),
+    }]);
+    history.record_items([&compact_input], turn_context.truncation_policy);
+    let prompt = TurnRequest {
+        conversation: history.for_compaction_prompt().into_iter().collect(),
+        base_instructions: sess.get_base_instructions().await,
+        personality: turn_context.personality,
+        ..Default::default()
+    };
+
+    match build_retrieval_aware_compact_prompt(
+        sess,
+        turn_context,
+        &prompt,
+        InputSlimmingMode::ApplyPreview,
+    )
+    .await
+    {
+        Ok(prompt) => RetrievalAwareCompactEstimate {
+            input_tokens: turn_context
+                .runtime
+                .estimated_input_tokens_for_turn_request(&prompt.request),
+            slimmed_count: prompt.slimmed_count,
+            contains_marker: !prompt.marker_hashes.is_empty(),
+        },
+        Err(err) => {
+            warn!("failed to estimate retrieval-aware compact prompt: {err}");
+            RetrievalAwareCompactEstimate {
+                input_tokens: None,
+                slimmed_count: 0,
+                contains_marker: false,
+            }
+        }
+    }
+}
+
+async fn build_retrieval_aware_compact_prompt(
+    sess: &Session,
+    turn_context: &TurnContext,
+    raw_prompt: &TurnRequest,
+    mode: InputSlimmingMode,
+) -> CodexResult<RetrievalAwareCompactPrompt> {
+    let estimate_request_tokens = |request: &TurnRequest| {
+        turn_context
+            .runtime
+            .estimated_input_tokens_for_turn_request(request)
+            .and_then(|value| usize::try_from(value).ok())
+    };
+    let history_input_tokens = raw_prompt
+        .conversation
+        .iter()
+        .map(|item| approx_token_count(&serde_json::to_string(item).unwrap_or_default()))
+        .sum::<usize>();
+    let mut outcome = InputSlimmer::default()
+        .slim_request_with_context(
+            raw_prompt,
+            InputSlimmingContext {
+                store: &sess.services.input_slimming_store,
+                turn_id: turn_context.sub_id.as_str(),
+                estimate_request_tokens: Some(&estimate_request_tokens),
+                mode,
+                scope: InputSlimmingScope::HistoricalToolOutputs,
+                wire_api: InputSlimmingWireApi::Compact,
+                context_window: turn_context.runtime.get_model_context_window(),
+                estimated_input_tokens: Some(
+                    i64::try_from(history_input_tokens).unwrap_or(i64::MAX),
+                ),
+            },
+        )
+        .await
+        .map_err(|err| {
+            CodexErr::Stream(format!("input slimming failed during compact: {err}"), None)
+        })?;
+
+    if mode == InputSlimmingMode::Apply
+        && outcome.metrics.approx_tokens_saved > 0
+        && outcome.metrics.slimmed > 0
+    {
+        InputSlimmer::emit_metrics(
+            &outcome,
+            &turn_context.runtime.get_otel_manager(),
+            turn_context.runtime.get_model().as_str(),
+            InputSlimmingScope::HistoricalToolOutputs,
+            InputSlimmingWireApi::Compact,
+        );
+        sess.persist_input_slimming_entries(std::mem::take(&mut outcome.persisted_entries))
+            .await;
+    }
+
+    let mut request = outcome.request;
+    let mut marker_hashes = turn_request_input_slimming_hashes(&request);
+    if !marker_hashes.is_empty() {
+        request.tools = vec![create_lha_input_retrieve_tool()];
+        request.parallel_tool_calls = false;
+    } else {
+        request.tools = Vec::<ToolDescriptor>::new();
+        request.parallel_tool_calls = false;
+    }
+    marker_hashes.extend(turn_request_input_slimming_hashes(raw_prompt));
+
+    Ok(RetrievalAwareCompactPrompt {
+        request,
+        marker_hashes,
+        slimmed_count: outcome.metrics.slimmed,
+    })
+}
+
+async fn drain_retrieval_aware_compact_to_summary(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    mut prompt: TurnRequest,
+) -> CodexResult<RetrievalAwareCompactOutput> {
+    let mut conversation = prompt.conversation.clone();
+    let mut retrieved_hashes = HashSet::new();
+    let mut retrieve_calls = 0usize;
+    let tracker = Arc::new(Mutex::new(TurnDiffTracker::new()));
+
+    for _ in 0..RETRIEVAL_AWARE_COMPACT_TURN_LIMIT {
+        prompt.conversation = conversation.clone();
+        let mut runtime_session = turn_context.runtime.new_session();
+        let mut stream = runtime_session
+            .run_turn(&prompt)
+            .await
+            .map_err(CodexErr::from)?;
+        let mut pending_tool_calls = Vec::new();
+
+        loop {
+            let Some(event) = stream.next().await else {
+                return Err(CodexErr::Stream(
+                    "stream closed before response.completed".into(),
+                    None,
+                ));
+            };
+            match event {
+                Ok(TurnEvent::RuntimeNotice(notice)) => {
+                    sess.send_event(turn_context.as_ref(), runtime_notice_to_event_msg(notice))
+                        .await;
+                }
+                Ok(TurnEvent::ItemCompleted { item, .. }) => {
+                    conversation.push(item.into_item());
+                }
+                Ok(TurnEvent::ToolCall(request)) => {
+                    conversation.push(request.to_transcript_item());
+                    pending_tool_calls.push(request);
+                }
+                Ok(TurnEvent::ServerReasoningIncluded(included)) => {
+                    sess.set_server_reasoning_included(included).await;
+                }
+                Ok(TurnEvent::Completed { token_usage, .. }) => {
+                    sess.update_token_usage_info(turn_context.as_ref(), token_usage.as_ref())
+                        .await;
+                    break;
+                }
+                Ok(_) => continue,
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        if pending_tool_calls.is_empty() {
+            let summary = get_last_assistant_message_from_turn(&conversation).unwrap_or_default();
+            return Ok(RetrievalAwareCompactOutput {
+                summary,
+                retrieved_hashes,
+            });
+        }
+
+        for request in pending_tool_calls {
+            let retrieve_hash = (request.tool_name == INPUT_RETRIEVE_TOOL_NAME)
+                .then(|| retrieve_hash_from_tool_call(&request))
+                .flatten();
+            let result = if request.tool_name == INPUT_RETRIEVE_TOOL_NAME
+                && retrieve_calls < RETRIEVAL_AWARE_COMPACT_RETRIEVE_LIMIT
+            {
+                retrieve_calls += 1;
+                handle_retrieval_aware_tool_call(
+                    Arc::clone(&sess),
+                    Arc::clone(&turn_context),
+                    Arc::clone(&tracker),
+                    request.clone(),
+                )
+                .await
+            } else if request.tool_name == INPUT_RETRIEVE_TOOL_NAME {
+                retrieval_aware_tool_error(
+                    &request,
+                    format!(
+                        "Retrieval-aware compact already used {RETRIEVAL_AWARE_COMPACT_RETRIEVE_LIMIT} retrieval calls. Preserve any unresolved <<lha-input:...>> markers in the final summary."
+                    ),
+                )
+            } else {
+                retrieval_aware_tool_error(
+                    &request,
+                    format!(
+                        "Retrieval-aware compact only supports the {INPUT_RETRIEVE_TOOL_NAME} tool. Preserve unresolved markers in the final summary."
+                    ),
+                )
+            };
+            let success = tool_result_success(&result);
+            if success && let Some(hash) = retrieve_hash {
+                retrieved_hashes.insert(hash);
+            }
+            let success_label = if success { "true" } else { "false" };
+            let labels = [
+                ("success", success_label),
+                ("strategy", "retrieval_aware"),
+                ("tool_name", request.tool_name.as_str()),
+            ];
+            turn_context.runtime.get_otel_manager().counter(
+                "lha.compact.retrieval_aware.retrieve_calls",
+                1,
+                &labels,
+            );
+            conversation.push(result.to_transcript_item());
+        }
+    }
+
+    Err(CodexErr::Stream(
+        "retrieval-aware compact exceeded its internal follow-up limit".into(),
+        None,
+    ))
+}
+
+async fn handle_retrieval_aware_tool_call(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    tracker: Arc<Mutex<TurnDiffTracker>>,
+    request: ToolCallRequest,
+) -> ToolResultItem {
+    let payload_outputs_custom = matches!(request.payload, ToolCallPayload::TextInput { .. });
+    let payload = match request.payload.clone() {
+        ToolCallPayload::JsonArguments { arguments } => ToolPayload::Function { arguments },
+        ToolCallPayload::TextInput { input } => ToolPayload::Custom { input },
+    };
+    let invocation = ToolInvocation {
+        session: sess,
+        turn: turn_context,
+        tracker,
+        call_id: request.call_id.clone(),
+        tool_name: request.tool_name.clone(),
+        payload: payload.clone(),
+    };
+    match InputRetrieveHandler.handle(invocation).await {
+        Ok(output) => output.into_tool_result(&request.call_id, &request.tool_name, &payload),
+        Err(FunctionCallError::Fatal(message))
+        | Err(FunctionCallError::RespondToModel(message)) => {
+            retrieval_aware_tool_error_with_payload(
+                &request.call_id,
+                &request.tool_name,
+                payload_outputs_custom,
+                message,
+            )
+        }
+        Err(FunctionCallError::MissingLocalShellCallId) => retrieval_aware_tool_error_with_payload(
+            &request.call_id,
+            &request.tool_name,
+            payload_outputs_custom,
+            FunctionCallError::MissingLocalShellCallId.to_string(),
+        ),
+    }
+}
+
+fn retrieval_aware_tool_error(request: &ToolCallRequest, message: String) -> ToolResultItem {
+    let payload_outputs_custom = matches!(request.payload, ToolCallPayload::TextInput { .. });
+    retrieval_aware_tool_error_with_payload(
+        &request.call_id,
+        &request.tool_name,
+        payload_outputs_custom,
+        message,
+    )
+}
+
+fn retrieval_aware_tool_error_with_payload(
+    call_id: &str,
+    tool_name: &str,
+    payload_outputs_custom: bool,
+    message: String,
+) -> ToolResultItem {
+    if payload_outputs_custom {
+        ToolResultItem {
+            call_id: call_id.to_string(),
+            tool_name: tool_name.to_string(),
+            payload: ToolResultPayload::Text { output: message },
+        }
+    } else {
+        ToolResultItem {
+            call_id: call_id.to_string(),
+            tool_name: tool_name.to_string(),
+            payload: ToolResultPayload::Structured {
+                content: message,
+                content_items: None,
+                success: Some(false),
+            },
+        }
+    }
+}
+
+fn tool_result_success(result: &ToolResultItem) -> bool {
+    match &result.payload {
+        ToolResultPayload::Structured { success, .. } => success.unwrap_or(true),
+        ToolResultPayload::Text { .. } => true,
+    }
+}
+
+fn retrieve_hash_from_tool_call(request: &ToolCallRequest) -> Option<String> {
+    let ToolCallPayload::JsonArguments { arguments } = &request.payload else {
+        return None;
+    };
+    serde_json::from_str::<RetrievalAwareRetrieveArgs>(arguments)
+        .ok()
+        .map(|args| args.hash)
+}
+
+fn turn_request_input_slimming_hashes(request: &TurnRequest) -> HashSet<String> {
+    serde_json::to_string(&request.conversation)
+        .map(|text| input_slimming_hashes_from_text(&text))
+        .unwrap_or_default()
+}
+
+fn input_slimming_hashes_from_text(text: &str) -> HashSet<String> {
+    let mut hashes = HashSet::new();
+    let mut remaining = text;
+    while let Some(start) = remaining.find(INPUT_SLIMMING_MARKER_PREFIX) {
+        let after_prefix = &remaining[start + INPUT_SLIMMING_MARKER_PREFIX.len()..];
+        let Some(end) = after_prefix.find(">>") else {
+            break;
+        };
+        let hash = &after_prefix[..end];
+        if hash.len() == 24 && hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            hashes.insert(hash.to_string());
+        }
+        remaining = &after_prefix[end + 2..];
+    }
+    hashes
+}
+
+fn preserve_unresolved_retrieval_markers(
+    mut summary: String,
+    marker_hashes: &HashSet<String>,
+    retrieved_hashes: &HashSet<String>,
+) -> String {
+    let missing = marker_hashes
+        .iter()
+        .filter(|hash| !retrieved_hashes.contains(*hash))
+        .filter(|hash| !summary.contains(&format!("{INPUT_SLIMMING_MARKER_PREFIX}{hash}>>")))
+        .cloned()
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return summary;
+    }
+
+    summary.push_str("\n\nUnresolved retrievable markers:\n");
+    for hash in missing {
+        summary.push_str("- ");
+        summary.push_str(INPUT_SLIMMING_MARKER_PREFIX);
+        summary.push_str(&hash);
+        summary.push_str(">> (original tool output was not retrieved during compaction)\n");
+    }
+    summary
+}
+
+fn unresolved_marker_count(summary: &str, marker_hashes: &HashSet<String>) -> usize {
+    marker_hashes
+        .iter()
+        .filter(|hash| summary.contains(&format!("{INPUT_SLIMMING_MARKER_PREFIX}{hash}>>")))
+        .count()
 }
 
 pub(crate) fn collect_user_messages<T>(items: &[T]) -> Vec<String>
@@ -1471,5 +1998,36 @@ mod tests {
         assert_eq!(history[2..4], proposed_plan_backfill_items("- Step 1\n"));
         assert_eq!(history[4..6], backfilled_update_plan_items(&args));
         assert_eq!(history[6], backfilled_skill_item(skills[0].clone()));
+    }
+
+    #[test]
+    fn preserve_unresolved_retrieval_markers_appends_missing_markers() {
+        let marker_hashes = HashSet::from([
+            "111111111111111111111111".to_string(),
+            "222222222222222222222222".to_string(),
+        ]);
+        let retrieved_hashes = HashSet::from(["111111111111111111111111".to_string()]);
+
+        let summary = preserve_unresolved_retrieval_markers(
+            "Current task and decisions\n- Keep going".to_string(),
+            &marker_hashes,
+            &retrieved_hashes,
+        );
+
+        assert!(summary.contains("Unresolved retrievable markers:"));
+        assert!(summary.contains("<<lha-input:222222222222222222222222>>"));
+        assert!(!summary.contains("<<lha-input:111111111111111111111111>>"));
+    }
+
+    #[test]
+    fn input_slimming_hashes_from_text_extracts_marker_hashes() {
+        let hashes = input_slimming_hashes_from_text(
+            "before <<lha-input:abcdefabcdefabcdefabcdef>> after <<lha-input:not-a-hash>>",
+        );
+
+        assert_eq!(
+            hashes,
+            HashSet::from(["abcdefabcdefabcdefabcdef".to_string()])
+        );
     }
 }

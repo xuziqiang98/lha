@@ -13,7 +13,10 @@ use crate::product::agent::SandboxState;
 use crate::product::agent::buddy_intro::BUDDY_COMPANION_DISABLED_INSTRUCTIONS;
 use crate::product::agent::buddy_intro::buddy_model_instructions;
 use crate::product::agent::compact;
+use crate::product::agent::compact::RetrievalAwareCompactEstimate;
+use crate::product::agent::compact::estimate_retrieval_aware_auto_compact_tokens;
 use crate::product::agent::compact::run_inline_auto_compact_task;
+use crate::product::agent::compact::run_inline_retrieval_aware_auto_compact_task;
 use crate::product::agent::compact::should_use_remote_compact_task;
 use crate::product::agent::compact_remote::run_inline_remote_auto_compact_task;
 use crate::product::agent::connectors;
@@ -3885,7 +3888,10 @@ impl Session {
         }
     }
 
-    async fn persist_input_slimming_entries(&self, entries: Vec<InputSlimmingPersistedEntry>) {
+    pub(crate) async fn persist_input_slimming_entries(
+        &self,
+        entries: Vec<InputSlimmingPersistedEntry>,
+    ) {
         if entries.is_empty() {
             return;
         }
@@ -5530,7 +5536,12 @@ pub(crate) async fn run_turn(
             decision = "turn_start_auto_compact_check",
         );
     }
-    let raw_compaction_tokens = estimate_raw_auto_compact_tokens(&sess, &turn_context).await;
+    let retrieval_aware_active = retrieval_aware_compact_active(sess.as_ref());
+    let raw_compaction_tokens = if retrieval_aware_active {
+        None
+    } else {
+        estimate_raw_auto_compact_tokens(&sess, &turn_context).await
+    };
     let raw_compaction_limit_reached =
         raw_compaction_pressure_compacts(turn_context.as_ref(), raw_compaction_tokens);
     if let Some(status) = turn_context.runtime.dynamic_context_window_status() {
@@ -5546,10 +5557,22 @@ pub(crate) async fn run_turn(
             decision = "turn_start_raw_compaction_check",
         );
     }
-    if !should_defer_auto_compact
+    if retrieval_aware_active {
+        debug!(
+            current_context_pressure = total_usage_tokens,
+            raw_compaction_tokens,
+            decision = "turn_start_retrieval_aware_preflight_deferred",
+        );
+    } else if !should_defer_auto_compact
         && (total_usage_tokens >= compact_limit || raw_compaction_limit_reached)
     {
-        run_auto_compact(&sess, &turn_context).await;
+        run_auto_compact_with_strategy(
+            &sess,
+            &turn_context,
+            AutoCompactStrategy::Raw,
+            AutoCompactTrigger::TurnStart,
+        )
+        .await;
     }
 
     let skills_outcome = Some(
@@ -5761,9 +5784,70 @@ pub(crate) async fn run_turn(
                     );
                 }
 
-                // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                if needs_follow_up && (token_limit_reached || raw_compaction_limit_reached) {
-                    run_auto_compact(&sess, &turn_context).await;
+                let compact_strategy = if needs_follow_up && retrieval_aware_compact_active(&sess) {
+                    let next_input = sess.clone_history().await.for_prompt();
+                    let measure_selection = SamplingRequestToolSelection {
+                        explicit_app_paths: &explicit_app_paths,
+                        skill_name_counts_lower: &skill_name_counts_lower,
+                        allow_preflight_compact: false,
+                    };
+                    match prepare_sampling_request(
+                        sess.as_ref(),
+                        turn_context.as_ref(),
+                        next_input,
+                        &measure_selection,
+                        SlimmingBuildMode::MeasureOnly,
+                        cancellation_token.child_token(),
+                    )
+                    .await
+                    {
+                        Ok(measured) => {
+                            let send_limit_reached = send_pressure_reaches_auto_compact_limit(
+                                turn_context.as_ref(),
+                                measured.request_input_tokens,
+                            );
+                            debug!(
+                                measured_send_pressure = measured.request_input_tokens,
+                                raw_compaction_tokens,
+                                send_limit_reached,
+                                raw_compaction_limit_reached,
+                                decision = "post_response_retrieval_aware_compact_check",
+                            );
+                            if send_limit_reached || raw_compaction_limit_reached {
+                                let strategy = select_auto_compact_strategy(
+                                    sess.as_ref(),
+                                    turn_context.as_ref(),
+                                    AutoCompactTrigger::PostResponseFollowUp,
+                                    measured.request_input_tokens,
+                                    raw_compaction_tokens,
+                                )
+                                .await;
+                                (strategy != AutoCompactStrategy::DeferRawPressureOnly)
+                                    .then_some(strategy)
+                            } else {
+                                None
+                            }
+                        }
+                        Err(err) => {
+                            warn!(
+                                "failed to measure retrieval-aware follow-up pressure; falling back to raw compact check: {err:?}"
+                            );
+                            (token_limit_reached || raw_compaction_limit_reached)
+                                .then_some(AutoCompactStrategy::Raw)
+                        }
+                    }
+                } else {
+                    (needs_follow_up && (token_limit_reached || raw_compaction_limit_reached))
+                        .then_some(AutoCompactStrategy::Raw)
+                };
+                if let Some(strategy) = compact_strategy {
+                    run_auto_compact_with_strategy(
+                        &sess,
+                        &turn_context,
+                        strategy,
+                        AutoCompactTrigger::PostResponseFollowUp,
+                    )
+                    .await;
                     continue;
                 }
 
@@ -5814,7 +5898,28 @@ pub(crate) async fn run_turn(
                     );
                 }
                 if probe_failure.is_some_and(|failure| failure.should_retry) {
-                    run_auto_compact(&sess, &turn_context).await;
+                    let raw_compaction_tokens =
+                        estimate_raw_auto_compact_tokens(sess.as_ref(), turn_context.as_ref())
+                            .await;
+                    let strategy = select_auto_compact_strategy(
+                        sess.as_ref(),
+                        turn_context.as_ref(),
+                        AutoCompactTrigger::ProviderContextWindowExceeded,
+                        request_input_tokens,
+                        raw_compaction_tokens,
+                    )
+                    .await;
+                    let strategy = match strategy {
+                        AutoCompactStrategy::DeferRawPressureOnly => AutoCompactStrategy::Raw,
+                        AutoCompactStrategy::Raw | AutoCompactStrategy::RetrievalAware => strategy,
+                    };
+                    run_auto_compact_with_strategy(
+                        &sess,
+                        &turn_context,
+                        strategy,
+                        AutoCompactTrigger::ProviderContextWindowExceeded,
+                    )
+                    .await;
                     continue;
                 }
 
@@ -5825,9 +5930,15 @@ pub(crate) async fn run_turn(
                 sess.send_event(&turn_context, event).await;
                 break;
             }
-            Err(SamplingRequestError::PreflightCompactRequired) => {
+            Err(SamplingRequestError::PreflightCompactRequired { strategy }) => {
                 preflight_compaction_attempted = true;
-                run_auto_compact(&sess, &turn_context).await;
+                run_auto_compact_with_strategy(
+                    &sess,
+                    &turn_context,
+                    strategy,
+                    AutoCompactTrigger::Preflight,
+                )
+                .await;
                 continue;
             }
             Err(SamplingRequestError::LHA(CodexErr::TurnAborted)) => {
@@ -5886,6 +5997,72 @@ struct PreflightCompactPressure {
     raw_compaction_tokens: Option<i64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutoCompactTrigger {
+    TurnStart,
+    Preflight,
+    PostResponseFollowUp,
+    ProviderContextWindowExceeded,
+}
+
+impl AutoCompactTrigger {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::TurnStart => "turn_start",
+            Self::Preflight => "preflight",
+            Self::PostResponseFollowUp => "post_response_follow_up",
+            Self::ProviderContextWindowExceeded => "provider_context_window_exceeded",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutoCompactStrategy {
+    Raw,
+    RetrievalAware,
+    DeferRawPressureOnly,
+}
+
+impl AutoCompactStrategy {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Raw => "raw",
+            Self::RetrievalAware => "retrieval_aware",
+            Self::DeferRawPressureOnly => "defer_raw_pressure_only",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SlimmingBuildMode {
+    MeasureOnly,
+    ApplyAndPersist,
+}
+
+impl SlimmingBuildMode {
+    fn input_slimming_mode(self) -> InputSlimmingMode {
+        match self {
+            Self::MeasureOnly => InputSlimmingMode::ApplyPreview,
+            Self::ApplyAndPersist => InputSlimmingMode::Apply,
+        }
+    }
+
+    fn persists(self) -> bool {
+        match self {
+            Self::MeasureOnly => false,
+            Self::ApplyAndPersist => true,
+        }
+    }
+}
+
+struct PreparedSamplingRequest {
+    prompt: TurnRequest,
+    router: ToolRouter,
+    request_input_tokens: Option<i64>,
+    input_slimming_activation: InputSlimmingActivation,
+    requires_retrieval_tool: bool,
+}
+
 fn effective_prompt_pressure(
     request_input_tokens: Option<i64>,
     response_total_tokens: Option<i64>,
@@ -5941,6 +6118,25 @@ fn request_pressure_compacts(
     })
 }
 
+fn send_pressure_reaches_auto_compact_limit(
+    turn_context: &TurnContext,
+    send_pressure: Option<i64>,
+) -> bool {
+    send_pressure.is_some_and(|tokens| {
+        if turn_context
+            .runtime
+            .dynamic_context_window_auto_compact_limit()
+            .is_some()
+        {
+            return turn_context
+                .runtime
+                .should_preflight_dynamic_context_window_compact(tokens);
+        }
+
+        tokens >= auto_compact_limit(turn_context)
+    })
+}
+
 fn should_preflight_compact(
     turn_context: &TurnContext,
     pressure: PreflightCompactPressure,
@@ -5966,6 +6162,142 @@ fn should_preflight_compact(
         );
     }
     decision
+}
+
+fn retrieval_aware_compact_active(sess: &Session) -> bool {
+    sess.enabled(Feature::RetrievalAwareCompact)
+        && !matches!(
+            resolve_input_slimming_scope(&sess.features()),
+            InputSlimmingActivation::Disabled
+        )
+}
+
+fn record_retrieval_aware_counter(
+    turn_context: &TurnContext,
+    name: &'static str,
+    trigger: AutoCompactTrigger,
+    extra: &[(&'static str, &'static str)],
+) {
+    let model = turn_context.runtime.get_model();
+    let mut labels = Vec::with_capacity(extra.len() + 2);
+    labels.push(("trigger", trigger.as_str()));
+    labels.push(("model", model.as_str()));
+    labels.extend(extra.iter().copied());
+    turn_context
+        .runtime
+        .get_otel_manager()
+        .counter(name, 1, &labels);
+}
+
+async fn select_auto_compact_strategy(
+    sess: &Session,
+    turn_context: &TurnContext,
+    trigger: AutoCompactTrigger,
+    send_pressure: Option<i64>,
+    raw_compaction_tokens: Option<i64>,
+) -> AutoCompactStrategy {
+    let send_limit_reached = send_pressure_reaches_auto_compact_limit(turn_context, send_pressure);
+    let raw_limit_reached = raw_compaction_pressure_compacts(turn_context, raw_compaction_tokens);
+    if !retrieval_aware_compact_active(sess) {
+        return AutoCompactStrategy::Raw;
+    }
+
+    if !send_limit_reached && raw_limit_reached {
+        debug!(
+            send_pressure,
+            raw_compact_pressure = raw_compaction_tokens,
+            auto_compact_trigger = trigger.as_str(),
+            auto_compact_strategy = AutoCompactStrategy::DeferRawPressureOnly.as_str(),
+            decision = "retrieval_aware_defer_raw_compaction_pressure",
+        );
+        record_retrieval_aware_counter(
+            turn_context,
+            "lha.compact.retrieval_aware.deferred_raw_pressure",
+            trigger,
+            &[],
+        );
+        return AutoCompactStrategy::DeferRawPressureOnly;
+    }
+
+    if !send_limit_reached || !raw_limit_reached {
+        return AutoCompactStrategy::Raw;
+    }
+
+    let estimate = estimate_retrieval_aware_auto_compact_tokens(sess, turn_context).await;
+    let retrieval_compaction_tokens = estimate.input_tokens;
+    let retrieval_fits = estimate.contains_marker
+        && retrieval_compaction_tokens
+            .is_some_and(|tokens| !raw_compaction_pressure_compacts(turn_context, Some(tokens)));
+    debug!(
+        send_pressure,
+        raw_compact_pressure = raw_compaction_tokens,
+        retrieval_compact_pressure = retrieval_compaction_tokens,
+        retrieval_contains_marker = estimate.contains_marker,
+        retrieval_slimmed_count = estimate.slimmed_count,
+        auto_compact_trigger = trigger.as_str(),
+        auto_compact_strategy = if retrieval_fits {
+            AutoCompactStrategy::RetrievalAware.as_str()
+        } else {
+            AutoCompactStrategy::Raw.as_str()
+        },
+        decision = if retrieval_fits {
+            "retrieval_aware_compact"
+        } else {
+            "retrieval_aware_fallback_raw"
+        },
+    );
+
+    if retrieval_fits {
+        AutoCompactStrategy::RetrievalAware
+    } else {
+        let reason = retrieval_aware_fallback_reason(estimate);
+        record_retrieval_aware_counter(
+            turn_context,
+            "lha.compact.retrieval_aware.fallback_raw",
+            trigger,
+            &[("reason", reason)],
+        );
+        AutoCompactStrategy::Raw
+    }
+}
+
+fn retrieval_aware_fallback_reason(estimate: RetrievalAwareCompactEstimate) -> &'static str {
+    if !estimate.contains_marker {
+        "no_markers_or_candidates"
+    } else if estimate.input_tokens.is_none() {
+        "missing_token_estimate"
+    } else {
+        "retrieval_prompt_too_large"
+    }
+}
+
+async fn preflight_auto_compact_strategy(
+    sess: &Session,
+    turn_context: &TurnContext,
+    pressure: PreflightCompactPressure,
+) -> Option<AutoCompactStrategy> {
+    if !retrieval_aware_compact_active(sess) {
+        return should_preflight_compact(turn_context, pressure)
+            .then_some(AutoCompactStrategy::Raw);
+    }
+
+    let request_should_compact =
+        send_pressure_reaches_auto_compact_limit(turn_context, pressure.request_input_tokens);
+    let raw_should_compact =
+        raw_compaction_pressure_compacts(turn_context, pressure.raw_compaction_tokens);
+    if !request_should_compact && !raw_should_compact {
+        return None;
+    }
+
+    let strategy = select_auto_compact_strategy(
+        sess,
+        turn_context,
+        AutoCompactTrigger::Preflight,
+        pressure.request_input_tokens,
+        pressure.raw_compaction_tokens,
+    )
+    .await;
+    (strategy != AutoCompactStrategy::DeferRawPressureOnly).then_some(strategy)
 }
 
 async fn estimate_raw_auto_compact_tokens(
@@ -5995,7 +6327,45 @@ async fn estimate_raw_auto_compact_tokens(
         .or(fallback_tokens)
 }
 
-async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
+async fn run_auto_compact_with_strategy(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    strategy: AutoCompactStrategy,
+    trigger: AutoCompactTrigger,
+) {
+    debug!(
+        auto_compact_trigger = trigger.as_str(),
+        auto_compact_strategy = strategy.as_str(),
+        decision = "run_auto_compact",
+    );
+    if strategy == AutoCompactStrategy::RetrievalAware {
+        let runtime_capabilities = turn_context.runtime.runtime_capabilities();
+        let remote_compaction_bypassed =
+            should_use_remote_compact_task(sess.as_ref(), &runtime_capabilities);
+        record_retrieval_aware_counter(
+            turn_context.as_ref(),
+            "lha.compact.retrieval_aware.used",
+            trigger,
+            &[(
+                "remote_compaction_bypassed",
+                if remote_compaction_bypassed {
+                    "true"
+                } else {
+                    "false"
+                },
+            )],
+        );
+        if remote_compaction_bypassed {
+            debug!(
+                trigger = trigger.as_str(),
+                decision = "retrieval_aware_bypass_remote_compaction",
+            );
+        }
+        run_inline_retrieval_aware_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context))
+            .await;
+        return;
+    }
+
     let runtime_capabilities = turn_context.runtime.runtime_capabilities();
     if should_use_remote_compact_task(sess.as_ref(), &runtime_capabilities) {
         run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await;
@@ -6193,6 +6563,92 @@ async fn run_sampling_request(
     tool_selection: SamplingRequestToolSelection<'_>,
     cancellation_token: CancellationToken,
 ) -> Result<SamplingRequestResult, SamplingRequestError> {
+    let raw_compaction_tokens = if tool_selection.allow_preflight_compact {
+        estimate_raw_auto_compact_tokens(sess.as_ref(), turn_context.as_ref()).await
+    } else {
+        None
+    };
+    if tool_selection.allow_preflight_compact {
+        let measured = prepare_sampling_request(
+            sess.as_ref(),
+            turn_context.as_ref(),
+            input.clone(),
+            &tool_selection,
+            SlimmingBuildMode::MeasureOnly,
+            cancellation_token.child_token(),
+        )
+        .await?;
+        if let Some(strategy) = preflight_auto_compact_strategy(
+            sess.as_ref(),
+            turn_context.as_ref(),
+            PreflightCompactPressure {
+                request_input_tokens: measured.request_input_tokens,
+                raw_compaction_tokens,
+            },
+        )
+        .await
+        {
+            return Err(SamplingRequestError::PreflightCompactRequired { strategy });
+        }
+    }
+
+    let prepared = prepare_sampling_request(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        input,
+        &tool_selection,
+        SlimmingBuildMode::ApplyAndPersist,
+        cancellation_token.child_token(),
+    )
+    .await?;
+    let PreparedSamplingRequest {
+        prompt,
+        router,
+        request_input_tokens,
+        input_slimming_activation,
+        requires_retrieval_tool,
+    } = prepared;
+    debug!(
+        input_slimming_activation = ?input_slimming_activation,
+        requires_retrieval_tool,
+        request_input_tokens,
+        decision = "prepared_sampling_request",
+    );
+    let router = Arc::new(router);
+
+    match try_run_sampling_request(
+        Arc::clone(&router),
+        Arc::clone(&sess),
+        Arc::clone(&turn_context),
+        client_session,
+        Arc::clone(&turn_diff_tracker),
+        &prompt,
+        cancellation_token.child_token(),
+    )
+    .await
+    {
+        Ok(mut output) => {
+            output.request_input_tokens = request_input_tokens;
+            Ok(output)
+        }
+        Err(CodexErr::ContextWindowExceeded) => Err(SamplingRequestError::ContextWindowExceeded {
+            request_input_tokens,
+        }),
+        Err(CodexErr::UsageLimitReached(e)) => {
+            Err(SamplingRequestError::LHA(CodexErr::UsageLimitReached(e)))
+        }
+        Err(err) => Err(SamplingRequestError::LHA(err)),
+    }
+}
+
+async fn prepare_sampling_request(
+    sess: &Session,
+    turn_context: &TurnContext,
+    input: Vec<TranscriptItem>,
+    tool_selection: &SamplingRequestToolSelection<'_>,
+    mode: SlimmingBuildMode,
+    cancellation_token: CancellationToken,
+) -> Result<PreparedSamplingRequest, SamplingRequestError> {
     let mut mcp_tools = sess
         .services
         .mcp_connection_manager
@@ -6251,7 +6707,7 @@ async fn run_sampling_request(
     let history_input_tokens = sess
         .clone_history()
         .await
-        .estimate_token_count(turn_context.as_ref())
+        .estimate_token_count(turn_context)
         .map(|tokens| tokens.max(0));
     let mut slimming_fallback_tokens = None;
     let input_slimming_activation = resolve_input_slimming_scope(&sess.features());
@@ -6259,13 +6715,15 @@ async fn run_sampling_request(
         InputSlimmingActivation::Disabled => None,
         InputSlimmingActivation::Scope(scope) => Some(scope),
         InputSlimmingActivation::Conflict => {
-            sess.send_event(
-                turn_context.as_ref(),
-                EventMsg::Warning(WarningEvent {
-                    message: INPUT_SLIMMING_CONFLICT_WARNING.to_string(),
-                }),
-            )
-            .await;
+            if mode.persists() {
+                sess.send_event(
+                    turn_context,
+                    EventMsg::Warning(WarningEvent {
+                        message: INPUT_SLIMMING_CONFLICT_WARNING.to_string(),
+                    }),
+                )
+                .await;
+            }
             None
         }
     };
@@ -6286,7 +6744,7 @@ async fn run_sampling_request(
                     store: &sess.services.input_slimming_store,
                     turn_id: turn_context.sub_id.as_str(),
                     estimate_request_tokens: Some(&estimate_request_tokens),
-                    mode: InputSlimmingMode::Apply,
+                    mode: mode.input_slimming_mode(),
                     scope: input_slimming_scope,
                     wire_api,
                     context_window: turn_context.runtime.get_model_context_window(),
@@ -6296,23 +6754,25 @@ async fn run_sampling_request(
             .await
         {
             Ok(mut outcome) => {
-                InputSlimmer::emit_metrics(
-                    &outcome,
-                    &turn_context.runtime.get_otel_manager(),
-                    model.as_str(),
-                    input_slimming_scope,
-                    wire_api,
-                );
-                turn_context.runtime.get_otel_manager().histogram(
-                    "lha.input_slimming.latency_ms",
-                    i64::try_from(slimming_start.elapsed().as_millis()).unwrap_or(i64::MAX),
-                    &[
-                        ("model", model.as_str()),
-                        ("feature_enabled", "true"),
-                        ("scope", input_slimming_scope.as_str()),
-                        ("wire_api", wire_api.as_str()),
-                    ],
-                );
+                if mode.persists() {
+                    InputSlimmer::emit_metrics(
+                        &outcome,
+                        &turn_context.runtime.get_otel_manager(),
+                        model.as_str(),
+                        input_slimming_scope,
+                        wire_api,
+                    );
+                    turn_context.runtime.get_otel_manager().histogram(
+                        "lha.input_slimming.latency_ms",
+                        i64::try_from(slimming_start.elapsed().as_millis()).unwrap_or(i64::MAX),
+                        &[
+                            ("model", model.as_str()),
+                            ("feature_enabled", "true"),
+                            ("scope", input_slimming_scope.as_str()),
+                            ("wire_api", wire_api.as_str()),
+                        ],
+                    );
+                }
                 if outcome.approx_tokens_saved > 0 {
                     slimming_fallback_tokens = history_input_tokens.map(|tokens| {
                         tokens.saturating_sub(
@@ -6320,9 +6780,12 @@ async fn run_sampling_request(
                         )
                     });
                 }
-                if outcome.metrics.approx_tokens_saved > 0 && outcome.metrics.slimmed > 0 {
+                if mode.persists()
+                    && outcome.metrics.approx_tokens_saved > 0
+                    && outcome.metrics.slimmed > 0
+                {
                     sess.record_input_slimming(
-                        turn_context.as_ref(),
+                        turn_context,
                         input_slimming_scope,
                         outcome.context_stats_candidates.as_slice(),
                     )
@@ -6341,16 +6804,18 @@ async fn run_sampling_request(
                 }
             }
             Err(err) => {
-                turn_context.runtime.get_otel_manager().counter(
-                    "lha.input_slimming.fail_open",
-                    1,
-                    &[
-                        ("model", model.as_str()),
-                        ("feature_enabled", "true"),
-                        ("scope", input_slimming_scope.as_str()),
-                        ("wire_api", wire_api.as_str()),
-                    ],
-                );
+                if mode.persists() {
+                    turn_context.runtime.get_otel_manager().counter(
+                        "lha.input_slimming.fail_open",
+                        1,
+                        &[
+                            ("model", model.as_str()),
+                            ("feature_enabled", "true"),
+                            ("scope", input_slimming_scope.as_str()),
+                            ("wire_api", wire_api.as_str()),
+                        ],
+                    );
+                }
                 warn!("input slimming failed open: {err}");
             }
         }
@@ -6367,49 +6832,14 @@ async fn run_sampling_request(
         .estimated_input_tokens_for_turn_request(&prompt)
         .or(slimming_fallback_tokens)
         .or(history_input_tokens);
-    let raw_compaction_tokens = if tool_selection.allow_preflight_compact {
-        estimate_raw_auto_compact_tokens(sess.as_ref(), turn_context.as_ref()).await
-    } else {
-        None
-    };
-
-    if tool_selection.allow_preflight_compact
-        && should_preflight_compact(
-            turn_context.as_ref(),
-            PreflightCompactPressure {
-                request_input_tokens,
-                raw_compaction_tokens,
-            },
-        )
-    {
-        return Err(SamplingRequestError::PreflightCompactRequired);
-    }
-
-    let router = Arc::new(router);
-
-    match try_run_sampling_request(
-        Arc::clone(&router),
-        Arc::clone(&sess),
-        Arc::clone(&turn_context),
-        client_session,
-        Arc::clone(&turn_diff_tracker),
-        &prompt,
-        cancellation_token.child_token(),
-    )
-    .await
-    {
-        Ok(mut output) => {
-            output.request_input_tokens = request_input_tokens;
-            Ok(output)
-        }
-        Err(CodexErr::ContextWindowExceeded) => Err(SamplingRequestError::ContextWindowExceeded {
-            request_input_tokens,
-        }),
-        Err(CodexErr::UsageLimitReached(e)) => {
-            Err(SamplingRequestError::LHA(CodexErr::UsageLimitReached(e)))
-        }
-        Err(err) => Err(SamplingRequestError::LHA(err)),
-    }
+    let requires_retrieval_tool = router.has_tool(INPUT_RETRIEVE_TOOL_NAME);
+    Ok(PreparedSamplingRequest {
+        prompt,
+        router,
+        request_input_tokens,
+        input_slimming_activation,
+        requires_retrieval_tool,
+    })
 }
 
 #[derive(Debug)]
@@ -6417,7 +6847,9 @@ enum SamplingRequestError {
     ContextWindowExceeded {
         request_input_tokens: Option<i64>,
     },
-    PreflightCompactRequired,
+    PreflightCompactRequired {
+        strategy: AutoCompactStrategy,
+    },
     // LHA is the product acronym for Long-Horizon Agent.
     #[allow(clippy::upper_case_acronyms)]
     LHA(CodexErr),

@@ -35,6 +35,8 @@ use lha_llm::RuntimeEndpoint;
 use lha_llm::ToolCallPayload;
 use lha_llm::ToolResultPayload;
 use lha_llm::built_in_runtime_endpoints;
+use sha2::Digest as _;
+use sha2::Sha256;
 use std::collections::VecDeque;
 
 use crate::test_support::core::responses::ev_assistant_message;
@@ -205,6 +207,33 @@ fn non_openai_model_provider(server: &MockServer) -> RuntimeEndpoint {
     provider.name = "OpenAI (test)".into();
     provider.base_url = Some(format!("{}/v1", server.uri()));
     provider
+}
+
+fn openai_model_provider(server: &MockServer) -> RuntimeEndpoint {
+    let mut provider = built_in_runtime_endpoints()["openai"].clone();
+    provider.base_url = Some(format!("{}/v1", server.uri()));
+    provider
+}
+
+fn input_slimming_hash_for_test(text: &str) -> String {
+    let digest = Sha256::digest(text.as_bytes());
+    let hex = format!("{digest:x}");
+    hex[..24].to_string()
+}
+
+fn read_file_fixture_contents(prefix: &str, line_count: usize) -> String {
+    let mut contents = String::new();
+    for line in 1..=line_count {
+        contents.push_str(&format!("{prefix}-line-{line}\n"));
+    }
+    contents
+}
+
+fn read_file_tool_output(prefix: &str, line_count: usize) -> String {
+    (1..=line_count)
+        .map(|line| format!("L{line}: {prefix}-line-{line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 async fn switch_to_programmer_for_compact_test(test: &TestCodex) {
@@ -3714,6 +3743,418 @@ async fn input_slimming_raw_history_pressure_triggers_auto_compact() {
     assert!(
         !follow_up_body.contains("raw-sentinel-output-2-line-2500"),
         "post-compact follow-up should drop the raw tool output"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retrieval_aware_compact_defers_raw_pressure_when_slimmed_send_fits() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let first_call_id = "retrieval-aware-output-1";
+    let second_call_id = "retrieval-aware-output-2";
+    let first_args = json!({
+        "command": "for i in $(seq 1 1500); do echo retrieval-aware-sentinel-1-line-$i; done",
+        "timeout_ms": 5_000,
+    })
+    .to_string();
+    let second_args = json!({
+        "command": "for i in $(seq 1 5000); do echo retrieval-aware-sentinel-2-line-$i; done",
+        "timeout_ms": 5_000,
+    })
+    .to_string();
+
+    let first_tool_turn = sse(vec![
+        ev_function_call(first_call_id, "shell_command", &first_args),
+        ev_completed_with_tokens("r1", 1_000),
+    ]);
+    let first_follow_up = sse(vec![
+        ev_assistant_message("m1", "first retrieval-aware output recorded"),
+        ev_completed_with_tokens("r2", 1_000),
+    ]);
+    let second_tool_turn = sse(vec![
+        ev_function_call(second_call_id, "shell_command", &second_args),
+        ev_completed_with_tokens("r3", 1_000),
+    ]);
+    let final_follow_up = sse(vec![
+        ev_assistant_message("m2", FINAL_REPLY),
+        ev_completed_with_tokens("r4", 10),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            first_tool_turn,
+            first_follow_up,
+            second_tool_turn,
+            final_follow_up,
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_model("gpt-5.1")
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.features.enable(Feature::InputSlimmingLiveZone);
+            config.features.enable(Feature::RetrievalAwareCompact);
+            config.tool_output_token_limit = Some(200_000);
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(50_000);
+        });
+    let test = builder.build(&server).await.unwrap();
+
+    test.submit_turn_with_policy(
+        "make the first retrieval-aware output",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await
+    .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.submit_turn_with_policy(
+        "make the second retrieval-aware output",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await
+    .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        4,
+        "expected two tool turns and their follow-ups, with no auto compact request"
+    );
+    assert!(
+        requests.iter().all(|request| !body_contains_text(
+            &request.body_json().to_string(),
+            SUMMARIZATION_PROMPT
+        )),
+        "retrieval-aware compact should defer raw pressure instead of compacting"
+    );
+
+    let final_body = requests[3].body_json().to_string();
+    assert!(
+        final_body.contains("<<lha-input:"),
+        "live-zone slimming should run before the follow-up request"
+    );
+    assert!(
+        final_body.contains("lha_input_retrieve"),
+        "slimmed follow-up should keep the retrieval tool available"
+    );
+    assert!(
+        !final_body.contains("retrieval-aware-sentinel-2-line-5000"),
+        "slimmed follow-up should not send the full live-zone output"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retrieval_aware_compact_uses_slimmed_compact_prompt_and_preserves_markers() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let first_call_id = "retrieval-aware-compact-output-1";
+    let second_call_id = "retrieval-aware-compact-output-2";
+    let first_args = json!({
+        "command": "for i in $(seq 1 1500); do echo retrieval-aware-compact-sentinel-1-line-$i; done",
+        "timeout_ms": 5_000,
+    })
+    .to_string();
+    let second_args = json!({
+        "command": "for i in $(seq 1 5000); do echo retrieval-aware-compact-sentinel-2-line-$i; done",
+        "timeout_ms": 5_000,
+    })
+    .to_string();
+
+    let first_tool_turn = sse(vec![
+        ev_function_call(first_call_id, "shell_command", &first_args),
+        ev_completed_with_tokens("r1", 1_000),
+    ]);
+    let first_follow_up = sse(vec![
+        ev_assistant_message("m1", "first retrieval-aware compact output recorded"),
+        ev_completed_with_tokens("r2", 1_000),
+    ]);
+    let second_tool_turn = sse(vec![
+        ev_function_call(second_call_id, "shell_command", &second_args),
+        ev_completed_with_tokens("r3", 1_000),
+    ]);
+    let compact_summary = "Current task and decisions\n- Compact with unresolved evidence.";
+    let retrieval_aware_compact_turn = sse(vec![
+        ev_assistant_message("m2", compact_summary),
+        ev_completed_with_tokens("r4", 10),
+    ]);
+    let post_compact_follow_up = sse(vec![
+        ev_assistant_message("m3", FINAL_REPLY),
+        ev_completed_with_tokens("r5", 10),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            first_tool_turn,
+            first_follow_up,
+            second_tool_turn,
+            retrieval_aware_compact_turn,
+            post_compact_follow_up,
+        ],
+    )
+    .await;
+
+    let model_provider = openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_model("gpt-5.1")
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.features.enable(Feature::InputSlimmingLiveZone);
+            config.features.enable(Feature::RetrievalAwareCompact);
+            config.features.enable(Feature::RemoteCompaction);
+            config.tool_output_token_limit = Some(200_000);
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(20_000);
+        });
+    let test = builder.build(&server).await.unwrap();
+
+    test.submit_turn_with_policy(
+        "make retrieval-aware compact output one",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await
+    .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.submit_turn_with_policy(
+        "make retrieval-aware compact output two",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await
+    .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        5,
+        "expected retrieval-aware compact between the second tool turn and final follow-up"
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.path() != "/v1/responses/compact"),
+        "retrieval-aware compact should use the local tool-capable compact path"
+    );
+    let all_paths = server
+        .received_requests()
+        .await
+        .expect("mock server should capture requests")
+        .into_iter()
+        .map(|request| request.url.path().to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        !all_paths.iter().any(|path| path == "/v1/responses/compact"),
+        "retrieval-aware compact should bypass remote compaction"
+    );
+
+    let compact_body = requests[3].body_json();
+    let compact_body_text = compact_body.to_string();
+    assert!(
+        body_contains_text(&compact_body_text, SUMMARIZATION_PROMPT),
+        "retrieval-aware compact should include the summarization prompt"
+    );
+    assert!(
+        compact_body_text.contains("<<lha-input:"),
+        "retrieval-aware compact should use input-slimmed replacements"
+    );
+    assert!(
+        compact_body_text.contains("lha_input_retrieve"),
+        "retrieval-aware compact should expose the retrieve tool"
+    );
+    assert!(
+        !compact_body_text.contains("retrieval-aware-compact-sentinel-2-line-5000"),
+        "retrieval-aware compact should not send the full raw tool output"
+    );
+    let tools = compact_body["tools"]
+        .as_array()
+        .expect("retrieval-aware compact tools");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(
+        tools[0].get("name").and_then(|value| value.as_str()),
+        Some("lha_input_retrieve")
+    );
+
+    let follow_up_body = requests[4].body_json().to_string();
+    assert!(
+        body_contains_text(&follow_up_body, compact_summary),
+        "post-compact follow-up should include the compact summary"
+    );
+    assert!(
+        follow_up_body.contains("Unresolved retrievable markers:"),
+        "unretrieved markers should be preserved in the compacted summary"
+    );
+    assert!(
+        follow_up_body.contains("<<lha-input:"),
+        "post-compact follow-up should keep unresolved markers retrievable"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retrieval_aware_compact_executes_retrieve_tool() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_model("test-gpt-5")
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.features.enable(Feature::InputSlimmingLiveZone);
+            config.features.enable(Feature::RetrievalAwareCompact);
+            config.tool_output_token_limit = Some(200_000);
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(20_000);
+        });
+    let test = builder.build(&server).await.unwrap();
+
+    let first_prefix = "retrieval-aware-read-sentinel-1";
+    let second_prefix = "retrieval-aware-read-sentinel-2";
+    let first_line_count = 1_500;
+    let second_line_count = 5_000;
+    let first_file = test.cwd.path().join("retrieval-aware-read-1.txt");
+    let second_file = test.cwd.path().join("retrieval-aware-read-2.txt");
+    fs::write(
+        &first_file,
+        read_file_fixture_contents(first_prefix, first_line_count),
+    )
+    .unwrap();
+    fs::write(
+        &second_file,
+        read_file_fixture_contents(second_prefix, second_line_count),
+    )
+    .unwrap();
+
+    let first_call_id = "retrieval-aware-read-output-1";
+    let second_call_id = "retrieval-aware-read-output-2";
+    let retrieve_call_id = "retrieval-aware-compact-retrieve-call";
+    let first_args = json!({
+        "file_path": first_file.to_string_lossy(),
+        "offset": 1,
+        "limit": first_line_count,
+    })
+    .to_string();
+    let second_args = json!({
+        "file_path": second_file.to_string_lossy(),
+        "offset": 1,
+        "limit": second_line_count,
+    })
+    .to_string();
+    let second_output = read_file_tool_output(second_prefix, second_line_count);
+    let second_hash = input_slimming_hash_for_test(&second_output);
+    let retrieved_sentinel = format!("{second_prefix}-line-{second_line_count}");
+    let retrieve_args = json!({
+        "hash": second_hash,
+        "query": retrieved_sentinel,
+    })
+    .to_string();
+
+    let first_read_turn = sse(vec![
+        ev_function_call(first_call_id, "read_file", &first_args),
+        ev_completed_with_tokens("r1", 1_000),
+    ]);
+    let first_follow_up = sse(vec![
+        ev_assistant_message("m1", "first deterministic read output recorded"),
+        ev_completed_with_tokens("r2", 1_000),
+    ]);
+    let second_read_turn = sse(vec![
+        ev_function_call(second_call_id, "read_file", &second_args),
+        ev_completed_with_tokens("r3", 1_000),
+    ]);
+    let retrieval_call_turn = sse(vec![
+        ev_function_call(retrieve_call_id, "lha_input_retrieve", &retrieve_args),
+        ev_completed_with_tokens("r4", 10),
+    ]);
+    let retrieved_summary = format!(
+        "Current task and decisions\n- Retrieved deterministic evidence.\n\nEvidence retrieved\n- {retrieved_sentinel}\n\nUnresolved retrievable markers\n- None relevant.\n\nNext steps\n- Continue."
+    );
+    let retrieved_summary_turn = sse(vec![
+        ev_assistant_message("m2", &retrieved_summary),
+        ev_completed_with_tokens("r5", 10),
+    ]);
+    let post_compact_follow_up = sse(vec![
+        ev_assistant_message("m3", FINAL_REPLY),
+        ev_completed_with_tokens("r6", 10),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            first_read_turn,
+            first_follow_up,
+            second_read_turn,
+            retrieval_call_turn,
+            retrieved_summary_turn,
+            post_compact_follow_up,
+        ],
+    )
+    .await;
+
+    test.submit_turn("read the first deterministic retrieval file")
+        .await
+        .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.submit_turn("read the second deterministic retrieval file")
+        .await
+        .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        6,
+        "expected compact retrieval call, compact follow-up, and post-compact follow-up"
+    );
+
+    let compact_body = requests[3].body_json();
+    let compact_body_text = compact_body.to_string();
+    assert!(
+        compact_body_text.contains("<<lha-input:"),
+        "retrieval-aware compact should send slimmed markers before retrieving"
+    );
+    assert!(
+        !compact_body_text.contains(&format!("L{second_line_count}: {retrieved_sentinel}")),
+        "retrieval-aware compact should not send the raw matching line before retrieval"
+    );
+    let tools = compact_body["tools"]
+        .as_array()
+        .expect("retrieval-aware compact tools");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(
+        tools[0].get("name").and_then(|value| value.as_str()),
+        Some("lha_input_retrieve")
+    );
+
+    let (retrieved_output, success) = requests[4]
+        .function_call_output_content_and_success(retrieve_call_id)
+        .expect("retrieval tool output should be sent back to the compact model");
+    assert_eq!(success, Some(true));
+    assert!(
+        retrieved_output
+            .as_deref()
+            .is_some_and(|output| output.contains(&retrieved_sentinel)),
+        "retrieval tool output should include the requested original line"
+    );
+
+    let follow_up_body = requests[5].body_json().to_string();
+    assert!(
+        body_contains_text(&follow_up_body, &retrieved_summary),
+        "post-compact follow-up should use the retrieved compact summary"
+    );
+    assert!(
+        !follow_up_body.contains(retrieve_call_id),
+        "transient retrieve call should not enter replacement history"
+    );
+    assert!(
+        !follow_up_body.contains("Original input for <<lha-input:"),
+        "transient retrieve output should not enter replacement history"
     );
 }
 

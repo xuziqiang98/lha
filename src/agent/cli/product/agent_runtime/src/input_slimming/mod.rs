@@ -83,7 +83,17 @@ pub(crate) struct InputSlimmingContext<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InputSlimmingMode {
     Apply,
+    ApplyPreview,
     MeasureOnly,
+}
+
+impl InputSlimmingMode {
+    fn applies_replacements(self) -> bool {
+        match self {
+            Self::Apply | Self::ApplyPreview => true,
+            Self::MeasureOnly => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +122,7 @@ pub(crate) enum InputSlimmingWireApi {
     Responses,
     Chat,
     Messages,
+    Compact,
 }
 
 impl InputSlimmingWireApi {
@@ -120,6 +131,7 @@ impl InputSlimmingWireApi {
             Self::Responses => "responses",
             Self::Chat => "chat",
             Self::Messages => "messages",
+            Self::Compact => "compact",
         }
     }
 }
@@ -266,9 +278,11 @@ impl InputSlimmer {
                         });
 
                         match context.mode {
-                            InputSlimmingMode::Apply => {
+                            InputSlimmingMode::Apply | InputSlimmingMode::ApplyPreview => {
                                 metrics.slimmed += 1;
-                                if let Some(entry) = accepted.persisted_entry {
+                                if context.mode == InputSlimmingMode::Apply
+                                    && let Some(entry) = accepted.persisted_entry
+                                {
                                     persisted_entries.push(entry);
                                 }
                                 metrics.refs.push(accepted.reference);
@@ -565,7 +579,7 @@ impl InputSlimmingOutcome {
         context_stats_candidates: Vec<InputSlimmingContextStatCandidate>,
     ) -> Self {
         let approx_tokens_saved = metrics.approx_tokens_saved;
-        let requires_retrieval_tool = mode == InputSlimmingMode::Apply && metrics.slimmed > 0;
+        let requires_retrieval_tool = mode.applies_replacements() && metrics.slimmed > 0;
         Self {
             request,
             metrics,

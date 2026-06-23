@@ -141,6 +141,8 @@ pub enum Feature {
     InputSlimming,
     /// Slim current live-zone tool outputs while preserving cached history prefixes.
     InputSlimmingLiveZone,
+    /// Use input-slimming retrieval while compacting when raw compact prompts are too large.
+    RetrievalAwareCompact,
 }
 
 impl Feature {
@@ -550,6 +552,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::RetrievalAwareCompact,
+        key: "retrieval_aware_compact",
+        stage: Stage::Experimental {
+            name: "Retrieval-aware compact",
+            menu_description: "Let auto compact summarize slimmed history and retrieve original tool outputs on demand.",
+            announcement: "NEW: Retrieval-aware compact can reduce premature auto compact loops when Input Slimming is enabled.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::RemoteModels,
         key: "remote_models",
         stage: Stage::UnderDevelopment,
@@ -930,12 +942,45 @@ mod tests {
     }
 
     #[test]
+    fn retrieval_aware_compact_feature_defaults_off() {
+        let stage = Feature::RetrievalAwareCompact.stage();
+
+        assert_eq!(
+            Stage::Experimental {
+                name: "Retrieval-aware compact",
+                menu_description: "Let auto compact summarize slimmed history and retrieve original tool outputs on demand.",
+                announcement: "NEW: Retrieval-aware compact can reduce premature auto compact loops when Input Slimming is enabled.",
+            },
+            stage
+        );
+        assert!(!Feature::RetrievalAwareCompact.default_enabled());
+        assert_eq!(
+            Some("Retrieval-aware compact"),
+            stage.experimental_menu_name()
+        );
+        assert_eq!(
+            Some(
+                "Let auto compact summarize slimmed history and retrieve original tool outputs on demand.",
+            ),
+            stage.experimental_menu_description()
+        );
+        assert_eq!(
+            Some(
+                "NEW: Retrieval-aware compact can reduce premature auto compact loops when Input Slimming is enabled.",
+            ),
+            stage.experimental_announcement()
+        );
+        assert!(!Features::with_defaults().enabled(Feature::RetrievalAwareCompact));
+    }
+
+    #[test]
     fn features_table_accepts_input_slimming() {
         let cfg = ConfigToml {
             features: Some(FeaturesToml {
                 entries: BTreeMap::from([
                     ("input_slimming".to_string(), true),
                     ("input_slimming_live_zone".to_string(), true),
+                    ("retrieval_aware_compact".to_string(), true),
                 ]),
             }),
             ..Default::default()
@@ -946,6 +991,7 @@ mod tests {
 
         assert!(features.enabled(Feature::InputSlimming));
         assert!(features.enabled(Feature::InputSlimmingLiveZone));
+        assert!(features.enabled(Feature::RetrievalAwareCompact));
     }
 
     #[test]
@@ -954,6 +1000,7 @@ mod tests {
 
         assert!(schema.contains("\"input_slimming\""));
         assert!(schema.contains("\"input_slimming_live_zone\""));
+        assert!(schema.contains("\"retrieval_aware_compact\""));
     }
 
     #[test]
