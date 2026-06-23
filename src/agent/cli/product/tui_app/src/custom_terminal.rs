@@ -159,6 +159,8 @@ where
     pub last_known_cursor_pos: Position,
     /// Whether the next flush should clear cells to the right of a narrowed viewport.
     clear_tail_after_viewport: bool,
+    /// Whether the next flush should treat every viewport row as dirty.
+    force_full_viewport_repaint: bool,
 }
 
 impl<B> Drop for Terminal<B>
@@ -195,6 +197,7 @@ where
             last_known_screen_size: screen_size,
             last_known_cursor_pos: cursor_pos,
             clear_tail_after_viewport: false,
+            force_full_viewport_repaint: false,
         })
     }
 
@@ -246,7 +249,12 @@ where
         } else {
             None
         };
-        let mut updates = diff_buffers(self.previous_buffer(), self.current_buffer());
+        let force_full_repaint = self.force_full_viewport_repaint;
+        let mut updates = diff_buffers_with_full_repaint(
+            self.previous_buffer(),
+            self.current_buffer(),
+            force_full_repaint,
+        );
         if let Some(screen_size) = screen_size {
             let tail_x = self.viewport_area.right();
             if tail_x < screen_size.width {
@@ -266,7 +274,11 @@ where
         {
             self.last_known_cursor_pos = cursor_after_put(*x, *y, cell.symbol());
         }
-        draw(&mut self.backend, updates.into_iter())
+        let result = draw(&mut self.backend, updates.into_iter());
+        if result.is_ok() {
+            self.force_full_viewport_repaint = false;
+        }
+        result
     }
 
     /// Updates the Terminal so that internal buffers match the requested area.
@@ -478,6 +490,7 @@ where
     /// Force the next draw pass to repaint the whole viewport.
     pub fn invalidate_viewport(&mut self) {
         self.previous_buffer_mut().reset();
+        self.force_full_viewport_repaint = true;
     }
 
     /// Clear terminal scrollback (if supported) and force a full redraw.
@@ -514,6 +527,14 @@ enum DrawCommand {
 }
 
 fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
+    diff_buffers_with_full_repaint(a, b, false)
+}
+
+fn diff_buffers_with_full_repaint(
+    a: &Buffer,
+    b: &Buffer,
+    force_full_repaint: bool,
+) -> Vec<DrawCommand> {
     let previous_buffer = &a.content;
     let next_buffer = &b.content;
 
@@ -550,10 +571,11 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
             column += width.max(1); // treat zero-width symbols as width 1
         }
 
-        let row_is_dirty = row
-            .iter()
-            .zip(previous_row.iter())
-            .any(|(current, previous)| current != previous);
+        let row_is_dirty = force_full_repaint
+            || row
+                .iter()
+                .zip(previous_row.iter())
+                .any(|(current, previous)| current != previous);
         if !row_is_dirty {
             continue;
         }
@@ -985,6 +1007,39 @@ mod tests {
         assert!(
             !contents.contains("细“大节"),
             "terminal kept stale CJK quote/order corruption: {contents:?}"
+        );
+    }
+
+    #[test]
+    fn invalidate_viewport_clears_physical_stale_rows_that_render_blank() {
+        let backend = crate::product::tui_app::test_backend::VT100Backend::new(80, 4);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 80, 4));
+
+        terminal
+            .draw(|frame| {
+                frame
+                    .buffer
+                    .set_string(0, 0, "STALE live/status row", Style::default());
+            })
+            .expect("draw stale live/status row");
+        assert!(
+            terminal
+                .backend()
+                .vt100()
+                .screen()
+                .contents()
+                .contains("STALE live/status row"),
+            "test setup should draw stale row"
+        );
+
+        terminal.invalidate_viewport();
+        terminal.draw(|_| {}).expect("draw blank invalidated frame");
+
+        let contents = terminal.backend().vt100().screen().contents();
+        assert!(
+            !contents.contains("STALE live/status row"),
+            "invalidated blank frame should clear physical stale row: {contents:?}"
         );
     }
 

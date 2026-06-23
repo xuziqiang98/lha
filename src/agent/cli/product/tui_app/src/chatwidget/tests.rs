@@ -3100,6 +3100,27 @@ fn assert_feedback_commit_message_word_order(rendered: &str, context: &str) {
     );
 }
 
+fn assert_small_screen_final_answer_order(rendered: &str, context: &str, needle: &str) {
+    assert!(
+        rendered.contains(needle),
+        "{context} missing final answer needle: {rendered:?}"
+    );
+    let workflow_idx = rendered
+        .find("workflow_output")
+        .unwrap_or_else(|| panic!("{context} missing workflow_output marker: {rendered:?}"));
+    let git_idx = rendered
+        .find("git diff --check")
+        .unwrap_or_else(|| panic!("{context} missing git diff --check marker: {rendered:?}"));
+    assert!(
+        workflow_idx < git_idx,
+        "{context} reordered workflow/git markers: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("git diffcheck"),
+        "{context} rendered known git diff corruption: {rendered:?}"
+    );
+}
+
 fn render_chat_to_vt100_screen(
     chat: &ChatWidget,
     terminal: &mut crate::product::tui_app::custom_terminal::Terminal<VT100Backend>,
@@ -11276,6 +11297,168 @@ async fn streamed_answer_viewport_repaint_repairs_cjk_vt100_screen_divergence() 
     assert!(
         !screen.contains("工具输出”细“大节"),
         "viewport repaint kept stale CJK corruption: {screen:?}"
+    );
+}
+
+#[tokio::test]
+async fn small_screen_final_answer_repaint_clears_stale_blank_rows() {
+    let source = "最终回答包含 saved workflow_output 和 git diff --check\n";
+    let needle = "最终回答包含 saved workflow_output 和 git diff --check";
+
+    let (mut small_chat, mut small_rx, _small_op_rx) = make_chatwidget_manual(None).await;
+    let small_width = 80;
+    let small_height = 8;
+    small_chat
+        .last_rendered_width
+        .set(Some(usize::from(small_width)));
+    let mut small_terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
+        VT100Backend::new(small_width, small_height),
+    )
+    .expect("small terminal");
+    small_terminal.set_viewport_area(Rect::new(0, 0, small_width, small_height));
+
+    small_chat.handle_codex_event(Event {
+        id: "small-final-turn".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+
+    let mut small_live_screen = String::new();
+    for delta in [
+        "最终回答包含 ",
+        "saved workflow_output ",
+        "和 git diff --check\n",
+    ] {
+        small_chat.handle_codex_event(Event {
+            id: "small-final-delta".into(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: delta.to_string(),
+            }),
+        });
+        small_chat.on_commit_tick();
+        small_live_screen = render_chat_to_vt100_screen(&small_chat, &mut small_terminal);
+        assert!(
+            !small_live_screen.contains("git diffcheck"),
+            "small live screen rendered known git diff corruption: {small_live_screen:?}"
+        );
+    }
+    assert_small_screen_final_answer_order(&small_live_screen, "small live screen", needle);
+
+    let stale_row = "STALE small-screen live row";
+    corrupt_vt100_row(&mut small_terminal, 0, stale_row);
+    let corrupted_screen = small_terminal.backend().vt100().screen().contents();
+    assert!(
+        corrupted_screen.contains(stale_row),
+        "test setup should corrupt small-screen blank row: {corrupted_screen:?}"
+    );
+
+    small_chat.handle_codex_event(Event {
+        id: "small-final-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    let mut saw_final_answer_repaint = false;
+    for event in drain_events(&mut small_rx) {
+        if let Some((cell, repaint_viewport)) =
+            into_insert_history_cell_with_viewport_repaint(event)
+        {
+            let rendered = lines_to_single_string(&cell.display_lines(small_width));
+            if cell.as_any().is::<AgentMessageCell>() && rendered.contains(needle) {
+                saw_final_answer_repaint = true;
+                assert!(
+                    repaint_viewport,
+                    "small final answer should request viewport repaint: {rendered:?}"
+                );
+            }
+            let cell: Arc<dyn HistoryCell> = Arc::from(cell);
+            small_chat.insert_transcript_cell(cell);
+            if repaint_viewport {
+                small_terminal.invalidate_viewport();
+            }
+        }
+    }
+    assert!(
+        saw_final_answer_repaint,
+        "expected small final answer repaint event"
+    );
+
+    let small_final_screen = render_chat_to_vt100_screen(&small_chat, &mut small_terminal);
+    assert_small_screen_final_answer_order(&small_final_screen, "small final screen", needle);
+    assert!(
+        !small_final_screen.contains(stale_row),
+        "small final repaint kept stale live/status row: {small_final_screen:?}"
+    );
+
+    let (mut wide_chat, mut wide_rx, _wide_op_rx) = make_chatwidget_manual(None).await;
+    let wide_width = 160;
+    let wide_height = 32;
+    wide_chat
+        .last_rendered_width
+        .set(Some(usize::from(wide_width)));
+    let mut wide_terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
+        VT100Backend::new(wide_width, wide_height),
+    )
+    .expect("wide terminal");
+    wide_terminal.set_viewport_area(Rect::new(0, 0, wide_width, wide_height));
+
+    wide_chat.handle_codex_event(Event {
+        id: "wide-final-turn".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+    wide_chat.handle_codex_event(Event {
+        id: "wide-final-delta".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: source.to_string(),
+        }),
+    });
+    wide_chat.on_commit_tick();
+    let wide_live_screen = render_chat_to_vt100_screen(&wide_chat, &mut wide_terminal);
+    assert_small_screen_final_answer_order(&wide_live_screen, "wide live screen", needle);
+
+    wide_chat.handle_codex_event(Event {
+        id: "wide-final-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+    for event in drain_events(&mut wide_rx) {
+        if let Some((cell, repaint_viewport)) =
+            into_insert_history_cell_with_viewport_repaint(event)
+        {
+            let cell: Arc<dyn HistoryCell> = Arc::from(cell);
+            wide_chat.insert_transcript_cell(cell);
+            if repaint_viewport {
+                wide_terminal.invalidate_viewport();
+            }
+        }
+    }
+
+    let wide_final_screen = render_chat_to_vt100_screen(&wide_chat, &mut wide_terminal);
+    assert_small_screen_final_answer_order(&wide_final_screen, "wide final screen", needle);
+
+    let compact_needle: String = needle.chars().filter(|ch| !ch.is_whitespace()).collect();
+    let small_compact: String = small_final_screen
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect();
+    let wide_compact: String = wide_final_screen
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect();
+    assert!(
+        small_compact.contains(&compact_needle),
+        "small final screen should preserve compact final answer: {small_final_screen:?}"
+    );
+    assert!(
+        wide_compact.contains(&compact_needle),
+        "wide final screen should preserve compact final answer: {wide_final_screen:?}"
     );
 }
 
