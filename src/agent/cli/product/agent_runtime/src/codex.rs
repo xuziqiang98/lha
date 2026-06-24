@@ -895,6 +895,21 @@ pub(crate) struct Session {
     next_internal_sub_id: AtomicU64,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum InputSlimmingHydrationDurability {
+    MarkRestoredHashes,
+    MarkRestoredHashesIf(bool),
+}
+
+impl InputSlimmingHydrationDurability {
+    fn should_mark_restored_hashes(self) -> bool {
+        match self {
+            Self::MarkRestoredHashes => true,
+            Self::MarkRestoredHashesIf(should_mark) => should_mark,
+        }
+    }
+}
+
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
 pub(crate) struct TurnContext {
@@ -2720,8 +2735,11 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
-                self.hydrate_input_slimming_store_from_rollout(&rollout_items)
-                    .await;
+                self.hydrate_input_slimming_store_from_rollout(
+                    &rollout_items,
+                    InputSlimmingHydrationDurability::MarkRestoredHashes,
+                )
+                .await;
                 let pending_identity_clear_from_history =
                     rollout_history_may_have_active_identity(&rollout_items);
                 {
@@ -2781,8 +2799,15 @@ impl Session {
                 self.flush_rollout().await;
             }
             InitialHistory::Forked(rollout_items) => {
-                self.hydrate_input_slimming_store_from_rollout(&rollout_items)
-                    .await;
+                let forked_rollout_items_persisted =
+                    self.persist_forked_rollout_items(&rollout_items).await;
+                self.hydrate_input_slimming_store_from_rollout(
+                    &rollout_items,
+                    InputSlimmingHydrationDurability::MarkRestoredHashesIf(
+                        forked_rollout_items_persisted,
+                    ),
+                )
+                .await;
                 let pending_identity_clear_from_history =
                     rollout_history_may_have_active_identity(&rollout_items);
                 // Always add response items to conversation history
@@ -2801,11 +2826,6 @@ impl Session {
                 if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
-                }
-
-                // If persisting, persist all rollout items as-is (recorder filters)
-                if !rollout_items.is_empty() {
-                    self.persist_rollout_items(&rollout_items).await;
                 }
 
                 self.seed_thread_goal_from_forked_rollout(&rollout_items)
@@ -3892,6 +3912,29 @@ impl Session {
         }
     }
 
+    async fn persist_forked_rollout_items(&self, items: &[RolloutItem]) -> bool {
+        if items.is_empty() {
+            return true;
+        }
+        let recorder = {
+            let guard = self.services.rollout.lock().await;
+            guard.clone()
+        };
+        let Some(rec) = recorder else {
+            warn!("failed to persist forked rollout items: rollout recorder unavailable");
+            return false;
+        };
+        if let Err(e) = rec.record_items(items).await {
+            error!("failed to record forked rollout items: {e:#}");
+            return false;
+        }
+        if let Err(e) = rec.flush().await {
+            warn!("failed to flush forked rollout items: {e:#}");
+            return false;
+        }
+        true
+    }
+
     pub(crate) async fn persist_input_slimming_entries(
         &self,
         entries: Vec<InputSlimmingPersistedEntry>,
@@ -3924,7 +3967,11 @@ impl Session {
             .await;
     }
 
-    async fn hydrate_input_slimming_store_from_rollout(&self, items: &[RolloutItem]) {
+    async fn hydrate_input_slimming_store_from_rollout(
+        &self,
+        items: &[RolloutItem],
+        durability: InputSlimmingHydrationDurability,
+    ) {
         for item in items {
             let RolloutItem::InputSlimmingStoredInput(stored) = item else {
                 continue;
@@ -3953,10 +4000,12 @@ impl Session {
                 .await
             {
                 Ok(()) => {
-                    self.services
-                        .input_slimming_store
-                        .mark_durable_hashes([restored.hash])
-                        .await;
+                    if durability.should_mark_restored_hashes() {
+                        self.services
+                            .input_slimming_store
+                            .mark_durable_hashes([restored.hash])
+                            .await;
+                    }
                     self.services.otel_manager.counter(
                         "lha.input_slimming.resume_hydrate",
                         1,
@@ -8204,7 +8253,8 @@ mod tests {
         let lha_home = tempfile::tempdir().expect("create temp dir");
         let config = build_test_config(lha_home.path()).await;
         let (session, _turn_context) = make_session_and_context_for_config(config.clone()).await;
-        let recorder = RolloutRecorder::new(
+        install_rollout_recorder_for_test(
+            &session,
             &config,
             RolloutRecorderParams::new(
                 session.conversation_id,
@@ -8214,12 +8264,9 @@ mod tests {
                 Vec::new(),
                 None,
             ),
-            None,
-            None,
         )
         .await
         .expect("rollout recorder");
-        *session.services.rollout.lock().await = Some(recorder);
         let original = "alpha\nneedle original payload\nomega".to_string();
         let hash = input_slimming_hash_for_test(&original);
 
@@ -8265,6 +8312,40 @@ mod tests {
                 .await,
             HashSet::from([hash])
         );
+    }
+
+    async fn install_rollout_recorder_for_test(
+        session: &Session,
+        config: &Config,
+        params: RolloutRecorderParams,
+    ) -> std::io::Result<PathBuf> {
+        let recorder = RolloutRecorder::new(config, params, None, None).await?;
+        let rollout_path = recorder.rollout_path.clone();
+        *session.services.rollout.lock().await = Some(recorder);
+        Ok(rollout_path)
+    }
+
+    fn input_slimming_stored_input_for_test(
+        original: &str,
+        created_turn_id: &str,
+    ) -> (String, RolloutItem) {
+        let hash = input_slimming_hash_for_test(original);
+        let entry = InputSlimmingPersistedEntry {
+            hash: hash.clone(),
+            original: original.to_string(),
+            metadata: StoredInputMetadata {
+                scope: InputSlimmingScope::HistoricalToolOutputs,
+                strategy: InputSlimmingStrategy::PlainTextHeadTail,
+                tool_name: "shell".to_string(),
+                original_tokens: 5,
+                compressed_tokens: 2,
+                created_turn_id: created_turn_id.to_string(),
+            },
+        };
+        (
+            hash,
+            RolloutItem::InputSlimmingStoredInput(InputSlimmingStoredInputItem::from(entry)),
+        )
     }
 
     fn input_slimming_hash_for_test(text: &str) -> String {
@@ -8715,6 +8796,107 @@ mod tests {
         expected.extend(session.build_initial_context(&turn_context).await);
         let history = session.state.lock().await.clone_history();
         assert_eq!(expected, history.raw_items());
+    }
+
+    #[tokio::test]
+    async fn record_initial_history_fork_copies_input_slimming_sidecars_to_current_rollout() {
+        let lha_home = tempfile::tempdir().expect("create temp dir");
+        let config = build_test_config(lha_home.path()).await;
+        let (session, _turn_context) = make_session_and_context_for_config(config.clone()).await;
+        let fork_rollout_path = install_rollout_recorder_for_test(
+            &session,
+            &config,
+            RolloutRecorderParams::new(
+                session.conversation_id,
+                None,
+                SessionSource::Exec,
+                BaseInstructions::default(),
+                Vec::new(),
+                None,
+            ),
+        )
+        .await
+        .expect("rollout recorder");
+        let original = "alpha\nneedle fork payload\nomega";
+        let (hash, sidecar) = input_slimming_stored_input_for_test(original, "source-turn");
+
+        session
+            .record_initial_history(InitialHistory::Forked(vec![sidecar]))
+            .await;
+        session.flush_rollout().await;
+
+        let rollout = tokio::fs::read_to_string(&fork_rollout_path)
+            .await
+            .expect("read fork rollout");
+        assert!(rollout.contains("input_slimming_stored_input"));
+        assert!(rollout.contains(&hash));
+        assert!(rollout.contains("needle fork payload"));
+        *session.services.rollout.lock().await = None;
+
+        let fresh_config = build_test_config(lha_home.path()).await;
+        let (fresh_session, _fresh_turn_context) =
+            make_session_and_context_for_config(fresh_config.clone()).await;
+        install_rollout_recorder_for_test(
+            &fresh_session,
+            &fresh_config,
+            RolloutRecorderParams::resume(fork_rollout_path),
+        )
+        .await
+        .expect("resume rollout recorder");
+        let miss = fresh_session
+            .services
+            .input_slimming_store
+            .retrieve(&hash, Some("needle fork payload"))
+            .await;
+        assert!(!miss.success);
+
+        assert!(
+            fresh_session
+                .rehydrate_input_slimming_hash_from_rollout(&hash)
+                .await
+        );
+        let result = fresh_session
+            .services
+            .input_slimming_store
+            .retrieve(&hash, Some("needle fork payload"))
+            .await;
+        assert!(result.success);
+        assert!(result.content.contains("needle fork payload"));
+        assert_eq!(
+            fresh_session
+                .services
+                .input_slimming_store
+                .durable_hashes_for(&HashSet::from([hash.clone()]))
+                .await,
+            HashSet::from([hash])
+        );
+    }
+
+    #[tokio::test]
+    async fn forked_input_slimming_sidecars_are_not_marked_durable_when_not_persisted() {
+        let (session, _turn_context) = make_session_and_context().await;
+        let original = "alpha\nneedle fork payload\nomega";
+        let (hash, sidecar) = input_slimming_stored_input_for_test(original, "source-turn");
+
+        session
+            .record_initial_history(InitialHistory::Forked(vec![sidecar]))
+            .await;
+
+        let result = session
+            .services
+            .input_slimming_store
+            .retrieve(&hash, Some("needle fork payload"))
+            .await;
+        assert!(result.success);
+        assert!(result.content.contains("needle fork payload"));
+        assert_eq!(
+            session
+                .services
+                .input_slimming_store
+                .durable_hashes_for(&HashSet::from([hash]))
+                .await,
+            HashSet::<String>::new()
+        );
     }
 
     #[tokio::test]
