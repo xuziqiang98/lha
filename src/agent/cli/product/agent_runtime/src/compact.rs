@@ -104,12 +104,19 @@ enum CompactInputMode {
 struct RetrievalAwareCompactPrompt {
     request: TurnRequest,
     marker_hashes: HashSet<String>,
+    durable_marker_hashes: HashSet<String>,
     slimmed_count: usize,
 }
 
 struct RetrievalAwareCompactOutput {
     summary: String,
     retrieved_hashes: HashSet<String>,
+}
+
+struct GuardedRetrievalSummary {
+    summary: String,
+    durable_unresolved_count: usize,
+    non_durable_marker_count: usize,
 }
 
 #[derive(Deserialize)]
@@ -227,6 +234,7 @@ async fn run_compact_task_inner(
 
     let mut retrieval_summary_suffix: Option<String> = None;
     let mut retrieval_marker_hashes = HashSet::new();
+    let mut retrieval_durable_marker_hashes = HashSet::new();
     let mut retrieval_retrieved_hashes = HashSet::new();
     loop {
         // Clone is required because of the loop
@@ -261,6 +269,8 @@ async fn run_compact_task_inner(
                 {
                     Ok(retrieval_prompt) => {
                         retrieval_marker_hashes = retrieval_prompt.marker_hashes.clone();
+                        retrieval_durable_marker_hashes =
+                            retrieval_prompt.durable_marker_hashes.clone();
                         drain_retrieval_aware_compact_to_summary(
                             Arc::clone(&sess),
                             Arc::clone(&turn_context),
@@ -322,21 +332,28 @@ async fn run_compact_task_inner(
     let mut summary_suffix = retrieval_summary_suffix
         .unwrap_or_else(|| get_last_assistant_message_from_turn(history_items).unwrap_or_default());
     if mode == CompactInputMode::RetrievalAwareSlimmed {
-        summary_suffix = preserve_unresolved_retrieval_markers(
+        let guarded_summary = guard_unresolved_retrieval_markers(
             summary_suffix,
             &retrieval_marker_hashes,
+            &retrieval_durable_marker_hashes,
             &retrieval_retrieved_hashes,
         );
-        let unresolved_count = unresolved_marker_count(&summary_suffix, &retrieval_marker_hashes);
+        summary_suffix = guarded_summary.summary;
         debug!(
             retrieved_marker_count = retrieval_retrieved_hashes.len(),
-            unresolved_marker_count = unresolved_count,
+            durable_unresolved_marker_count = guarded_summary.durable_unresolved_count,
+            non_durable_marker_count = guarded_summary.non_durable_marker_count,
             auto_compact_strategy = "retrieval_aware",
             decision = "retrieval_aware_compact_summary_guard",
         );
         turn_context.runtime.get_otel_manager().counter(
             "lha.compact.retrieval_aware.unresolved_markers",
-            i64::try_from(unresolved_count).unwrap_or(i64::MAX),
+            i64::try_from(guarded_summary.durable_unresolved_count).unwrap_or(i64::MAX),
+            &[],
+        );
+        turn_context.runtime.get_otel_manager().counter(
+            "lha.compact.retrieval_aware.non_durable_markers",
+            i64::try_from(guarded_summary.non_durable_marker_count).unwrap_or(i64::MAX),
             &[],
         );
     }
@@ -514,10 +531,16 @@ async fn build_retrieval_aware_compact_prompt(
         request.parallel_tool_calls = false;
     }
     marker_hashes.extend(turn_request_input_slimming_hashes(raw_prompt));
+    let durable_marker_hashes = sess
+        .services
+        .input_slimming_store
+        .durable_hashes_for(&marker_hashes)
+        .await;
 
     Ok(RetrievalAwareCompactPrompt {
         request,
         marker_hashes,
+        durable_marker_hashes,
         slimmed_count: outcome.metrics.slimmed,
     })
 }
@@ -749,36 +772,64 @@ fn input_slimming_hashes_from_text(text: &str) -> HashSet<String> {
     hashes
 }
 
-fn preserve_unresolved_retrieval_markers(
+fn guard_unresolved_retrieval_markers(
     mut summary: String,
     marker_hashes: &HashSet<String>,
+    durable_marker_hashes: &HashSet<String>,
     retrieved_hashes: &HashSet<String>,
-) -> String {
-    let missing = marker_hashes
+) -> GuardedRetrievalSummary {
+    let mut non_durable_marker_count = 0usize;
+    let mut candidate_hashes = marker_hashes.clone();
+    candidate_hashes.extend(input_slimming_hashes_from_text(&summary));
+    let mut non_durable_hashes = candidate_hashes
+        .iter()
+        .filter(|hash| !durable_marker_hashes.contains(*hash))
+        .collect::<Vec<_>>();
+    non_durable_hashes.sort();
+    for hash in non_durable_hashes {
+        let marker = input_slimming_marker(hash);
+        if summary.contains(&marker) {
+            non_durable_marker_count = non_durable_marker_count.saturating_add(1);
+            summary = summary.replace(
+                &marker,
+                &format!(
+                    "input slimming marker {hash} omitted because its original is not durably retrievable"
+                ),
+            );
+        }
+    }
+
+    let mut missing = durable_marker_hashes
         .iter()
         .filter(|hash| !retrieved_hashes.contains(*hash))
-        .filter(|hash| !summary.contains(&format!("{INPUT_SLIMMING_MARKER_PREFIX}{hash}>>")))
+        .filter(|hash| !summary.contains(&input_slimming_marker(hash)))
         .cloned()
         .collect::<Vec<_>>();
-    if missing.is_empty() {
-        return summary;
+    missing.sort();
+
+    if !missing.is_empty() {
+        summary.push_str("\n\nUnresolved retrievable markers:\n");
+        for hash in missing {
+            summary.push_str("- ");
+            summary.push_str(&input_slimming_marker(&hash));
+            summary.push_str(" (original tool output was not retrieved during compaction)\n");
+        }
     }
 
-    summary.push_str("\n\nUnresolved retrievable markers:\n");
-    for hash in missing {
-        summary.push_str("- ");
-        summary.push_str(INPUT_SLIMMING_MARKER_PREFIX);
-        summary.push_str(&hash);
-        summary.push_str(">> (original tool output was not retrieved during compaction)\n");
+    let durable_unresolved_count = durable_marker_hashes
+        .iter()
+        .filter(|hash| !retrieved_hashes.contains(*hash))
+        .filter(|hash| summary.contains(&input_slimming_marker(hash)))
+        .count();
+    GuardedRetrievalSummary {
+        summary,
+        durable_unresolved_count,
+        non_durable_marker_count,
     }
-    summary
 }
 
-fn unresolved_marker_count(summary: &str, marker_hashes: &HashSet<String>) -> usize {
-    marker_hashes
-        .iter()
-        .filter(|hash| summary.contains(&format!("{INPUT_SLIMMING_MARKER_PREFIX}{hash}>>")))
-        .count()
+fn input_slimming_marker(hash: &str) -> String {
+    format!("{INPUT_SLIMMING_MARKER_PREFIX}{hash}>>")
 }
 
 pub(crate) fn collect_user_messages<T>(items: &[T]) -> Vec<String>
@@ -2001,22 +2052,102 @@ mod tests {
     }
 
     #[test]
-    fn preserve_unresolved_retrieval_markers_appends_missing_markers() {
+    fn guard_appends_only_durable_unretrieved_markers() {
         let marker_hashes = HashSet::from([
             "111111111111111111111111".to_string(),
             "222222222222222222222222".to_string(),
         ]);
-        let retrieved_hashes = HashSet::from(["111111111111111111111111".to_string()]);
+        let durable_marker_hashes = HashSet::from(["111111111111111111111111".to_string()]);
+        let retrieved_hashes = HashSet::new();
 
-        let summary = preserve_unresolved_retrieval_markers(
+        let guarded = guard_unresolved_retrieval_markers(
             "Current task and decisions\n- Keep going".to_string(),
             &marker_hashes,
+            &durable_marker_hashes,
             &retrieved_hashes,
         );
 
-        assert!(summary.contains("Unresolved retrievable markers:"));
-        assert!(summary.contains("<<lha-input:222222222222222222222222>>"));
-        assert!(!summary.contains("<<lha-input:111111111111111111111111>>"));
+        assert!(guarded.summary.contains("Unresolved retrievable markers:"));
+        assert!(
+            guarded
+                .summary
+                .contains("<<lha-input:111111111111111111111111>>")
+        );
+        assert!(
+            !guarded
+                .summary
+                .contains("<<lha-input:222222222222222222222222>>")
+        );
+        assert_eq!(guarded.durable_unresolved_count, 1);
+        assert_eq!(guarded.non_durable_marker_count, 0);
+    }
+
+    #[test]
+    fn guard_does_not_append_retrieved_durable_marker() {
+        let marker_hashes = HashSet::from(["111111111111111111111111".to_string()]);
+        let durable_marker_hashes = marker_hashes.clone();
+        let retrieved_hashes = marker_hashes.clone();
+
+        let guarded = guard_unresolved_retrieval_markers(
+            "Current task and decisions\n- Keep going".to_string(),
+            &marker_hashes,
+            &durable_marker_hashes,
+            &retrieved_hashes,
+        );
+
+        assert!(!guarded.summary.contains("Unresolved retrievable markers:"));
+        assert!(
+            !guarded
+                .summary
+                .contains("<<lha-input:111111111111111111111111>>")
+        );
+        assert_eq!(guarded.durable_unresolved_count, 0);
+        assert_eq!(guarded.non_durable_marker_count, 0);
+    }
+
+    #[test]
+    fn guard_neutralizes_non_durable_marker_already_in_summary() {
+        let marker_hashes = HashSet::from(["222222222222222222222222".to_string()]);
+        let durable_marker_hashes = HashSet::new();
+        let retrieved_hashes = HashSet::new();
+
+        let guarded = guard_unresolved_retrieval_markers(
+            "Unresolved retrievable markers:\n- <<lha-input:222222222222222222222222>>".to_string(),
+            &marker_hashes,
+            &durable_marker_hashes,
+            &retrieved_hashes,
+        );
+
+        assert!(
+            !guarded
+                .summary
+                .contains("<<lha-input:222222222222222222222222>>")
+        );
+        assert!(
+            guarded
+                .summary
+                .contains("input slimming marker 222222222222222222222222 omitted")
+        );
+        assert_eq!(guarded.durable_unresolved_count, 0);
+        assert_eq!(guarded.non_durable_marker_count, 1);
+    }
+
+    #[test]
+    fn guard_keeps_existing_durable_marker_in_summary() {
+        let marker_hashes = HashSet::from(["111111111111111111111111".to_string()]);
+        let durable_marker_hashes = marker_hashes.clone();
+        let retrieved_hashes = HashSet::new();
+
+        let guarded = guard_unresolved_retrieval_markers(
+            "Unresolved retrievable markers:\n- <<lha-input:111111111111111111111111>>".to_string(),
+            &marker_hashes,
+            &durable_marker_hashes,
+            &retrieved_hashes,
+        );
+
+        assert_eq!(guarded.summary.matches("<<lha-input:").count(), 1);
+        assert_eq!(guarded.durable_unresolved_count, 1);
+        assert_eq!(guarded.non_durable_marker_count, 0);
     }
 
     #[test]

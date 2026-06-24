@@ -37,6 +37,7 @@ use lha_llm::ToolResultPayload;
 use lha_llm::built_in_runtime_endpoints;
 use sha2::Digest as _;
 use sha2::Sha256;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 
 use crate::test_support::core::responses::ev_assistant_message;
@@ -78,6 +79,7 @@ const SECOND_LARGE_REPLY: &str = "SECOND_LARGE_REPLY";
 const FIRST_AUTO_SUMMARY: &str = "FIRST_AUTO_SUMMARY";
 const SECOND_AUTO_SUMMARY: &str = "SECOND_AUTO_SUMMARY";
 const FINAL_REPLY: &str = "FINAL_REPLY";
+const INPUT_SLIMMING_CONFLICT_WARNING: &str = "Input slimming strategies are mutually exclusive; enable only one of input_slimming or input_slimming_live_zone.";
 const CONTEXT_LIMIT_MESSAGE: &str =
     "Your input exceeds the context window of this model. Please adjust your input and try again.";
 const DUMMY_FUNCTION_NAME: &str = "unsupported_tool";
@@ -219,6 +221,33 @@ fn input_slimming_hash_for_test(text: &str) -> String {
     let digest = Sha256::digest(text.as_bytes());
     let hex = format!("{digest:x}");
     hex[..24].to_string()
+}
+
+fn input_slimming_hashes_from_text_for_test(text: &str) -> HashSet<String> {
+    let mut hashes = HashSet::new();
+    let mut remaining = text;
+    while let Some(start) = remaining.find("<<lha-input:") {
+        let after_prefix = &remaining[start + "<<lha-input:".len()..];
+        let Some(end) = after_prefix.find(">>") else {
+            break;
+        };
+        let hash = &after_prefix[..end];
+        if hash.len() == 24 && hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            hashes.insert(hash.to_string());
+        }
+        remaining = &after_prefix[end + 2..];
+    }
+    hashes
+}
+
+fn input_slimming_sidecar_hashes_from_rollout(text: &str) -> HashSet<String> {
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<RolloutLine>(line).ok())
+        .filter_map(|line| match line.item {
+            RolloutItem::InputSlimmingStoredInput(item) => Some(item.hash),
+            _ => None,
+        })
+        .collect()
 }
 
 fn read_file_fixture_contents(prefix: &str, line_count: usize) -> String {
@@ -3747,6 +3776,129 @@ async fn input_slimming_raw_history_pressure_triggers_auto_compact() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn input_slimming_conflict_uses_raw_compact_even_when_retrieval_aware_enabled() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let first_call_id = "conflict-raw-compact-output-1";
+    let second_call_id = "conflict-raw-compact-output-2";
+    let first_args = json!({
+        "command": "for i in $(seq 1 1500); do echo conflict-raw-compact-1-line-$i; done",
+        "timeout_ms": 5_000,
+    })
+    .to_string();
+    let second_args = json!({
+        "command": "for i in $(seq 1 5000); do echo conflict-raw-compact-2-line-$i; done",
+        "timeout_ms": 5_000,
+    })
+    .to_string();
+
+    let first_tool_turn = sse(vec![
+        ev_function_call(first_call_id, "shell_command", &first_args),
+        ev_completed_with_tokens("r1", 1_000),
+    ]);
+    let first_follow_up = sse(vec![
+        ev_assistant_message("m1", "first conflict raw output recorded"),
+        ev_completed_with_tokens("r2", 1_000),
+    ]);
+    let second_tool_turn = sse(vec![
+        ev_function_call(second_call_id, "shell_command", &second_args),
+        ev_completed_with_tokens("r3", 1_000),
+    ]);
+    let auto_summary_payload = auto_summary(AUTO_SUMMARY_TEXT);
+    let auto_compact_turn = sse(vec![
+        ev_assistant_message("m2", &auto_summary_payload),
+        ev_completed_with_tokens("r4", 10),
+    ]);
+    let post_compact_follow_up = sse(vec![
+        ev_assistant_message("m3", FINAL_REPLY),
+        ev_completed_with_tokens("r5", 10),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            first_tool_turn,
+            first_follow_up,
+            second_tool_turn,
+            auto_compact_turn,
+            post_compact_follow_up,
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_model("gpt-5.1")
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.features.enable(Feature::InputSlimming);
+            config.features.enable(Feature::InputSlimmingLiveZone);
+            config.features.enable(Feature::RetrievalAwareCompact);
+            config.tool_output_token_limit = Some(200_000);
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(50_000);
+        });
+    let test = builder.build(&server).await.unwrap();
+
+    test.submit_turn_with_policy(
+        "make the first conflict raw compact output",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await
+    .unwrap();
+    let warning = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::Warning(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(warning.message, INPUT_SLIMMING_CONFLICT_WARNING);
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.submit_turn_with_policy(
+        "make the second conflict raw compact output",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await
+    .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        5,
+        "conflict mode should not defer raw-pressure compaction"
+    );
+
+    let second_turn_body = requests[2].body_json().to_string();
+    assert!(
+        !second_turn_body.contains("<<lha-input:"),
+        "conflict mode should not create new input-slimming replacements"
+    );
+
+    let compact_body = requests[3].body_json().to_string();
+    assert!(
+        body_contains_text(&compact_body, SUMMARIZATION_PROMPT),
+        "fourth request should be the raw compact request"
+    );
+    assert!(
+        compact_body.contains("conflict-raw-compact-1-line-1500"),
+        "raw compact should include the first raw tool output"
+    );
+    assert!(
+        compact_body.contains("conflict-raw-compact-2-line-2500"),
+        "raw compact should include the second raw tool output"
+    );
+    assert!(
+        !compact_body.contains("<<lha-input:"),
+        "conflict compact request should not use input-slimmed replacements"
+    );
+    assert!(
+        !compact_body.contains("lha_input_retrieve"),
+        "conflict compact request should not advertise the retrieval tool"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn retrieval_aware_compact_defers_raw_pressure_when_slimmed_send_fits() {
     skip_if_no_network!();
 
@@ -3879,9 +4031,12 @@ async fn retrieval_aware_compact_uses_slimmed_compact_prompt_and_preserves_marke
         ev_function_call(second_call_id, "shell_command", &second_args),
         ev_completed_with_tokens("r3", 1_000),
     ]);
-    let compact_summary = "Current task and decisions\n- Compact with unresolved evidence.";
+    let fake_hash = "ffffffffffffffffffffffff";
+    let compact_summary = format!(
+        "Current task and decisions\n- Compact with unresolved evidence.\n- Fake marker <<lha-input:{fake_hash}>> should not persist."
+    );
     let retrieval_aware_compact_turn = sse(vec![
-        ev_assistant_message("m2", compact_summary),
+        ev_assistant_message("m2", &compact_summary),
         ev_completed_with_tokens("r4", 10),
     ]);
     let post_compact_follow_up = sse(vec![
@@ -3984,8 +4139,16 @@ async fn retrieval_aware_compact_uses_slimmed_compact_prompt_and_preserves_marke
 
     let follow_up_body = requests[4].body_json().to_string();
     assert!(
-        body_contains_text(&follow_up_body, compact_summary),
+        body_contains_text(&follow_up_body, "Compact with unresolved evidence."),
         "post-compact follow-up should include the compact summary"
+    );
+    assert!(
+        !follow_up_body.contains(&format!("<<lha-input:{fake_hash}>>")),
+        "non-durable markers invented in the compact summary should be neutralized"
+    );
+    assert!(
+        follow_up_body.contains(&format!("input slimming marker {fake_hash} omitted")),
+        "post-compact follow-up should explain why non-durable markers were omitted"
     );
     assert!(
         follow_up_body.contains("Unresolved retrievable markers:"),
@@ -3994,6 +4157,20 @@ async fn retrieval_aware_compact_uses_slimmed_compact_prompt_and_preserves_marke
     assert!(
         follow_up_body.contains("<<lha-input:"),
         "post-compact follow-up should keep unresolved markers retrievable"
+    );
+    let follow_up_hashes = input_slimming_hashes_from_text_for_test(&follow_up_body);
+    assert!(
+        !follow_up_hashes.is_empty(),
+        "post-compact follow-up should contain at least one durable marker"
+    );
+    let rollout_path = test.session_configured.rollout_path.expect("rollout path");
+    let rollout_text = tokio::fs::read_to_string(rollout_path)
+        .await
+        .expect("read rollout");
+    let sidecar_hashes = input_slimming_sidecar_hashes_from_rollout(&rollout_text);
+    assert!(
+        follow_up_hashes.is_subset(&sidecar_hashes),
+        "persisted compact markers should all have input_slimming_stored_input sidecars"
     );
 }
 

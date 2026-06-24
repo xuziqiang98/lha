@@ -156,6 +156,10 @@ use crate::product::agent::input_slimming::InputSlimmingContextStatCandidate;
 use crate::product::agent::input_slimming::InputSlimmingMode;
 use crate::product::agent::input_slimming::InputSlimmingOccurrenceKey;
 use crate::product::agent::input_slimming::InputSlimmingPersistedEntry;
+#[cfg(test)]
+use crate::product::agent::input_slimming::InputSlimmingStrategy;
+#[cfg(test)]
+use crate::product::agent::input_slimming::StoredInputMetadata;
 use crate::product::agent::input_slimming::create_lha_input_retrieve_tool;
 use crate::product::agent::input_slimming::resolve_input_slimming_scope;
 use crate::product::agent::instructions::UserInstructions;
@@ -3895,12 +3899,29 @@ impl Session {
         if entries.is_empty() {
             return;
         }
+        let mut hashes = Vec::with_capacity(entries.len());
         let items = entries
             .into_iter()
-            .map(InputSlimmingStoredInputItem::from)
-            .map(RolloutItem::InputSlimmingStoredInput)
+            .map(|entry| {
+                hashes.push(entry.hash.clone());
+                RolloutItem::InputSlimmingStoredInput(InputSlimmingStoredInputItem::from(entry))
+            })
             .collect::<Vec<_>>();
-        self.persist_rollout_items(&items).await;
+        let recorder = {
+            let guard = self.services.rollout.lock().await;
+            guard.clone()
+        };
+        let Some(rec) = recorder else {
+            return;
+        };
+        if let Err(e) = rec.record_items(&items).await {
+            error!("failed to record input slimming entries: {e:#}");
+            return;
+        }
+        self.services
+            .input_slimming_store
+            .mark_durable_hashes(hashes)
+            .await;
     }
 
     async fn hydrate_input_slimming_store_from_rollout(&self, items: &[RolloutItem]) {
@@ -3928,10 +3949,14 @@ impl Session {
             match self
                 .services
                 .input_slimming_store
-                .put_with_hash(restored.hash, restored.original, restored.metadata)
+                .put_with_hash(restored.hash.clone(), restored.original, restored.metadata)
                 .await
             {
                 Ok(()) => {
+                    self.services
+                        .input_slimming_store
+                        .mark_durable_hashes([restored.hash])
+                        .await;
                     self.services.otel_manager.counter(
                         "lha.input_slimming.resume_hydrate",
                         1,
@@ -3952,6 +3977,99 @@ impl Session {
                 }
             }
         }
+    }
+
+    pub(crate) async fn rehydrate_input_slimming_hash_from_rollout(&self, hash: &str) -> bool {
+        let recorder = {
+            let guard = self.services.rollout.lock().await;
+            guard.clone()
+        };
+        let Some(rec) = recorder else {
+            self.record_input_slimming_rehydrate_status("miss");
+            return false;
+        };
+        if let Err(err) = rec.flush().await {
+            warn!(
+                hash = %hash,
+                error = %err,
+                "failed to flush rollout before input slimming rehydrate"
+            );
+            self.record_input_slimming_rehydrate_status("io_error");
+            return false;
+        }
+
+        let items = match RolloutRecorder::load_rollout_items(rec.rollout_path()).await {
+            Ok((items, _thread_id, _parse_errors)) => items,
+            Err(err) => {
+                warn!(
+                    hash = %hash,
+                    error = %err,
+                    "failed to read rollout for input slimming rehydrate"
+                );
+                self.record_input_slimming_rehydrate_status("io_error");
+                return false;
+            }
+        };
+
+        let mut saw_invalid_match = false;
+        for item in items.iter().rev() {
+            let RolloutItem::InputSlimmingStoredInput(stored) = item else {
+                continue;
+            };
+            if stored.hash != hash {
+                continue;
+            }
+            let restored = match InputSlimmingPersistedEntry::try_from(stored.clone()) {
+                Ok(restored) => restored,
+                Err(err) => {
+                    saw_invalid_match = true;
+                    warn!(
+                        hash = %hash,
+                        error = %err,
+                        "skipping invalid input slimming stored input during rehydrate"
+                    );
+                    continue;
+                }
+            };
+            match self
+                .services
+                .input_slimming_store
+                .put_with_hash(restored.hash.clone(), restored.original, restored.metadata)
+                .await
+            {
+                Ok(()) => {
+                    self.services
+                        .input_slimming_store
+                        .mark_durable_hashes([restored.hash])
+                        .await;
+                    self.record_input_slimming_rehydrate_status("restored");
+                    return true;
+                }
+                Err(err) => {
+                    saw_invalid_match = true;
+                    warn!(
+                        hash = %hash,
+                        error = %err,
+                        "skipping input slimming stored input with invalid hash during rehydrate"
+                    );
+                }
+            }
+        }
+
+        self.record_input_slimming_rehydrate_status(if saw_invalid_match {
+            "invalid"
+        } else {
+            "miss"
+        });
+        false
+    }
+
+    fn record_input_slimming_rehydrate_status(&self, status: &'static str) {
+        self.services.otel_manager.counter(
+            "lha.input_slimming.retrieve_rehydrate",
+            1,
+            &[("status", status)],
+        );
     }
 
     pub(crate) async fn clone_history(&self) -> ContextManager {
@@ -6166,10 +6284,15 @@ fn should_preflight_compact(
 
 fn retrieval_aware_compact_active(sess: &Session) -> bool {
     sess.enabled(Feature::RetrievalAwareCompact)
-        && !matches!(
-            resolve_input_slimming_scope(&sess.features()),
-            InputSlimmingActivation::Disabled
-        )
+        && input_slimming_activation_allows_retrieval_aware_compact(resolve_input_slimming_scope(
+            &sess.features(),
+        ))
+}
+
+fn input_slimming_activation_allows_retrieval_aware_compact(
+    activation: InputSlimmingActivation,
+) -> bool {
+    matches!(activation, InputSlimmingActivation::Scope(_))
 }
 
 fn record_retrieval_aware_counter(
@@ -8037,6 +8160,120 @@ mod tests {
             InputSlimmingActivation::Conflict,
             false,
         ));
+    }
+
+    #[test]
+    fn retrieval_aware_compact_requires_concrete_slimming_scope() {
+        assert!(input_slimming_activation_allows_retrieval_aware_compact(
+            InputSlimmingActivation::Scope(InputSlimmingScope::HistoricalToolOutputs),
+        ));
+        assert!(input_slimming_activation_allows_retrieval_aware_compact(
+            InputSlimmingActivation::Scope(InputSlimmingScope::LiveZoneToolOutputs),
+        ));
+        assert!(!input_slimming_activation_allows_retrieval_aware_compact(
+            InputSlimmingActivation::Disabled,
+        ));
+        assert!(!input_slimming_activation_allows_retrieval_aware_compact(
+            InputSlimmingActivation::Conflict,
+        ));
+    }
+
+    #[tokio::test]
+    async fn conflict_mode_preflight_compact_uses_raw_strategy() {
+        let (mut session, turn_context) = make_session_and_context().await;
+        session.features.enable(Feature::InputSlimming);
+        session.features.enable(Feature::InputSlimmingLiveZone);
+        session.features.enable(Feature::RetrievalAwareCompact);
+        let compact_limit = auto_compact_limit(&turn_context);
+
+        let strategy = preflight_auto_compact_strategy(
+            &session,
+            &turn_context,
+            PreflightCompactPressure {
+                request_input_tokens: Some(compact_limit),
+                raw_compaction_tokens: Some(compact_limit),
+            },
+        )
+        .await;
+
+        assert_eq!(strategy, Some(AutoCompactStrategy::Raw));
+    }
+
+    #[tokio::test]
+    async fn rehydrate_input_slimming_hash_from_rollout_restores_sidecar() {
+        let lha_home = tempfile::tempdir().expect("create temp dir");
+        let config = build_test_config(lha_home.path()).await;
+        let (session, _turn_context) = make_session_and_context_for_config(config.clone()).await;
+        let recorder = RolloutRecorder::new(
+            &config,
+            RolloutRecorderParams::new(
+                session.conversation_id,
+                None,
+                SessionSource::Exec,
+                BaseInstructions::default(),
+                Vec::new(),
+                None,
+            ),
+            None,
+            None,
+        )
+        .await
+        .expect("rollout recorder");
+        *session.services.rollout.lock().await = Some(recorder);
+        let original = "alpha\nneedle original payload\nomega".to_string();
+        let hash = input_slimming_hash_for_test(&original);
+
+        session
+            .persist_input_slimming_entries(vec![InputSlimmingPersistedEntry {
+                hash: hash.clone(),
+                original: original.clone(),
+                metadata: StoredInputMetadata {
+                    scope: InputSlimmingScope::HistoricalToolOutputs,
+                    strategy: InputSlimmingStrategy::PlainTextHeadTail,
+                    tool_name: "shell".to_string(),
+                    original_tokens: 5,
+                    compressed_tokens: 2,
+                    created_turn_id: "turn-1".to_string(),
+                },
+            }])
+            .await;
+
+        let miss = session
+            .services
+            .input_slimming_store
+            .retrieve(&hash, Some("needle"))
+            .await;
+        assert!(!miss.success);
+        assert!(
+            session
+                .rehydrate_input_slimming_hash_from_rollout(&hash)
+                .await
+        );
+        let result = session
+            .services
+            .input_slimming_store
+            .retrieve(&hash, Some("needle"))
+            .await;
+
+        assert!(result.success);
+        assert!(result.content.contains("needle original payload"));
+        assert_eq!(
+            session
+                .services
+                .input_slimming_store
+                .durable_hashes_for(&HashSet::from([hash.clone()]))
+                .await,
+            HashSet::from([hash])
+        );
+    }
+
+    fn input_slimming_hash_for_test(text: &str) -> String {
+        use sha2::Digest;
+        use sha2::Sha256;
+
+        let digest = Sha256::digest(text.as_bytes());
+        let hex = format!("{digest:x}");
+        hex[..24].to_string()
     }
 
     struct InstructionsTestCase {

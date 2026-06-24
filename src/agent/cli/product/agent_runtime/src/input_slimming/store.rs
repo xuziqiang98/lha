@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::time::Duration;
@@ -32,6 +33,7 @@ pub(crate) struct InputSlimmingStore {
 struct StoreInner {
     entries: LruCache<String, StoredInput>,
     slimmed_replacements: LruCache<SlimmedReplacementCacheKey, CachedSlimmedReplacement>,
+    durable_hashes: HashSet<String>,
     ttl: Duration,
 }
 
@@ -125,6 +127,7 @@ impl InputSlimmingStore {
             inner: Mutex::new(StoreInner {
                 entries: LruCache::new(capacity),
                 slimmed_replacements: LruCache::new(capacity),
+                durable_hashes: HashSet::new(),
                 ttl,
             }),
         }
@@ -204,6 +207,23 @@ impl InputSlimmingStore {
                 created_at: Instant::now(),
             },
         );
+    }
+
+    pub(crate) async fn mark_durable_hashes<I>(&self, hashes: I)
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut guard = self.inner.lock().await;
+        guard.durable_hashes.extend(hashes);
+    }
+
+    pub(crate) async fn durable_hashes_for(&self, hashes: &HashSet<String>) -> HashSet<String> {
+        let guard = self.inner.lock().await;
+        hashes
+            .iter()
+            .filter(|hash| guard.durable_hashes.contains(*hash))
+            .cloned()
+            .collect()
     }
 
     pub(crate) async fn retrieve(&self, hash: &str, query: Option<&str>) -> RetrieveResult {
@@ -574,6 +594,24 @@ mod tests {
         let result = store.retrieve(&hash, None).await;
         assert!(!result.success);
         assert!(result.content.contains(&hash));
+    }
+
+    #[tokio::test]
+    async fn durable_hashes_are_tracked_independently_of_entry_ttl() {
+        let store = InputSlimmingStore::new(
+            NonZeroUsize::new(2).expect("non-zero"),
+            Duration::from_millis(0),
+        );
+        let hash = store.put("alpha".to_string(), metadata()).await;
+        store.mark_durable_hashes([hash.clone()]).await;
+
+        assert_eq!(store.get(&hash).await, None);
+        assert_eq!(
+            store
+                .durable_hashes_for(&HashSet::from([hash.clone()]))
+                .await,
+            HashSet::from([hash])
+        );
     }
 
     #[tokio::test]

@@ -47,12 +47,25 @@ impl ToolHandler for InputRetrieveHandler {
             ))
         })?;
 
-        let result = invocation
+        let mut result = invocation
             .session
             .services
             .input_slimming_store
             .retrieve(args.hash.as_str(), args.query.as_deref())
             .await;
+        if !result.success
+            && invocation
+                .session
+                .rehydrate_input_slimming_hash_from_rollout(args.hash.as_str())
+                .await
+        {
+            result = invocation
+                .session
+                .services
+                .input_slimming_store
+                .retrieve(args.hash.as_str(), args.query.as_deref())
+                .await;
+        }
 
         let strategy = result
             .strategy
