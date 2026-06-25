@@ -3776,6 +3776,112 @@ async fn input_slimming_raw_history_pressure_triggers_auto_compact() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn preflight_compact_does_not_persist_aborted_input_slimming_preview() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let call_id = "preflight-aborted-slimming-output";
+    let command = "for i in $(seq 1 5000); do echo preflight-aborted-sentinel-line-$i; done";
+    let args = json!({
+        "command": command,
+        "timeout_ms": 5_000,
+    })
+    .to_string();
+
+    let first_tool_turn = sse(vec![
+        ev_function_call(call_id, "shell_command", &args),
+        ev_completed_with_tokens("r1", 1_000),
+    ]);
+    let first_follow_up = sse(vec![
+        ev_assistant_message("m1", "preflight-aborted output recorded"),
+        ev_completed_with_tokens("r2", 1_000),
+    ]);
+    let auto_summary_payload = auto_summary(AUTO_SUMMARY_TEXT);
+    let preflight_compact_turn = sse(vec![
+        ev_assistant_message("m2", &auto_summary_payload),
+        ev_completed_with_tokens("r3", 10),
+    ]);
+    let post_compact_follow_up = sse(vec![
+        ev_assistant_message("m3", FINAL_REPLY),
+        ev_completed_with_tokens("r4", 10),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            first_tool_turn,
+            first_follow_up,
+            preflight_compact_turn,
+            post_compact_follow_up,
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_model("gpt-5.1")
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.features.enable(Feature::InputSlimming);
+            config.tool_output_token_limit = Some(200_000);
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(20_000);
+        });
+    let test = builder.build(&server).await.unwrap();
+
+    test.submit_turn_with_policy(
+        "create preflight-aborted slimming output",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await
+    .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.submit_turn("trigger preflight compact").await.unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        4,
+        "expected initial tool turn, follow-up, preflight compact, and post-compact retry"
+    );
+
+    let compact_body = requests[2].body_json().to_string();
+    assert!(
+        body_contains_text(&compact_body, SUMMARIZATION_PROMPT),
+        "third request should be the preflight compact request"
+    );
+    assert!(
+        compact_body.contains("preflight-aborted-sentinel-line-5000"),
+        "raw preflight compact should include the unslimmed historical tool output"
+    );
+    assert!(
+        !compact_body.contains("<<lha-input:"),
+        "aborted input-slimming preview should not persist markers into raw compact"
+    );
+    assert!(
+        !compact_body.contains("lha_input_retrieve"),
+        "raw preflight compact should not advertise the input-slimming retrieval tool"
+    );
+
+    let follow_up_body = requests[3].body_json().to_string();
+    assert!(
+        body_contains_text(&follow_up_body, &summary_with_prefix(&auto_summary_payload)),
+        "post-compact retry should use compacted history"
+    );
+
+    let rollout_path = test.session_configured.rollout_path.expect("rollout path");
+    let rollout_text = tokio::fs::read_to_string(rollout_path)
+        .await
+        .expect("read rollout");
+    assert_eq!(
+        input_slimming_sidecar_hashes_from_rollout(&rollout_text),
+        HashSet::new(),
+        "preflight-aborted input-slimming preview should not persist sidecars"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn input_slimming_conflict_uses_raw_compact_even_when_retrieval_aware_enabled() {
     skip_if_no_network!();
 
@@ -4172,6 +4278,330 @@ async fn retrieval_aware_compact_uses_slimmed_compact_prompt_and_preserves_marke
         follow_up_hashes.is_subset(&sidecar_hashes),
         "persisted compact markers should all have input_slimming_stored_input sidecars"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retrieval_aware_raw_fallback_preserves_existing_durable_marker() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let first_call_id = "retrieval-aware-raw-fallback-output-1";
+    let second_call_id = "retrieval-aware-raw-fallback-output-2";
+    let first_args = json!({
+        "command": "for i in $(seq 1 1500); do echo retrieval-aware-raw-fallback-sentinel-1-line-$i; done",
+        "timeout_ms": 5_000,
+    })
+    .to_string();
+    let second_args = json!({
+        "command": "for i in $(seq 1 5000); do echo retrieval-aware-raw-fallback-sentinel-2-line-$i; done",
+        "timeout_ms": 5_000,
+    })
+    .to_string();
+
+    let first_tool_turn = sse(vec![
+        ev_function_call(first_call_id, "shell_command", &first_args),
+        ev_completed_with_tokens("r1", 1_000),
+    ]);
+    let first_follow_up = sse(vec![
+        ev_assistant_message("m1", "first raw fallback output recorded"),
+        ev_completed_with_tokens("r2", 1_000),
+    ]);
+    let second_tool_turn = sse(vec![
+        ev_function_call(second_call_id, "shell_command", &second_args),
+        ev_completed_with_tokens("r3", 1_000),
+    ]);
+    let retrieval_summary =
+        "Current task and decisions\n- Compact with unresolved raw-fallback evidence.";
+    let retrieval_aware_compact_turn = sse(vec![
+        ev_assistant_message("m2", retrieval_summary),
+        ev_completed_with_tokens("r4", 10),
+    ]);
+    let post_retrieval_compact_follow_up = sse(vec![
+        ev_assistant_message("m3", "post retrieval-aware compact response"),
+        ev_completed_with_tokens("r5", 10),
+    ]);
+    let raw_fallback_summary = "Raw fallback compact summary omitted durable markers.";
+    let raw_fallback_compact_turn = sse(vec![
+        ev_assistant_message("m4", raw_fallback_summary),
+        ev_completed_with_tokens("r6", 10),
+    ]);
+    let after_raw_fallback = sse(vec![
+        ev_assistant_message("m5", FINAL_REPLY),
+        ev_completed_with_tokens("r7", 10),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            first_tool_turn,
+            first_follow_up,
+            second_tool_turn,
+            retrieval_aware_compact_turn,
+            post_retrieval_compact_follow_up,
+            raw_fallback_compact_turn,
+            after_raw_fallback,
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_model("test-gpt-5")
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.features.enable(Feature::InputSlimmingLiveZone);
+            config.features.enable(Feature::RetrievalAwareCompact);
+            config.tool_output_token_limit = Some(200_000);
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(20_000);
+        });
+    let test = builder.build(&server).await.unwrap();
+
+    test.submit_turn_with_policy(
+        "make retrieval-aware raw fallback output one",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await
+    .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.submit_turn_with_policy(
+        "make retrieval-aware raw fallback output two",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await
+    .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        5,
+        "expected retrieval-aware compact before the raw fallback trigger"
+    );
+    let post_retrieval_body = requests[4].body_json().to_string();
+    let durable_hashes = input_slimming_hashes_from_text_for_test(&post_retrieval_body);
+    assert!(
+        !durable_hashes.is_empty(),
+        "post retrieval-aware compact history should contain durable markers"
+    );
+
+    let oversized_user = "raw-fallback-pressure ".repeat(5_000);
+    test.submit_turn(&oversized_user).await.unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        7,
+        "expected raw fallback compact followed by the retried user request"
+    );
+    let raw_compact_body = requests[5].body_json().to_string();
+    assert!(
+        body_contains_text(&raw_compact_body, SUMMARIZATION_PROMPT),
+        "sixth request should be the raw compact fallback"
+    );
+    assert!(
+        !raw_compact_body.contains("lha_input_retrieve"),
+        "raw fallback compact should not advertise retrieval tools"
+    );
+
+    let follow_up_body = requests[6].body_json().to_string();
+    assert!(
+        body_contains_text(&follow_up_body, raw_fallback_summary),
+        "post-raw-fallback request should include the raw compact summary"
+    );
+    assert!(
+        follow_up_body.contains("Unresolved retrievable markers:"),
+        "raw fallback summary should be guarded with unresolved markers"
+    );
+    for hash in &durable_hashes {
+        assert!(
+            follow_up_body.contains(&format!("<<lha-input:{hash}>>")),
+            "durable marker {hash} should remain retrievable after raw fallback"
+        );
+    }
+
+    let rollout_path = test.session_configured.rollout_path.expect("rollout path");
+    let rollout_text = tokio::fs::read_to_string(rollout_path)
+        .await
+        .expect("read rollout");
+    let sidecar_hashes = input_slimming_sidecar_hashes_from_rollout(&rollout_text);
+    assert!(
+        durable_hashes.is_subset(&sidecar_hashes),
+        "preserved markers should all have input_slimming_stored_input sidecars"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_preserves_existing_durable_input_slimming_marker() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let first_call_id = "remote-preserve-marker-output-1";
+    let second_call_id = "remote-preserve-marker-output-2";
+    let first_args = json!({
+        "command": "for i in $(seq 1 1500); do echo remote-preserve-marker-sentinel-1-line-$i; done",
+        "timeout_ms": 5_000,
+    })
+    .to_string();
+    let second_args = json!({
+        "command": "for i in $(seq 1 5000); do echo remote-preserve-marker-sentinel-2-line-$i; done",
+        "timeout_ms": 5_000,
+    })
+    .to_string();
+
+    let first_tool_turn = sse(vec![
+        ev_function_call(first_call_id, "shell_command", &first_args),
+        ev_completed_with_tokens("r1", 1_000),
+    ]);
+    let first_follow_up = sse(vec![
+        ev_assistant_message("m1", "first remote preserve output recorded"),
+        ev_completed_with_tokens("r2", 1_000),
+    ]);
+    let second_tool_turn = sse(vec![
+        ev_function_call(second_call_id, "shell_command", &second_args),
+        ev_completed_with_tokens("r3", 1_000),
+    ]);
+    let retrieval_summary =
+        "Current task and decisions\n- Compact with unresolved remote-compact evidence.";
+    let retrieval_aware_compact_turn = sse(vec![
+        ev_assistant_message("m2", retrieval_summary),
+        ev_completed_with_tokens("r4", 10),
+    ]);
+    let post_retrieval_compact_follow_up = sse(vec![
+        ev_assistant_message("m3", "post retrieval-aware remote response"),
+        ev_completed_with_tokens("r5", 10),
+    ]);
+    let after_remote_compact = sse(vec![
+        ev_assistant_message("m4", FINAL_REPLY),
+        ev_completed_with_tokens("r6", 10),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            first_tool_turn,
+            first_follow_up,
+            second_tool_turn,
+            retrieval_aware_compact_turn,
+            post_retrieval_compact_follow_up,
+            after_remote_compact,
+        ],
+    )
+    .await;
+
+    let remote_summary = "REMOTE_COMPACT_SUMMARY_WITHOUT_MARKERS";
+    let compacted_history = vec![TranscriptItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: remote_summary.to_string(),
+        }],
+        end_turn: None,
+    }];
+    let compact_mock =
+        mount_compact_json_once(&server, serde_json::json!({ "output": compacted_history })).await;
+
+    let model_provider = openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_model("gpt-5.1")
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.features.enable(Feature::InputSlimmingLiveZone);
+            config.features.enable(Feature::RetrievalAwareCompact);
+            config.features.enable(Feature::RemoteCompaction);
+            config.tool_output_token_limit = Some(200_000);
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(20_000);
+        });
+    let test = builder.build(&server).await.unwrap();
+
+    test.submit_turn_with_policy(
+        "make remote compact preserve marker output one",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await
+    .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.submit_turn_with_policy(
+        "make remote compact preserve marker output two",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await
+    .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        5,
+        "expected retrieval-aware compact before manual remote compact"
+    );
+    let post_retrieval_body = requests[4].body_json().to_string();
+    let durable_hashes = input_slimming_hashes_from_text_for_test(&post_retrieval_body);
+    assert!(
+        !durable_hashes.is_empty(),
+        "post retrieval-aware compact history should contain durable markers"
+    );
+
+    test.codex
+        .submit(Op::Compact)
+        .await
+        .expect("trigger compact");
+    wait_for_event(&test.codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::ContextCompaction(_),
+                ..
+            })
+        )
+    })
+    .await;
+
+    let compact_requests = compact_mock.requests();
+    assert_eq!(
+        compact_requests.len(),
+        1,
+        "manual compact should use the remote compact endpoint"
+    );
+    assert_eq!(
+        compact_requests[0].path(),
+        "/v1/responses/compact",
+        "manual compact should hit the compact endpoint"
+    );
+
+    test.submit_turn("after remote compact").await.unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        6,
+        "expected one follow-up after manual remote compact"
+    );
+    let follow_up_body = requests[5].body_json().to_string();
+    assert!(
+        follow_up_body.contains(remote_summary),
+        "post-remote-compact request should include the remote compact summary"
+    );
+    assert!(
+        follow_up_body.contains("Unresolved retrievable markers:"),
+        "remote compact output should be guarded with unresolved markers"
+    );
+    for hash in &durable_hashes {
+        let marker = format!("<<lha-input:{hash}>>");
+        assert!(
+            follow_up_body.contains(&marker),
+            "durable marker {hash} should remain retrievable after remote compact"
+        );
+        assert_eq!(
+            follow_up_body.matches(&marker).count(),
+            1,
+            "remote compact marker {hash} should not be duplicated"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

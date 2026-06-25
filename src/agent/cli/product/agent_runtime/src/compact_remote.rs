@@ -1,8 +1,10 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::product::agent::codex::Session;
 use crate::product::agent::codex::TurnContext;
 use crate::product::agent::compact::active_goal_plan_reminder_items;
+use crate::product::agent::compact::append_missing_unresolved_input_slimming_markers;
 use crate::product::agent::compact::backfilled_skill_items;
 use crate::product::agent::compact::backfilled_update_plan_items;
 use crate::product::agent::compact::last_backfillable_update_plan_from_history;
@@ -94,6 +96,14 @@ async fn run_remote_compact_task_inner_impl(
         )
         .await;
     }
+
+    append_missing_unresolved_input_slimming_markers(
+        sess.as_ref(),
+        history.raw_items(),
+        &mut new_history,
+        &HashSet::new(),
+    )
+    .await;
 
     match active_goal_plan_path.as_deref() {
         Some(path) => {

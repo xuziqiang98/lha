@@ -6472,6 +6472,14 @@ async fn preflight_auto_compact_strategy(
     (strategy != AutoCompactStrategy::DeferRawPressureOnly).then_some(strategy)
 }
 
+fn should_measure_before_preflight(
+    allow_preflight_compact: bool,
+    input_slimming_activation: InputSlimmingActivation,
+) -> bool {
+    allow_preflight_compact
+        && !matches!(input_slimming_activation, InputSlimmingActivation::Disabled)
+}
+
 async fn estimate_raw_auto_compact_tokens(
     sess: &Session,
     turn_context: &TurnContext,
@@ -6740,7 +6748,12 @@ async fn run_sampling_request(
     } else {
         None
     };
-    if tool_selection.allow_preflight_compact {
+    let input_slimming_activation = resolve_input_slimming_scope(&sess.features());
+    let measure_before_preflight = should_measure_before_preflight(
+        tool_selection.allow_preflight_compact,
+        input_slimming_activation,
+    );
+    if measure_before_preflight {
         let measured = prepare_sampling_request(
             sess.as_ref(),
             turn_context.as_ref(),
@@ -6773,6 +6786,40 @@ async fn run_sampling_request(
         cancellation_token.child_token(),
     )
     .await?;
+    if tool_selection.allow_preflight_compact
+        && !measure_before_preflight
+        && let Some(strategy) = preflight_auto_compact_strategy(
+            sess.as_ref(),
+            turn_context.as_ref(),
+            PreflightCompactPressure {
+                request_input_tokens: prepared.request_input_tokens,
+                raw_compaction_tokens,
+            },
+        )
+        .await
+    {
+        return Err(SamplingRequestError::PreflightCompactRequired { strategy });
+    }
+
+    run_prepared_sampling_request(
+        sess,
+        turn_context,
+        turn_diff_tracker,
+        client_session,
+        prepared,
+        cancellation_token,
+    )
+    .await
+}
+
+async fn run_prepared_sampling_request(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    turn_diff_tracker: SharedTurnDiffTracker,
+    client_session: &mut dyn RuntimeSession,
+    prepared: PreparedSamplingRequest,
+    cancellation_token: CancellationToken,
+) -> Result<SamplingRequestResult, SamplingRequestError> {
     let PreparedSamplingRequest {
         prompt,
         router,
@@ -8223,6 +8270,43 @@ mod tests {
             InputSlimmingActivation::Disabled,
         ));
         assert!(!input_slimming_activation_allows_retrieval_aware_compact(
+            InputSlimmingActivation::Conflict,
+        ));
+    }
+
+    #[test]
+    fn measure_before_preflight_when_input_slimming_can_have_side_effects() {
+        assert!(!should_measure_before_preflight(
+            false,
+            InputSlimmingActivation::Disabled,
+        ));
+        assert!(!should_measure_before_preflight(
+            false,
+            InputSlimmingActivation::Scope(InputSlimmingScope::HistoricalToolOutputs),
+        ));
+        assert!(!should_measure_before_preflight(
+            false,
+            InputSlimmingActivation::Scope(InputSlimmingScope::LiveZoneToolOutputs),
+        ));
+        assert!(!should_measure_before_preflight(
+            false,
+            InputSlimmingActivation::Conflict,
+        ));
+
+        assert!(!should_measure_before_preflight(
+            true,
+            InputSlimmingActivation::Disabled,
+        ));
+        assert!(should_measure_before_preflight(
+            true,
+            InputSlimmingActivation::Scope(InputSlimmingScope::HistoricalToolOutputs),
+        ));
+        assert!(should_measure_before_preflight(
+            true,
+            InputSlimmingActivation::Scope(InputSlimmingScope::LiveZoneToolOutputs),
+        ));
+        assert!(should_measure_before_preflight(
+            true,
             InputSlimmingActivation::Conflict,
         ));
     }
