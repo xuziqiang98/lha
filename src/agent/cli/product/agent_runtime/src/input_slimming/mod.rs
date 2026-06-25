@@ -36,6 +36,7 @@ use crate::product::protocol::protocol::InputSlimmingStoredInputMetadata;
 pub(crate) use candidate::CandidateZone;
 pub(crate) use store::InputSlimmingStore;
 pub(crate) use store::InputSlimmingStoreError;
+pub(crate) use store::RetrieveResult;
 use store::SlimmedReplacement;
 use store::SlimmedReplacementCacheKey;
 pub(crate) use store::StoredInputMetadata;
@@ -43,6 +44,8 @@ use store::hash_text;
 pub(crate) use tool::INPUT_RETRIEVE_TOOL_NAME;
 pub(crate) use tool::InputRetrieveHandler;
 pub(crate) use tool::create_lha_input_retrieve_tool;
+pub(crate) use tool::record_input_slimming_retrieve_metrics;
+pub(crate) use tool::retrieve_input_slimming_for_tool;
 
 pub(crate) const INPUT_SLIMMING_MARKER_PREFIX: &str = "<<lha-input:";
 const INPUT_SLIMMING_MARKER_SUFFIX: &str = ">>";

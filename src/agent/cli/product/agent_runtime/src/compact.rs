@@ -9,15 +9,16 @@ use crate::product::agent::codex::runtime_notice_to_event_msg;
 use crate::product::agent::error::CodexErr;
 use crate::product::agent::error::Result as CodexResult;
 use crate::product::agent::features::Feature;
-use crate::product::agent::function_tool::FunctionCallError;
 use crate::product::agent::input_slimming::INPUT_RETRIEVE_TOOL_NAME;
 use crate::product::agent::input_slimming::INPUT_SLIMMING_MARKER_PREFIX;
-use crate::product::agent::input_slimming::InputRetrieveHandler;
 use crate::product::agent::input_slimming::InputSlimmer;
 use crate::product::agent::input_slimming::InputSlimmingContext;
 use crate::product::agent::input_slimming::InputSlimmingMode;
 use crate::product::agent::input_slimming::InputSlimmingWireApi;
+use crate::product::agent::input_slimming::RetrieveResult;
 use crate::product::agent::input_slimming::create_lha_input_retrieve_tool;
+use crate::product::agent::input_slimming::record_input_slimming_retrieve_metrics;
+use crate::product::agent::input_slimming::retrieve_input_slimming_for_tool;
 use crate::product::agent::instructions::SkillInstructionSource;
 use crate::product::agent::instructions::SkillInstructions;
 use crate::product::agent::proposed_plan_parser::extract_proposed_plan_text;
@@ -28,14 +29,10 @@ use crate::product::agent::protocol::TurnContextItem;
 use crate::product::agent::protocol::TurnStartedEvent;
 use crate::product::agent::protocol::WarningEvent;
 use crate::product::agent::session_prefix::TURN_ABORTED_OPEN_TAG;
-use crate::product::agent::tools::context::ToolInvocation;
-use crate::product::agent::tools::context::ToolPayload;
 use crate::product::agent::tools::handlers::UPDATE_PLAN_SUCCESS_OUTPUT;
-use crate::product::agent::tools::registry::ToolHandler;
 use crate::product::agent::truncate::TruncationPolicy;
 use crate::product::agent::truncate::approx_token_count;
 use crate::product::agent::truncate::truncate_text;
-use crate::product::agent::turn_diff_tracker::TurnDiffTracker;
 use crate::product::protocol::items::ContextCompactionItem;
 use crate::product::protocol::items::TurnItem;
 use crate::product::protocol::models::ContentItem;
@@ -55,7 +52,6 @@ use lha_llm::ToolResultPayload;
 use lha_llm::TurnEvent;
 use lha_llm::TurnRequest;
 use serde::Deserialize;
-use tokio::sync::Mutex;
 use tracing::debug;
 use tracing::error;
 use tracing::warn;
@@ -113,6 +109,11 @@ struct RetrievalAwareCompactOutput {
     retrieved_hashes: HashSet<String>,
 }
 
+struct RetrievalAwareToolCallResult {
+    item: ToolResultItem,
+    retrieved_original: bool,
+}
+
 struct GuardedRetrievalSummary {
     summary: String,
     durable_unresolved_count: usize,
@@ -122,6 +123,7 @@ struct GuardedRetrievalSummary {
 #[derive(Deserialize)]
 struct RetrievalAwareRetrieveArgs {
     hash: String,
+    query: Option<String>,
 }
 
 pub(crate) enum ProposedPlanBackfill<'a> {
@@ -553,7 +555,6 @@ async fn drain_retrieval_aware_compact_to_summary(
     let mut conversation = prompt.conversation.clone();
     let mut retrieved_hashes = HashSet::new();
     let mut retrieve_calls = 0usize;
-    let tracker = Arc::new(Mutex::new(TurnDiffTracker::new()));
 
     for _ in 0..RETRIEVAL_AWARE_COMPACT_TURN_LIMIT {
         prompt.conversation = conversation.clone();
@@ -612,30 +613,33 @@ async fn drain_retrieval_aware_compact_to_summary(
                 && retrieve_calls < RETRIEVAL_AWARE_COMPACT_RETRIEVE_LIMIT
             {
                 retrieve_calls += 1;
-                handle_retrieval_aware_tool_call(
-                    Arc::clone(&sess),
-                    Arc::clone(&turn_context),
-                    Arc::clone(&tracker),
-                    request.clone(),
-                )
-                .await
+                handle_retrieval_aware_tool_call(Arc::clone(&sess), turn_context.as_ref(), &request)
+                    .await
             } else if request.tool_name == INPUT_RETRIEVE_TOOL_NAME {
-                retrieval_aware_tool_error(
-                    &request,
-                    format!(
-                        "Retrieval-aware compact already used {RETRIEVAL_AWARE_COMPACT_RETRIEVE_LIMIT} retrieval calls. Preserve any unresolved <<lha-input:...>> markers in the final summary."
+                RetrievalAwareToolCallResult {
+                    item: retrieval_aware_tool_error(
+                        &request,
+                        format!(
+                            "Retrieval-aware compact already used {RETRIEVAL_AWARE_COMPACT_RETRIEVE_LIMIT} retrieval calls. Preserve any unresolved <<lha-input:...>> markers in the final summary."
+                        ),
                     ),
-                )
+                    retrieved_original: false,
+                }
             } else {
-                retrieval_aware_tool_error(
-                    &request,
-                    format!(
-                        "Retrieval-aware compact only supports the {INPUT_RETRIEVE_TOOL_NAME} tool. Preserve unresolved markers in the final summary."
+                RetrievalAwareToolCallResult {
+                    item: retrieval_aware_tool_error(
+                        &request,
+                        format!(
+                            "Retrieval-aware compact only supports the {INPUT_RETRIEVE_TOOL_NAME} tool. Preserve unresolved markers in the final summary."
+                        ),
                     ),
-                )
+                    retrieved_original: false,
+                }
             };
-            let success = tool_result_success(&result);
-            if success && let Some(hash) = retrieve_hash {
+            let success = tool_result_success(&result.item);
+            if result.retrieved_original
+                && let Some(hash) = retrieve_hash
+            {
                 retrieved_hashes.insert(hash);
             }
             let success_label = if success { "true" } else { "false" };
@@ -649,7 +653,7 @@ async fn drain_retrieval_aware_compact_to_summary(
                 1,
                 &labels,
             );
-            conversation.push(result.to_transcript_item());
+            conversation.push(result.item.to_transcript_item());
         }
     }
 
@@ -661,41 +665,81 @@ async fn drain_retrieval_aware_compact_to_summary(
 
 async fn handle_retrieval_aware_tool_call(
     sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
-    tracker: Arc<Mutex<TurnDiffTracker>>,
-    request: ToolCallRequest,
-) -> ToolResultItem {
+    turn_context: &TurnContext,
+    request: &ToolCallRequest,
+) -> RetrievalAwareToolCallResult {
     let payload_outputs_custom = matches!(request.payload, ToolCallPayload::TextInput { .. });
-    let payload = match request.payload.clone() {
-        ToolCallPayload::JsonArguments { arguments } => ToolPayload::Function { arguments },
-        ToolCallPayload::TextInput { input } => ToolPayload::Custom { input },
-    };
-    let invocation = ToolInvocation {
-        session: sess,
-        turn: turn_context,
-        tracker,
-        call_id: request.call_id.clone(),
-        tool_name: request.tool_name.clone(),
-        payload: payload.clone(),
-    };
-    match InputRetrieveHandler.handle(invocation).await {
-        Ok(output) => output.into_tool_result(&request.call_id, &request.tool_name, &payload),
-        Err(FunctionCallError::Fatal(message))
-        | Err(FunctionCallError::RespondToModel(message)) => {
-            retrieval_aware_tool_error_with_payload(
-                &request.call_id,
-                &request.tool_name,
-                payload_outputs_custom,
-                message,
-            )
+    let arguments = match &request.payload {
+        ToolCallPayload::JsonArguments { arguments } => arguments,
+        ToolCallPayload::TextInput { .. } => {
+            return RetrievalAwareToolCallResult {
+                item: retrieval_aware_tool_error(
+                    request,
+                    "lha_input_retrieve received unsupported payload".to_string(),
+                ),
+                retrieved_original: false,
+            };
         }
-        Err(FunctionCallError::MissingLocalShellCallId) => retrieval_aware_tool_error_with_payload(
+    };
+
+    let args = match serde_json::from_str::<RetrievalAwareRetrieveArgs>(arguments) {
+        Ok(args) => args,
+        Err(err) => {
+            return RetrievalAwareToolCallResult {
+                item: retrieval_aware_tool_error(
+                    request,
+                    format!("failed to parse lha_input_retrieve arguments: {err}"),
+                ),
+                retrieved_original: false,
+            };
+        }
+    };
+
+    let result =
+        retrieve_input_slimming_for_tool(sess.as_ref(), &args.hash, args.query.as_deref()).await;
+    let otel = turn_context.runtime.get_otel_manager();
+    record_input_slimming_retrieve_metrics(&otel, &result);
+    let retrieved_original = retrieve_result_exposes_original(&result);
+    RetrievalAwareToolCallResult {
+        item: retrieval_aware_retrieve_result_to_tool_result(
             &request.call_id,
             &request.tool_name,
             payload_outputs_custom,
-            FunctionCallError::MissingLocalShellCallId.to_string(),
+            result,
         ),
+        retrieved_original,
     }
+}
+
+fn retrieval_aware_retrieve_result_to_tool_result(
+    call_id: &str,
+    tool_name: &str,
+    payload_outputs_custom: bool,
+    result: RetrieveResult,
+) -> ToolResultItem {
+    if payload_outputs_custom {
+        ToolResultItem {
+            call_id: call_id.to_string(),
+            tool_name: tool_name.to_string(),
+            payload: ToolResultPayload::Text {
+                output: result.content,
+            },
+        }
+    } else {
+        ToolResultItem {
+            call_id: call_id.to_string(),
+            tool_name: tool_name.to_string(),
+            payload: ToolResultPayload::Structured {
+                content: result.content,
+                content_items: None,
+                success: Some(result.success),
+            },
+        }
+    }
+}
+
+fn retrieve_result_exposes_original(result: &RetrieveResult) -> bool {
+    result.success && result.query_matched != Some(false)
 }
 
 fn retrieval_aware_tool_error(request: &ToolCallRequest, message: String) -> ToolResultItem {
@@ -2148,6 +2192,28 @@ mod tests {
         assert_eq!(guarded.summary.matches("<<lha-input:").count(), 1);
         assert_eq!(guarded.durable_unresolved_count, 1);
         assert_eq!(guarded.non_durable_marker_count, 0);
+    }
+
+    #[test]
+    fn retrieve_result_exposes_original_only_when_content_was_returned() {
+        let result = |success, query_matched| RetrieveResult {
+            content: String::new(),
+            success,
+            strategy: None,
+            tool_name: None,
+            query_matched,
+        };
+
+        assert!(retrieve_result_exposes_original(&result(true, None)));
+        assert!(retrieve_result_exposes_original(&result(true, Some(true))));
+        assert!(!retrieve_result_exposes_original(&result(
+            true,
+            Some(false)
+        )));
+        assert!(!retrieve_result_exposes_original(&result(
+            false,
+            Some(false)
+        )));
     }
 
     #[test]

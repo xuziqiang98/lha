@@ -836,8 +836,9 @@ skip reasons 应使用稳定分类：
 ## Public API And Type Impact
 
 当前实现不改变 `lha-llm` public API，也不改变 provider protocol 的 public
-contract。唯一 user-facing surface 是已有 `[features]` 表新增
-`input_slimming` feature key，因此 `config.schema.json` 已同步更新。
+contract。user-facing surface 是 `[features]` 表中的实验 feature keys：
+`input_slimming`、`input_slimming_live_zone`、`retrieval_aware_compact`，
+因此 `config.schema.json` 已同步更新。
 
 以下名称已经作为 `lha` product-runtime 内部类型或 marker 存在，并保持
 product-private：

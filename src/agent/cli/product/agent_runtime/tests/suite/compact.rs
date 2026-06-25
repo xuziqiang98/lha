@@ -4336,6 +4336,162 @@ async fn retrieval_aware_compact_executes_retrieve_tool() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retrieval_aware_compact_query_miss_keeps_unresolved_marker() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_model("test-gpt-5")
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.features.enable(Feature::InputSlimmingLiveZone);
+            config.features.enable(Feature::RetrievalAwareCompact);
+            config.tool_output_token_limit = Some(200_000);
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(20_000);
+        });
+    let test = builder.build(&server).await.unwrap();
+
+    let first_prefix = "retrieval-aware-miss-sentinel-1";
+    let second_prefix = "retrieval-aware-miss-sentinel-2";
+    let first_line_count = 1_500;
+    let second_line_count = 5_000;
+    let first_file = test.cwd.path().join("retrieval-aware-miss-1.txt");
+    let second_file = test.cwd.path().join("retrieval-aware-miss-2.txt");
+    fs::write(
+        &first_file,
+        read_file_fixture_contents(first_prefix, first_line_count),
+    )
+    .unwrap();
+    fs::write(
+        &second_file,
+        read_file_fixture_contents(second_prefix, second_line_count),
+    )
+    .unwrap();
+
+    let first_call_id = "retrieval-aware-miss-output-1";
+    let second_call_id = "retrieval-aware-miss-output-2";
+    let retrieve_call_id = "retrieval-aware-compact-query-miss-call";
+    let first_args = json!({
+        "file_path": first_file.to_string_lossy(),
+        "offset": 1,
+        "limit": first_line_count,
+    })
+    .to_string();
+    let second_args = json!({
+        "file_path": second_file.to_string_lossy(),
+        "offset": 1,
+        "limit": second_line_count,
+    })
+    .to_string();
+    let second_output = read_file_tool_output(second_prefix, second_line_count);
+    let second_hash = input_slimming_hash_for_test(&second_output);
+    let missing_query = "definitely-not-in-retrieval-aware-miss-output";
+    let retrieve_args = json!({
+        "hash": second_hash,
+        "query": missing_query,
+    })
+    .to_string();
+
+    let first_read_turn = sse(vec![
+        ev_function_call(first_call_id, "read_file", &first_args),
+        ev_completed_with_tokens("r1", 1_000),
+    ]);
+    let first_follow_up = sse(vec![
+        ev_assistant_message("m1", "first query-miss read output recorded"),
+        ev_completed_with_tokens("r2", 1_000),
+    ]);
+    let second_read_turn = sse(vec![
+        ev_function_call(second_call_id, "read_file", &second_args),
+        ev_completed_with_tokens("r3", 1_000),
+    ]);
+    let retrieval_call_turn = sse(vec![
+        ev_function_call(retrieve_call_id, "lha_input_retrieve", &retrieve_args),
+        ev_completed_with_tokens("r4", 10),
+    ]);
+    let summary_without_marker = "Current task and decisions\n- Query miss happened, but the compact summary omitted the marker.\n\nEvidence retrieved\n- No matching lines were found.\n\nNext steps\n- Continue.";
+    let summary_turn = sse(vec![
+        ev_assistant_message("m2", summary_without_marker),
+        ev_completed_with_tokens("r5", 10),
+    ]);
+    let post_compact_follow_up = sse(vec![
+        ev_assistant_message("m3", FINAL_REPLY),
+        ev_completed_with_tokens("r6", 10),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            first_read_turn,
+            first_follow_up,
+            second_read_turn,
+            retrieval_call_turn,
+            summary_turn,
+            post_compact_follow_up,
+        ],
+    )
+    .await;
+
+    test.submit_turn("read the first query miss retrieval file")
+        .await
+        .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.submit_turn("read the second query miss retrieval file")
+        .await
+        .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        6,
+        "expected compact query miss, compact summary, and post-compact follow-up"
+    );
+
+    let (miss_output, success) = requests[4]
+        .function_call_output_content_and_success(retrieve_call_id)
+        .expect("query miss output should be sent back to the compact model");
+    assert_eq!(success, Some(true));
+    assert!(
+        miss_output
+            .as_deref()
+            .is_some_and(|output| output.contains("did not match any lines or sections")),
+        "query miss should return an explicit no-match result"
+    );
+
+    let follow_up_body = requests[5].body_json().to_string();
+    assert!(
+        body_contains_text(&follow_up_body, summary_without_marker),
+        "post-compact follow-up should include the compact model summary"
+    );
+    assert!(
+        follow_up_body.contains("Unresolved retrievable markers:"),
+        "query-missed markers omitted by the model should be restored by the guard"
+    );
+    assert!(
+        follow_up_body.contains(&format!("<<lha-input:{second_hash}>>")),
+        "the query-missed marker should remain retrievable after compaction"
+    );
+    assert!(
+        !follow_up_body.contains(&format!(
+            "L{second_line_count}: {second_prefix}-line-{second_line_count}"
+        )),
+        "post-compact follow-up should not contain the raw original output"
+    );
+
+    let rollout_path = test.session_configured.rollout_path.expect("rollout path");
+    let rollout_text = tokio::fs::read_to_string(rollout_path)
+        .await
+        .expect("read rollout");
+    let sidecar_hashes = input_slimming_sidecar_hashes_from_rollout(&rollout_text);
+    assert!(
+        sidecar_hashes.contains(&second_hash),
+        "query-missed unresolved marker should have a persisted sidecar"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn preflight_auto_compact_runs_before_initial_request_when_input_exceeds_effective_context_window()
  {
     skip_if_no_network!();

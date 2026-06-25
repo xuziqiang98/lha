@@ -7,12 +7,15 @@ use lha_llm::ToolDescriptor;
 use lha_llm::ToolInputSchema;
 use serde::Deserialize;
 
+use crate::product::agent::codex::Session;
 use crate::product::agent::function_tool::FunctionCallError;
+use crate::product::agent::input_slimming::RetrieveResult;
 use crate::product::agent::tools::context::ToolInvocation;
 use crate::product::agent::tools::context::ToolOutput;
 use crate::product::agent::tools::context::ToolPayload;
 use crate::product::agent::tools::registry::ToolHandler;
 use crate::product::agent::tools::registry::ToolKind;
+use crate::product::otel::OtelManager;
 
 pub(crate) const INPUT_RETRIEVE_TOOL_NAME: &str = "lha_input_retrieve";
 
@@ -22,6 +25,57 @@ pub(crate) struct InputRetrieveHandler;
 struct InputRetrieveArgs {
     hash: String,
     query: Option<String>,
+}
+
+pub(crate) async fn retrieve_input_slimming_for_tool(
+    session: &Session,
+    hash: &str,
+    query: Option<&str>,
+) -> RetrieveResult {
+    let mut result = session
+        .services
+        .input_slimming_store
+        .retrieve(hash, query)
+        .await;
+    if !result.success
+        && session
+            .rehydrate_input_slimming_hash_from_rollout(hash)
+            .await
+    {
+        result = session
+            .services
+            .input_slimming_store
+            .retrieve(hash, query)
+            .await;
+    }
+    result
+}
+
+pub(crate) fn record_input_slimming_retrieve_metrics(otel: &OtelManager, result: &RetrieveResult) {
+    let strategy = result
+        .strategy
+        .map(super::InputSlimmingStrategy::as_str)
+        .unwrap_or("unknown");
+    let tool_name = result.tool_name.as_deref().unwrap_or("unknown");
+    otel.counter(
+        "lha.input_slimming.retrieve",
+        1,
+        &[
+            ("success", if result.success { "true" } else { "false" }),
+            ("strategy", strategy),
+            ("tool_name", tool_name),
+        ],
+    );
+    if !result.success {
+        otel.counter("lha.input_slimming.retrieve_miss", 1, &[]);
+    }
+    if let Some(matched) = result.query_matched {
+        otel.counter(
+            "lha.input_slimming.retrieve_query",
+            1,
+            &[("matched", if matched { "true" } else { "false" })],
+        );
+    }
 }
 
 #[async_trait]
@@ -47,54 +101,15 @@ impl ToolHandler for InputRetrieveHandler {
             ))
         })?;
 
-        let mut result = invocation
-            .session
-            .services
-            .input_slimming_store
-            .retrieve(args.hash.as_str(), args.query.as_deref())
-            .await;
-        if !result.success
-            && invocation
-                .session
-                .rehydrate_input_slimming_hash_from_rollout(args.hash.as_str())
-                .await
-        {
-            result = invocation
-                .session
-                .services
-                .input_slimming_store
-                .retrieve(args.hash.as_str(), args.query.as_deref())
-                .await;
-        }
+        let result = retrieve_input_slimming_for_tool(
+            invocation.session.as_ref(),
+            args.hash.as_str(),
+            args.query.as_deref(),
+        )
+        .await;
 
-        let strategy = result
-            .strategy
-            .map(super::InputSlimmingStrategy::as_str)
-            .unwrap_or("unknown");
-        let tool_name = result.tool_name.as_deref().unwrap_or("unknown");
-        invocation.turn.runtime.get_otel_manager().counter(
-            "lha.input_slimming.retrieve",
-            1,
-            &[
-                ("success", if result.success { "true" } else { "false" }),
-                ("strategy", strategy),
-                ("tool_name", tool_name),
-            ],
-        );
-        if !result.success {
-            invocation.turn.runtime.get_otel_manager().counter(
-                "lha.input_slimming.retrieve_miss",
-                1,
-                &[],
-            );
-        }
-        if let Some(matched) = result.query_matched {
-            invocation.turn.runtime.get_otel_manager().counter(
-                "lha.input_slimming.retrieve_query",
-                1,
-                &[("matched", if matched { "true" } else { "false" })],
-            );
-        }
+        let otel = invocation.turn.runtime.get_otel_manager();
+        record_input_slimming_retrieve_metrics(&otel, &result);
 
         Ok(ToolOutput::Function {
             content: result.content,
@@ -145,7 +160,19 @@ mod tests {
     use crate::product::agent::input_slimming::StoredInputMetadata;
     use crate::product::agent::tools::context::ToolPayload;
     use crate::product::agent::turn_diff_tracker::TurnDiffTracker;
+    use crate::product::otel::OtelManager;
+    use crate::product::otel::metrics::MetricsClient;
+    use crate::product::otel::metrics::MetricsConfig;
+    use crate::product::otel::metrics::Result as MetricsResult;
+    use crate::product::protocol::ThreadId;
+    use crate::product::protocol::protocol::SessionSource;
+    use opentelemetry_sdk::metrics::InMemoryMetricExporter;
+    use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+    use opentelemetry_sdk::metrics::data::Metric;
+    use opentelemetry_sdk::metrics::data::MetricData;
+    use opentelemetry_sdk::metrics::data::ResourceMetrics;
     use pretty_assertions::assert_eq;
+    use std::collections::BTreeMap;
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
@@ -172,6 +199,53 @@ mod tests {
             additional_properties,
             Some(AdditionalProperties::Boolean(false))
         );
+    }
+
+    #[test]
+    fn record_retrieve_metrics_records_query_miss_label() -> MetricsResult<()> {
+        let exporter = InMemoryMetricExporter::default();
+        let config =
+            MetricsConfig::in_memory("test", "lha-cli", env!("CARGO_PKG_VERSION"), exporter)
+                .with_runtime_reader();
+        let metrics = MetricsClient::new(config)?;
+        let manager = OtelManager::new(
+            ThreadId::new(),
+            "gpt-5.1",
+            "gpt-5.1",
+            None,
+            None,
+            None,
+            false,
+            "test".to_string(),
+            SessionSource::Cli,
+        )
+        .with_metrics_without_metadata_tags(metrics);
+        let result = RetrieveResult {
+            content: "no matching excerpt".to_string(),
+            success: true,
+            strategy: Some(InputSlimmingStrategy::PlainTextHeadTail),
+            tool_name: Some("shell".to_string()),
+            query_matched: Some(false),
+        };
+
+        record_input_slimming_retrieve_metrics(&manager, &result);
+
+        let snapshot = manager.snapshot_metrics()?;
+        assert_eq!(
+            counter_attributes(&snapshot, "lha.input_slimming.retrieve"),
+            BTreeMap::from([
+                ("strategy".to_string(), "plain_text_head_tail".to_string()),
+                ("success".to_string(), "true".to_string()),
+                ("tool_name".to_string(), "shell".to_string()),
+            ])
+        );
+        assert_eq!(
+            counter_attributes(&snapshot, "lha.input_slimming.retrieve_query"),
+            BTreeMap::from([("matched".to_string(), "false".to_string())])
+        );
+        assert!(find_metric(&snapshot, "lha.input_slimming.retrieve_miss").is_none());
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -251,6 +325,31 @@ mod tests {
                 assert_eq!(content_items, None);
                 assert_eq!(success, Some(false));
             }
+        }
+    }
+
+    fn find_metric<'a>(snapshot: &'a ResourceMetrics, name: &str) -> Option<&'a Metric> {
+        snapshot
+            .scope_metrics()
+            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+            .find(|metric| metric.name() == name)
+    }
+
+    fn counter_attributes(snapshot: &ResourceMetrics, name: &str) -> BTreeMap<String, String> {
+        let metric = find_metric(snapshot, name).expect("counter metric missing");
+        match metric.data() {
+            AggregatedMetrics::U64(data) => match data {
+                MetricData::Sum(sum) => {
+                    let points: Vec<_> = sum.data_points().collect();
+                    assert_eq!(points.len(), 1);
+                    points[0]
+                        .attributes()
+                        .map(|kv| (kv.key.as_str().to_string(), kv.value.as_str().to_string()))
+                        .collect()
+                }
+                _ => panic!("unexpected counter aggregation for {name}"),
+            },
+            _ => panic!("unexpected counter data type for {name}"),
         }
     }
 }
