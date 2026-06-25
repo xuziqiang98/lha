@@ -4489,12 +4489,13 @@ async fn remote_compact_preserves_existing_durable_input_slimming_marker() {
     )
     .await;
 
-    let remote_summary = "REMOTE_COMPACT_SUMMARY_WITHOUT_MARKERS";
+    let fake_hash = "ffffffffffffffffffffffff";
+    let remote_summary = format!("REMOTE_COMPACT_SUMMARY_WITH_FAKE <<lha-input:{fake_hash}>>");
     let compacted_history = vec![TranscriptItem::Message {
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
-            text: remote_summary.to_string(),
+            text: remote_summary.clone(),
         }],
         end_turn: None,
     }];
@@ -4583,8 +4584,16 @@ async fn remote_compact_preserves_existing_durable_input_slimming_marker() {
     );
     let follow_up_body = requests[5].body_json().to_string();
     assert!(
-        follow_up_body.contains(remote_summary),
+        follow_up_body.contains("REMOTE_COMPACT_SUMMARY_WITH_FAKE"),
         "post-remote-compact request should include the remote compact summary"
+    );
+    assert!(
+        !follow_up_body.contains(&format!("<<lha-input:{fake_hash}>>")),
+        "remote compact fake marker should be neutralized"
+    );
+    assert!(
+        follow_up_body.contains(&format!("input slimming marker {fake_hash} omitted")),
+        "post-remote-compact request should explain why the fake marker was omitted"
     );
     assert!(
         follow_up_body.contains("Unresolved retrievable markers:"),
@@ -4918,6 +4927,152 @@ async fn retrieval_aware_compact_query_miss_keeps_unresolved_marker() {
     assert!(
         sidecar_hashes.contains(&second_hash),
         "query-missed unresolved marker should have a persisted sidecar"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retrieval_aware_compact_large_full_retrieve_keeps_unresolved_marker() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_model("test-gpt-5")
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.features.enable(Feature::InputSlimmingLiveZone);
+            config.features.enable(Feature::RetrievalAwareCompact);
+            config.tool_output_token_limit = Some(200_000);
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(20_000);
+        });
+    let test = builder.build(&server).await.unwrap();
+
+    let first_prefix = "retrieval-aware-large-sentinel-1";
+    let second_prefix = "retrieval-aware-large-sentinel-2";
+    let first_line_count = 1_500;
+    let second_line_count = 5_000;
+    let first_file = test.cwd.path().join("retrieval-aware-large-1.txt");
+    let second_file = test.cwd.path().join("retrieval-aware-large-2.txt");
+    fs::write(
+        &first_file,
+        read_file_fixture_contents(first_prefix, first_line_count),
+    )
+    .unwrap();
+    fs::write(
+        &second_file,
+        read_file_fixture_contents(second_prefix, second_line_count),
+    )
+    .unwrap();
+
+    let first_call_id = "retrieval-aware-large-output-1";
+    let second_call_id = "retrieval-aware-large-output-2";
+    let retrieve_call_id = "retrieval-aware-compact-large-full-call";
+    let first_args = json!({
+        "file_path": first_file.to_string_lossy(),
+        "offset": 1,
+        "limit": first_line_count,
+    })
+    .to_string();
+    let second_args = json!({
+        "file_path": second_file.to_string_lossy(),
+        "offset": 1,
+        "limit": second_line_count,
+    })
+    .to_string();
+    let second_output = read_file_tool_output(second_prefix, second_line_count);
+    let second_hash = input_slimming_hash_for_test(&second_output);
+    let retrieve_args = json!({
+        "hash": second_hash,
+    })
+    .to_string();
+
+    let first_read_turn = sse(vec![
+        ev_function_call(first_call_id, "read_file", &first_args),
+        ev_completed_with_tokens("r1", 1_000),
+    ]);
+    let first_follow_up = sse(vec![
+        ev_assistant_message("m1", "first large full-retrieve output recorded"),
+        ev_completed_with_tokens("r2", 1_000),
+    ]);
+    let second_read_turn = sse(vec![
+        ev_function_call(second_call_id, "read_file", &second_args),
+        ev_completed_with_tokens("r3", 1_000),
+    ]);
+    let retrieval_call_turn = sse(vec![
+        ev_function_call(retrieve_call_id, "lha_input_retrieve", &retrieve_args),
+        ev_completed_with_tokens("r4", 10),
+    ]);
+    let summary_without_marker = "Current task and decisions\n- Large full retrieval returned only a head/tail view, but the compact summary omitted the marker.\n\nEvidence retrieved\n- Head/tail only.\n\nNext steps\n- Continue.";
+    let summary_turn = sse(vec![
+        ev_assistant_message("m2", summary_without_marker),
+        ev_completed_with_tokens("r5", 10),
+    ]);
+    let post_compact_follow_up = sse(vec![
+        ev_assistant_message("m3", FINAL_REPLY),
+        ev_completed_with_tokens("r6", 10),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            first_read_turn,
+            first_follow_up,
+            second_read_turn,
+            retrieval_call_turn,
+            summary_turn,
+            post_compact_follow_up,
+        ],
+    )
+    .await;
+
+    test.submit_turn("read the first large full retrieval file")
+        .await
+        .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.submit_turn("read the second large full retrieval file")
+        .await
+        .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        6,
+        "expected compact full retrieval, compact summary, and post-compact follow-up"
+    );
+
+    let (retrieve_output, success) = requests[4]
+        .function_call_output_content_and_success(retrieve_call_id)
+        .expect("full retrieval output should be sent back to the compact model");
+    assert_eq!(success, Some(true));
+    assert!(
+        retrieve_output
+            .as_deref()
+            .is_some_and(|output| output.contains("larger than the retrieval budget")),
+        "large no-query retrieval should return an explicit head/tail view"
+    );
+
+    let follow_up_body = requests[5].body_json().to_string();
+    assert!(
+        body_contains_text(&follow_up_body, summary_without_marker),
+        "post-compact follow-up should include the compact model summary"
+    );
+    assert!(
+        follow_up_body.contains("Unresolved retrievable markers:"),
+        "head/tail-only retrieval should leave the omitted marker unresolved"
+    );
+    assert!(
+        follow_up_body.contains(&format!("<<lha-input:{second_hash}>>")),
+        "the partially retrieved marker should remain retrievable after compaction"
+    );
+    assert!(
+        !follow_up_body.contains(&format!(
+            "L{}: {second_prefix}-line-{}",
+            second_line_count / 2,
+            second_line_count / 2
+        )),
+        "post-compact follow-up should not contain the raw middle of the large output"
     );
 }
 

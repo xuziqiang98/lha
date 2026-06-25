@@ -90,6 +90,7 @@ pub(crate) struct RetrieveResult {
     pub(crate) strategy: Option<InputSlimmingStrategy>,
     pub(crate) tool_name: Option<String>,
     pub(crate) query_matched: Option<bool>,
+    pub(crate) returned_full_original: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -236,17 +237,25 @@ impl InputSlimmingStore {
                 strategy: None,
                 tool_name: None,
                 query_matched: query.map(|_| false),
+                returned_full_original: false,
             };
         };
 
-        let (content, query_matched) = match query.map(str::trim).filter(|query| !query.is_empty())
-        {
-            Some(query) => {
-                let query_result = retrieve_query(&entry, hash, query);
-                (query_result.content, Some(query_result.matched))
-            }
-            None => (retrieve_full(&entry, hash), None),
-        };
+        let (content, query_matched, returned_full_original) =
+            match query.map(str::trim).filter(|query| !query.is_empty()) {
+                Some(query) => {
+                    let query_result = retrieve_query(&entry, hash, query);
+                    (query_result.content, Some(query_result.matched), false)
+                }
+                None => {
+                    let full_result = retrieve_full(&entry, hash);
+                    (
+                        full_result.content,
+                        None,
+                        full_result.returned_full_original,
+                    )
+                }
+            };
 
         RetrieveResult {
             content,
@@ -254,6 +263,7 @@ impl InputSlimmingStore {
             strategy: Some(entry.metadata.strategy),
             tool_name: Some(entry.metadata.tool_name),
             query_matched,
+            returned_full_original,
         }
     }
 
@@ -276,18 +286,29 @@ pub(crate) fn hash_text(text: &str) -> String {
     hex[..24].to_string()
 }
 
-fn retrieve_full(entry: &StoredInput, hash: &str) -> String {
+struct FullRetrieveResult {
+    content: String,
+    returned_full_original: bool,
+}
+
+fn retrieve_full(entry: &StoredInput, hash: &str) -> FullRetrieveResult {
     let header = metadata_header(entry, hash);
     let truncated = truncate_text(
         &entry.original,
         TruncationPolicy::Tokens(INPUT_RETRIEVE_MAX_TOKENS),
     );
     if truncated == entry.original {
-        format!("{header}\n\n{}", entry.original)
+        FullRetrieveResult {
+            content: format!("{header}\n\n{}", entry.original),
+            returned_full_original: true,
+        }
     } else {
-        format!(
-            "{header}\n\nOriginal input was larger than the retrieval budget; returning a head/tail view.\n\n{truncated}"
-        )
+        FullRetrieveResult {
+            content: format!(
+                "{header}\n\nOriginal input was larger than the retrieval budget; returning a head/tail view.\n\n{truncated}"
+            ),
+            returned_full_original: false,
+        }
     }
 }
 
@@ -579,7 +600,22 @@ mod tests {
         assert!(result.content.contains("strategy=plain_text_head_tail"));
         assert!(result.content.contains("tool_name=shell"));
         assert!(result.content.contains("created_turn_id=turn-1"));
+        assert_eq!(result.query_matched, None);
+        assert!(result.returned_full_original);
         assert_eq!(got.retrieval_count, 1);
+    }
+
+    #[tokio::test]
+    async fn full_retrieval_marks_full_original() {
+        let store = InputSlimmingStore::default();
+        let hash = store.put("alpha\nbeta".to_string(), metadata()).await;
+
+        let result = store.retrieve(&hash, None).await;
+
+        assert!(result.success);
+        assert_eq!(result.query_matched, None);
+        assert!(result.returned_full_original);
+        assert!(result.content.contains("alpha\nbeta"));
     }
 
     #[tokio::test]
@@ -593,6 +629,7 @@ mod tests {
         assert_eq!(store.get(&hash).await, None);
         let result = store.retrieve(&hash, None).await;
         assert!(!result.success);
+        assert!(!result.returned_full_original);
         assert!(result.content.contains(&hash));
     }
 
@@ -641,6 +678,7 @@ mod tests {
 
         assert!(result.success);
         assert_eq!(result.query_matched, Some(true));
+        assert!(!result.returned_full_original);
         assert!(result.content.contains("3:needle"));
         assert!(result.content.contains("1:one"));
         assert!(result.content.contains("5:five"));
@@ -659,6 +697,7 @@ mod tests {
         let result = store.retrieve(&hash, Some("src/main.rs")).await;
 
         assert!(result.success);
+        assert!(!result.returned_full_original);
         assert!(result.content.contains("Path-grouped matches"));
         assert!(result.content.contains("# src/main.rs"));
         assert!(result.content.contains("src/main.rs:20:needle"));
@@ -674,6 +713,7 @@ mod tests {
         let result = store.retrieve(&hash, Some("needle")).await;
 
         assert!(result.success);
+        assert!(!result.returned_full_original);
         assert!(result.content.contains("Section matches"));
         assert!(result.content.contains("# Beta"));
         assert!(result.content.contains("needle"));
@@ -688,6 +728,7 @@ mod tests {
 
         assert!(result.success);
         assert_eq!(result.query_matched, Some(false));
+        assert!(!result.returned_full_original);
         assert!(
             result
                 .content
@@ -702,17 +743,20 @@ mod tests {
         let result = store.retrieve("missing", None).await;
 
         assert!(!result.success);
+        assert!(!result.returned_full_original);
         assert!(result.content.contains("missing"));
     }
 
     #[tokio::test]
-    async fn large_retrieval_is_truncated_to_budget() {
+    async fn large_full_retrieval_marks_partial_head_tail() {
         let store = InputSlimmingStore::default();
         let hash = store.put("abcdef".repeat(100_000), metadata()).await;
 
         let result = store.retrieve(&hash, None).await;
 
         assert!(result.success);
+        assert_eq!(result.query_matched, None);
+        assert!(!result.returned_full_original);
         assert!(result.content.contains("larger than the retrieval budget"));
         assert!(result.content.contains("truncated"));
     }

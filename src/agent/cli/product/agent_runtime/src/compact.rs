@@ -36,6 +36,9 @@ use crate::product::agent::truncate::truncate_text;
 use crate::product::protocol::items::ContextCompactionItem;
 use crate::product::protocol::items::TurnItem;
 use crate::product::protocol::models::ContentItem;
+use crate::product::protocol::models::ReasoningItemContent;
+use crate::product::protocol::models::ReasoningItemReasoningSummary;
+use crate::product::protocol::models::ToolResultContentItem;
 use crate::product::protocol::models::TranscriptItem;
 use crate::product::protocol::models::transcript_item_from_user_input;
 use crate::product::protocol::plan_tool::StepStatus;
@@ -120,7 +123,7 @@ struct RetrievalAwareCompactOutput {
 
 struct RetrievalAwareToolCallResult {
     item: ToolResultItem,
-    retrieved_original: bool,
+    marker_resolved: bool,
 }
 
 pub(crate) struct GuardedRetrievalSummary {
@@ -359,7 +362,6 @@ async fn run_compact_task_inner(
         .unwrap_or_else(|| get_last_assistant_message_from_turn(history_items).unwrap_or_default());
     let guarded_summary = guard_input_slimming_markers_in_summary(
         summary_suffix,
-        &marker_hashes,
         &durable_marker_hashes,
         &retrieved_hashes,
     );
@@ -647,7 +649,7 @@ async fn drain_retrieval_aware_compact_to_summary(
                             "Retrieval-aware compact already used {RETRIEVAL_AWARE_COMPACT_RETRIEVE_LIMIT} retrieval calls. Preserve any unresolved <<lha-input:...>> markers in the final summary."
                         ),
                     ),
-                    retrieved_original: false,
+                    marker_resolved: false,
                 }
             } else {
                 RetrievalAwareToolCallResult {
@@ -657,11 +659,11 @@ async fn drain_retrieval_aware_compact_to_summary(
                             "Retrieval-aware compact only supports the {INPUT_RETRIEVE_TOOL_NAME} tool. Preserve unresolved markers in the final summary."
                         ),
                     ),
-                    retrieved_original: false,
+                    marker_resolved: false,
                 }
             };
             let success = tool_result_success(&result.item);
-            if result.retrieved_original
+            if result.marker_resolved
                 && let Some(hash) = retrieve_hash
             {
                 retrieved_hashes.insert(hash);
@@ -701,7 +703,7 @@ async fn handle_retrieval_aware_tool_call(
                     request,
                     "lha_input_retrieve received unsupported payload".to_string(),
                 ),
-                retrieved_original: false,
+                marker_resolved: false,
             };
         }
     };
@@ -714,7 +716,7 @@ async fn handle_retrieval_aware_tool_call(
                     request,
                     format!("failed to parse lha_input_retrieve arguments: {err}"),
                 ),
-                retrieved_original: false,
+                marker_resolved: false,
             };
         }
     };
@@ -723,7 +725,7 @@ async fn handle_retrieval_aware_tool_call(
         retrieve_input_slimming_for_tool(sess.as_ref(), &args.hash, args.query.as_deref()).await;
     let otel = turn_context.runtime.get_otel_manager();
     record_input_slimming_retrieve_metrics(&otel, &result);
-    let retrieved_original = retrieve_result_exposes_original(&result);
+    let marker_resolved = retrieve_result_resolves_marker_for_compact(&result);
     RetrievalAwareToolCallResult {
         item: retrieval_aware_retrieve_result_to_tool_result(
             &request.call_id,
@@ -731,7 +733,7 @@ async fn handle_retrieval_aware_tool_call(
             payload_outputs_custom,
             result,
         ),
-        retrieved_original,
+        marker_resolved,
     }
 }
 
@@ -762,8 +764,16 @@ fn retrieval_aware_retrieve_result_to_tool_result(
     }
 }
 
-fn retrieve_result_exposes_original(result: &RetrieveResult) -> bool {
-    result.success && result.query_matched != Some(false)
+fn retrieve_result_resolves_marker_for_compact(result: &RetrieveResult) -> bool {
+    if !result.success {
+        return false;
+    }
+
+    match result.query_matched {
+        Some(true) => true,
+        Some(false) => false,
+        None => result.returned_full_original,
+    }
 }
 
 fn retrieval_aware_tool_error(request: &ToolCallRequest, message: String) -> ToolResultItem {
@@ -846,32 +856,158 @@ fn input_slimming_hashes_from_text(text: &str) -> HashSet<String> {
     hashes
 }
 
+fn non_durable_marker_replacement(hash: &str) -> String {
+    format!("input slimming marker {hash} omitted because its original is not durably retrievable")
+}
+
+fn neutralize_non_durable_input_slimming_markers_in_text(
+    text: &mut String,
+    durable_marker_hashes: &HashSet<String>,
+) -> usize {
+    let mut non_durable_hashes = input_slimming_hashes_from_text(text)
+        .into_iter()
+        .filter(|hash| !durable_marker_hashes.contains(hash))
+        .collect::<Vec<_>>();
+    non_durable_hashes.sort();
+
+    let mut neutralized = 0usize;
+    for hash in non_durable_hashes {
+        let marker = input_slimming_marker(&hash);
+        if text.contains(&marker) {
+            neutralized = neutralized.saturating_add(1);
+            *text = text.replace(&marker, &non_durable_marker_replacement(&hash));
+        }
+    }
+    neutralized
+}
+
+fn neutralize_non_durable_input_slimming_markers_in_replacement_items(
+    items: &mut [TranscriptItem],
+    durable_marker_hashes: &HashSet<String>,
+) -> usize {
+    let mut neutralized = 0usize;
+    for item in items {
+        match item {
+            TranscriptItem::Message {
+                id: _,
+                role: _,
+                content,
+                end_turn: _,
+            } => {
+                for item in content {
+                    match item {
+                        ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                            neutralized = neutralized.saturating_add(
+                                neutralize_non_durable_input_slimming_markers_in_text(
+                                    text,
+                                    durable_marker_hashes,
+                                ),
+                            );
+                        }
+                        ContentItem::InputImage { image_url: _ } => {}
+                    }
+                }
+            }
+            TranscriptItem::Reasoning {
+                id: _,
+                summary,
+                content,
+                encrypted_content: _,
+            } => {
+                for summary in summary {
+                    match summary {
+                        ReasoningItemReasoningSummary::SummaryText { text } => {
+                            neutralized = neutralized.saturating_add(
+                                neutralize_non_durable_input_slimming_markers_in_text(
+                                    text,
+                                    durable_marker_hashes,
+                                ),
+                            );
+                        }
+                    }
+                }
+                if let Some(content) = content {
+                    for content in content {
+                        match content {
+                            ReasoningItemContent::ReasoningText { text }
+                            | ReasoningItemContent::Text { text } => {
+                                neutralized = neutralized.saturating_add(
+                                    neutralize_non_durable_input_slimming_markers_in_text(
+                                        text,
+                                        durable_marker_hashes,
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            TranscriptItem::ToolResult {
+                call_id: _,
+                tool_name: _,
+                payload,
+            } => match payload {
+                ToolResultPayload::Structured {
+                    content,
+                    content_items,
+                    success: _,
+                } => {
+                    neutralized = neutralized.saturating_add(
+                        neutralize_non_durable_input_slimming_markers_in_text(
+                            content,
+                            durable_marker_hashes,
+                        ),
+                    );
+                    if let Some(content_items) = content_items {
+                        for item in content_items {
+                            match item {
+                                ToolResultContentItem::InputText { text } => {
+                                    neutralized = neutralized.saturating_add(
+                                        neutralize_non_durable_input_slimming_markers_in_text(
+                                            text,
+                                            durable_marker_hashes,
+                                        ),
+                                    );
+                                }
+                                ToolResultContentItem::InputImage { image_url: _ } => {}
+                            }
+                        }
+                    }
+                }
+                ToolResultPayload::Text { output } => {
+                    neutralized = neutralized.saturating_add(
+                        neutralize_non_durable_input_slimming_markers_in_text(
+                            output,
+                            durable_marker_hashes,
+                        ),
+                    );
+                }
+            },
+            TranscriptItem::ToolCall {
+                id: _,
+                call_id: _,
+                tool_name: _,
+                payload: _,
+            }
+            | TranscriptItem::HostedActivity {
+                id: _,
+                activity_type: _,
+                status: _,
+                payload: _,
+            }
+            | TranscriptItem::Unknown { raw: _ } => {}
+        }
+    }
+    neutralized
+}
+
 fn guard_input_slimming_markers_in_summary(
     mut summary: String,
-    marker_hashes: &HashSet<String>,
     durable_marker_hashes: &HashSet<String>,
     retrieved_hashes: &HashSet<String>,
 ) -> GuardedRetrievalSummary {
-    let mut non_durable_marker_count = 0usize;
-    let mut candidate_hashes = marker_hashes.clone();
-    candidate_hashes.extend(input_slimming_hashes_from_text(&summary));
-    let mut non_durable_hashes = candidate_hashes
-        .iter()
-        .filter(|hash| !durable_marker_hashes.contains(*hash))
-        .collect::<Vec<_>>();
-    non_durable_hashes.sort();
-    for hash in non_durable_hashes {
-        let marker = input_slimming_marker(hash);
-        if summary.contains(&marker) {
-            non_durable_marker_count = non_durable_marker_count.saturating_add(1);
-            summary = summary.replace(
-                &marker,
-                &format!(
-                    "input slimming marker {hash} omitted because its original is not durably retrievable"
-                ),
-            );
-        }
-    }
+    let non_durable_marker_count =
+        neutralize_non_durable_input_slimming_markers_in_text(&mut summary, durable_marker_hashes);
 
     let mut missing = durable_marker_hashes
         .iter()
@@ -910,6 +1046,11 @@ pub(crate) async fn append_missing_unresolved_input_slimming_markers(
         .input_slimming_store
         .durable_hashes_for(&source_marker_hashes)
         .await;
+    let non_durable_marker_count =
+        neutralize_non_durable_input_slimming_markers_in_replacement_items(
+            replacement_items,
+            &durable_marker_hashes,
+        );
     let replacement_marker_hashes = transcript_items_input_slimming_hashes(replacement_items);
     let mut missing = durable_marker_hashes
         .iter()
@@ -941,7 +1082,7 @@ pub(crate) async fn append_missing_unresolved_input_slimming_markers(
     GuardedRetrievalSummary {
         summary,
         durable_unresolved_count: missing.len(),
-        non_durable_marker_count: 0,
+        non_durable_marker_count,
     }
 }
 
@@ -2180,16 +2321,11 @@ mod tests {
 
     #[test]
     fn guard_appends_durable_marker_for_raw_summary() {
-        let marker_hashes = HashSet::from([
-            "111111111111111111111111".to_string(),
-            "222222222222222222222222".to_string(),
-        ]);
         let durable_marker_hashes = HashSet::from(["111111111111111111111111".to_string()]);
         let retrieved_hashes = HashSet::new();
 
         let guarded = guard_input_slimming_markers_in_summary(
             "Current task and decisions\n- Keep going".to_string(),
-            &marker_hashes,
             &durable_marker_hashes,
             &retrieved_hashes,
         );
@@ -2211,13 +2347,11 @@ mod tests {
 
     #[test]
     fn guard_does_not_append_retrieved_durable_marker() {
-        let marker_hashes = HashSet::from(["111111111111111111111111".to_string()]);
-        let durable_marker_hashes = marker_hashes.clone();
-        let retrieved_hashes = marker_hashes.clone();
+        let durable_marker_hashes = HashSet::from(["111111111111111111111111".to_string()]);
+        let retrieved_hashes = durable_marker_hashes.clone();
 
         let guarded = guard_input_slimming_markers_in_summary(
             "Current task and decisions\n- Keep going".to_string(),
-            &marker_hashes,
             &durable_marker_hashes,
             &retrieved_hashes,
         );
@@ -2234,13 +2368,11 @@ mod tests {
 
     #[test]
     fn guard_neutralizes_non_durable_marker_already_in_summary() {
-        let marker_hashes = HashSet::from(["222222222222222222222222".to_string()]);
         let durable_marker_hashes = HashSet::new();
         let retrieved_hashes = HashSet::new();
 
         let guarded = guard_input_slimming_markers_in_summary(
             "Unresolved retrievable markers:\n- <<lha-input:222222222222222222222222>>".to_string(),
-            &marker_hashes,
             &durable_marker_hashes,
             &retrieved_hashes,
         );
@@ -2261,13 +2393,11 @@ mod tests {
 
     #[test]
     fn guard_keeps_existing_durable_marker_in_summary() {
-        let marker_hashes = HashSet::from(["111111111111111111111111".to_string()]);
-        let durable_marker_hashes = marker_hashes.clone();
+        let durable_marker_hashes = HashSet::from(["111111111111111111111111".to_string()]);
         let retrieved_hashes = HashSet::new();
 
         let guarded = guard_input_slimming_markers_in_summary(
             "Unresolved retrievable markers:\n- <<lha-input:111111111111111111111111>>".to_string(),
-            &marker_hashes,
             &durable_marker_hashes,
             &retrieved_hashes,
         );
@@ -2278,24 +2408,87 @@ mod tests {
     }
 
     #[test]
-    fn retrieve_result_exposes_original_only_when_content_was_returned() {
-        let result = |success, query_matched| RetrieveResult {
+    fn neutralize_non_durable_markers_in_replacement_items() {
+        let durable_hash = "111111111111111111111111";
+        let fake_hash = "ffffffffffffffffffffffff";
+        let durable_marker = input_slimming_marker(durable_hash);
+        let fake_marker = input_slimming_marker(fake_hash);
+        let mut items = vec![
+            TranscriptItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![
+                    ContentItem::OutputText {
+                        text: format!("keep {durable_marker}"),
+                    },
+                    ContentItem::InputText {
+                        text: format!("drop {fake_marker}"),
+                    },
+                    ContentItem::InputImage {
+                        image_url: "https://example.test/image.png".to_string(),
+                    },
+                ],
+                end_turn: None,
+            },
+            TranscriptItem::ToolResult {
+                call_id: "call-1".to_string(),
+                tool_name: "shell".to_string(),
+                payload: ToolResultPayload::Structured {
+                    content: format!("structured {fake_marker}"),
+                    content_items: Some(vec![
+                        ToolResultContentItem::InputText {
+                            text: format!("item {fake_marker}"),
+                        },
+                        ToolResultContentItem::InputImage {
+                            image_url: "https://example.test/tool.png".to_string(),
+                        },
+                    ]),
+                    success: Some(true),
+                },
+            },
+        ];
+
+        let count = neutralize_non_durable_input_slimming_markers_in_replacement_items(
+            &mut items,
+            &HashSet::from([durable_hash.to_string()]),
+        );
+        let serialized = serde_json::to_string(&items).expect("serialize replacement items");
+
+        assert_eq!(count, 3);
+        assert!(serialized.contains(&durable_marker));
+        assert!(!serialized.contains(&fake_marker));
+        assert!(serialized.contains(&non_durable_marker_replacement(fake_hash)));
+    }
+
+    #[test]
+    fn retrieve_result_resolves_marker_only_when_full_or_query_matched() {
+        let result = |success, query_matched, returned_full_original| RetrieveResult {
             content: String::new(),
             success,
             strategy: None,
             tool_name: None,
             query_matched,
+            returned_full_original,
         };
 
-        assert!(retrieve_result_exposes_original(&result(true, None)));
-        assert!(retrieve_result_exposes_original(&result(true, Some(true))));
-        assert!(!retrieve_result_exposes_original(&result(
-            true,
-            Some(false)
+        assert!(retrieve_result_resolves_marker_for_compact(&result(
+            true, None, true
         )));
-        assert!(!retrieve_result_exposes_original(&result(
-            false,
-            Some(false)
+        assert!(!retrieve_result_resolves_marker_for_compact(&result(
+            true, None, false
+        )));
+        assert!(retrieve_result_resolves_marker_for_compact(&result(
+            true,
+            Some(true),
+            false
+        )));
+        assert!(!retrieve_result_resolves_marker_for_compact(&result(
+            true,
+            Some(false),
+            true
+        )));
+        assert!(!retrieve_result_resolves_marker_for_compact(&result(
+            false, None, true
         )));
     }
 

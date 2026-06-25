@@ -226,6 +226,7 @@ mod tests {
             strategy: Some(InputSlimmingStrategy::PlainTextHeadTail),
             tool_name: Some("shell".to_string()),
             query_matched: Some(false),
+            returned_full_original: false,
         };
 
         record_input_slimming_retrieve_metrics(&manager, &result);

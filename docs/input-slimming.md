@@ -332,7 +332,9 @@ tool-capable compact loop。
 - retrieval-aware compact 的 prompt 会先经过 Input Slimming，并且只暴露
   `lha_input_retrieve`；
 - compact 模型最多可做 8 次 retrieval call；未检索的 `<<lha-input:...>>` marker 会被
-  deterministic guard 保留到 summary 的 `Unresolved retrievable markers` 小节；
+  deterministic guard 保留到 summary 的 `Unresolved retrievable markers` 小节；如果
+  无 query retrieval 只返回 head/tail 截断视图，也会继续保留 marker，避免把未取回的
+  中间内容误判为已完整检索；
 - 手动 `/compact` 不受影响，仍走 raw compact。
 
 ## What Headroom Does
