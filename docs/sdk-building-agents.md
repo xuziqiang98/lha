@@ -41,6 +41,10 @@ export LHA_ENDPOINT="chat"
 - If no endpoint suffix can be inferred and `LHA_ENDPOINT` is unset, the SDK
   defaults to OpenAI-compatible Chat Completions.
 
+`LHA_BASE_URL` must not include a query string. If a custom integration needs
+fixed query parameters, configure them with the lower-level endpoint builder
+instead of embedding them in the environment URL.
+
 Use `LHA_ENDPOINT=chat|responses|messages` when the URL alone is ambiguous. If
 that explicit value conflicts with an endpoint suffix in `LHA_BASE_URL`, the SDK
 returns an error instead of silently using the wrong wire protocol.

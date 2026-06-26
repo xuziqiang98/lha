@@ -184,6 +184,7 @@ impl AgentSession {
         let submission_id = self.run(input.into()).await?;
         let mut streamed_text = String::new();
         let mut last_agent_message = None;
+        let mut terminal_result = None;
 
         loop {
             match self.next_event().await? {
@@ -191,33 +192,43 @@ impl AgentSession {
                     submission_id: event_submission_id,
                     delta: TurnItemDelta::OutputText { delta },
                     ..
-                } if event_submission_id == submission_id => {
+                } if event_submission_id == submission_id && terminal_result.is_none() => {
                     streamed_text.push_str(&delta);
                 }
                 AgentEvent::TurnCompleted {
                     submission_id: event_submission_id,
                     outcome,
                     ..
-                } if event_submission_id == submission_id => {
+                } if event_submission_id == submission_id && terminal_result.is_none() => {
                     if let Some(message) = outcome.last_agent_message {
                         last_agent_message = Some(message);
                     }
                     if !outcome.needs_follow_up {
-                        return Ok(last_agent_message.unwrap_or(streamed_text));
+                        terminal_result = Some(Ok(last_agent_message
+                            .clone()
+                            .unwrap_or_else(|| streamed_text.clone())));
                     }
                 }
                 AgentEvent::TurnFailed {
                     submission_id: event_submission_id,
                     error,
                     ..
-                } if event_submission_id == submission_id => {
-                    return Err(Error::TurnFailed(error));
+                } if event_submission_id == submission_id && terminal_result.is_none() => {
+                    terminal_result = Some(Err(Error::TurnFailed(error)));
                 }
                 AgentEvent::TurnAborted {
                     submission_id: event_submission_id,
                     ..
-                } if event_submission_id == submission_id => {
-                    return Err(Error::Aborted);
+                } if event_submission_id == submission_id && terminal_result.is_none() => {
+                    terminal_result = Some(Err(Error::Aborted));
+                }
+                AgentEvent::SessionStatusChanged {
+                    status: SessionStatus::Idle,
+                    ..
+                } if terminal_result.is_some() => {
+                    if let Some(result) = terminal_result.take() {
+                        return result;
+                    }
                 }
                 _ => {}
             }
@@ -1029,6 +1040,98 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_collect_text_waits_until_session_idle_before_returning() {
+        let follow_up_gate = Arc::new(Notify::new());
+        let runtime = fake_runtime(vec![
+            FakeTurnScript {
+                events: vec![
+                    Ok(TurnEvent::ItemStarted {
+                        handle: "msg-1".to_string(),
+                        item: assistant_item("first"),
+                    }),
+                    Ok(TurnEvent::ItemCompleted {
+                        handle: "msg-1".to_string(),
+                        item: assistant_item("first"),
+                    }),
+                    Ok(TurnEvent::Completed {
+                        response_id: "resp-1".to_string(),
+                        token_usage: None,
+                    }),
+                ],
+                gate: None,
+                hold_open: None,
+            },
+            FakeTurnScript {
+                events: vec![
+                    Ok(TurnEvent::ItemStarted {
+                        handle: "msg-2".to_string(),
+                        item: assistant_item("queued"),
+                    }),
+                    Ok(TurnEvent::Completed {
+                        response_id: "resp-2".to_string(),
+                        token_usage: None,
+                    }),
+                ],
+                gate: Some(Arc::clone(&follow_up_gate)),
+                hold_open: None,
+            },
+            FakeTurnScript {
+                events: vec![
+                    Ok(TurnEvent::ItemStarted {
+                        handle: "msg-3".to_string(),
+                        item: assistant_item("second"),
+                    }),
+                    Ok(TurnEvent::ItemCompleted {
+                        handle: "msg-3".to_string(),
+                        item: assistant_item("second"),
+                    }),
+                    Ok(TurnEvent::Completed {
+                        response_id: "resp-3".to_string(),
+                        token_usage: None,
+                    }),
+                ],
+                gate: None,
+                hold_open: None,
+            },
+        ]);
+        let manager = AgentBuilder::new(runtime).build();
+        let session = manager.create_session();
+        session
+            .follow_up(SessionInput::from_user_text("queued"))
+            .await;
+
+        let collect_session = session.clone();
+        let mut collect_task = tokio::spawn(async move {
+            collect_session
+                .run_collect_text(SessionInput::from_user_text("first"))
+                .await
+        });
+
+        assert!(
+            timeout(Duration::from_millis(100), &mut collect_task)
+                .await
+                .is_err(),
+            "collect-text should wait for queued follow-up cleanup"
+        );
+
+        follow_up_gate.notify_waiters();
+        let text = timeout(Duration::from_secs(2), collect_task)
+            .await
+            .expect("collect task should finish")
+            .expect("collect task should not panic")
+            .expect("text should be collected");
+
+        assert_eq!(text, "first");
+        assert_eq!(session.status().await, SessionStatus::Idle);
+
+        let second_text = session
+            .run_collect_text(SessionInput::from_user_text("second"))
+            .await
+            .expect("session should be immediately reusable");
+        assert_eq!(second_text, "second");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn run_collect_text_maps_turn_failed() {
         let runtime = fake_runtime(Vec::new());
         let manager = AgentBuilder::new(runtime)
@@ -1046,6 +1149,7 @@ mod tests {
             .expect_err("turn failure should be returned");
 
         assert!(matches!(err, Error::TurnFailed(message) if message == "boom"));
+        assert_eq!(session.status().await, SessionStatus::Idle);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

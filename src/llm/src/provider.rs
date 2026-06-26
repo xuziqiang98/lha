@@ -383,6 +383,11 @@ impl RuntimeEndpoint {
             .base_url
             .clone()
             .unwrap_or_else(|| default_base_url.to_string());
+        if Url::parse(&base_url).is_ok_and(|url| url.query().is_some()) {
+            return Err(Error::InvalidRequest {
+                message: "base URL must not include a query string".to_string(),
+            });
+        }
 
         let retry = ApiRetryConfig {
             max_attempts: self.request_max_retries(),
@@ -546,9 +551,11 @@ fn normalize_compatible_base_url(
             message: "base URL must not include a fragment".to_string(),
         });
     }
-
-    let query_params = query_params_from_url(&url);
-    url.set_query(None);
+    if url.query().is_some() {
+        return Err(Error::InvalidRequest {
+            message: "base URL must not include a query string".to_string(),
+        });
+    }
 
     let mut segments = url
         .path_segments()
@@ -573,15 +580,7 @@ fn normalize_compatible_base_url(
         set_url_path_segments(&mut url, &segments)?;
     }
 
-    Ok((base_url_string(url), inferred_kind, query_params))
-}
-
-fn query_params_from_url(url: &Url) -> Option<HashMap<String, String>> {
-    let params = url
-        .query_pairs()
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect::<HashMap<_, _>>();
-    (!params.is_empty()).then_some(params)
+    Ok((base_url_string(url), inferred_kind, None))
 }
 
 fn inferred_kind_from_segments(segments: &[String]) -> Option<RuntimeEndpointKind> {
@@ -767,23 +766,28 @@ mod tests {
     }
 
     #[test]
-    fn infer_compatible_preserves_query_params_as_runtime_query_params() {
-        let endpoint = RuntimeEndpoint::infer_compatible(
+    fn infer_compatible_rejects_query_string() {
+        let err = RuntimeEndpoint::infer_compatible(
             "sdk",
             "https://api.example.com/v1/responses?api-version=2024-01-01&deployment=test",
             "TEST_API_KEY",
             None,
         )
-        .expect("endpoint should be inferred");
+        .expect_err("query string should fail");
 
-        let mut expected = HashMap::new();
-        expected.insert("api-version".to_string(), "2024-01-01".to_string());
-        expected.insert("deployment".to_string(), "test".to_string());
-        assert_eq!(
-            endpoint.base_url.as_deref(),
-            Some("https://api.example.com/v1")
-        );
-        assert_eq!(endpoint.query_params, Some(expected));
+        assert!(matches!(err, Error::InvalidRequest { message } if message.contains("query")));
+    }
+
+    #[test]
+    fn custom_endpoint_rejects_query_string_when_building_provider() {
+        let endpoint =
+            RuntimeEndpoint::openai_compatible_chat("sdk", "https://api.example.com/v1?token=test");
+
+        let err = endpoint
+            .to_api_provider()
+            .expect_err("query string should fail");
+
+        assert!(matches!(err, Error::InvalidRequest { message } if message.contains("query")));
     }
 
     #[test]
