@@ -1,4 +1,5 @@
 use crate::builder::AgentDefinition;
+use crate::input::SessionInput;
 use crate::session::AgentSession;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -20,5 +21,12 @@ impl AgentManager {
     pub fn create_session(&self) -> AgentSession {
         let session_id = self.next_session_id.fetch_add(1, Ordering::SeqCst);
         AgentSession::new(session_id, Arc::clone(&self.definition), Vec::new())
+    }
+
+    pub async fn ask_once(&self, text: impl Into<String>) -> crate::Result<String> {
+        let session = self.create_session();
+        session
+            .run_collect_text(SessionInput::from_user_text(text))
+            .await
     }
 }

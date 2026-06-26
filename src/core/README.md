@@ -16,7 +16,16 @@ product-specific orchestration in `lha`.
 ## Getting started
 
 Downstream applications usually combine `lha-core` with a runtime from
-`lha-llm`:
+`lha-llm`. For simple scripts, ask once and collect the final assistant text:
+
+```rust
+let manager = lha_core::AgentBuilder::new(runtime).build();
+let answer = manager.ask_once("hello").await?;
+println!("{answer}");
+```
+
+For live UI rendering, tool progress, reasoning display, MCP details, or
+long-lived conversations, use the lower-level session event stream:
 
 ```rust
 let manager = lha_core::AgentBuilder::new(runtime).build();
@@ -27,8 +36,7 @@ session
 let event = session.next_event().await?;
 ```
 
-For a complete walkthrough that builds a runtime, registers a tool, starts a
-session, and consumes `AgentEvent` values, see
+For the 5-minute quickstart and a complete event-stream walkthrough, see
 [Building Agents with lha-llm and lha-core](../../docs/sdk-building-agents.md).
 
 ## Tools, skills, and MCP

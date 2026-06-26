@@ -2,6 +2,7 @@ use crate::Error;
 use crate::Result;
 use crate::builder::AgentDefinition;
 use crate::events::AgentEvent;
+use crate::events::TurnItemDelta;
 use crate::events::TurnSummary;
 use crate::input::InputQueue;
 use crate::input::SessionInput;
@@ -177,6 +178,50 @@ impl AgentSession {
             .recv()
             .await
             .map_err(|_| Error::EventChannelClosed)
+    }
+
+    pub async fn run_collect_text(&self, input: impl Into<SessionInput>) -> Result<String> {
+        let submission_id = self.run(input.into()).await?;
+        let mut streamed_text = String::new();
+        let mut last_agent_message = None;
+
+        loop {
+            match self.next_event().await? {
+                AgentEvent::OutputItemDelta {
+                    submission_id: event_submission_id,
+                    delta: TurnItemDelta::OutputText { delta },
+                    ..
+                } if event_submission_id == submission_id => {
+                    streamed_text.push_str(&delta);
+                }
+                AgentEvent::TurnCompleted {
+                    submission_id: event_submission_id,
+                    outcome,
+                    ..
+                } if event_submission_id == submission_id => {
+                    if let Some(message) = outcome.last_agent_message {
+                        last_agent_message = Some(message);
+                    }
+                    if !outcome.needs_follow_up {
+                        return Ok(last_agent_message.unwrap_or(streamed_text));
+                    }
+                }
+                AgentEvent::TurnFailed {
+                    submission_id: event_submission_id,
+                    error,
+                    ..
+                } if event_submission_id == submission_id => {
+                    return Err(Error::TurnFailed(error));
+                }
+                AgentEvent::TurnAborted {
+                    submission_id: event_submission_id,
+                    ..
+                } if event_submission_id == submission_id => {
+                    return Err(Error::Aborted);
+                }
+                _ => {}
+            }
+        }
     }
 
     pub async fn status(&self) -> SessionStatus {
@@ -858,6 +903,179 @@ mod tests {
         let snapshot = session.snapshot().await;
         assert_eq!(snapshot.status, SessionStatus::Idle);
         assert_eq!(snapshot.conversation.len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_collect_text_returns_last_agent_message() {
+        let runtime = fake_runtime(vec![FakeTurnScript {
+            events: vec![
+                Ok(TurnEvent::ItemStarted {
+                    handle: "msg-1".to_string(),
+                    item: assistant_item("hello"),
+                }),
+                Ok(TurnEvent::OutputTextDelta {
+                    handle: "msg-1".to_string(),
+                    delta: "hel".to_string(),
+                }),
+                Ok(TurnEvent::OutputTextDelta {
+                    handle: "msg-1".to_string(),
+                    delta: "lo".to_string(),
+                }),
+                Ok(TurnEvent::ItemCompleted {
+                    handle: "msg-1".to_string(),
+                    item: assistant_item("hello"),
+                }),
+                Ok(TurnEvent::Completed {
+                    response_id: "resp-1".to_string(),
+                    token_usage: None,
+                }),
+            ],
+            gate: None,
+            hold_open: None,
+        }]);
+        let manager = AgentBuilder::new(runtime).build();
+        let session = manager.create_session();
+
+        let text = session
+            .run_collect_text(SessionInput::from_user_text("hi"))
+            .await
+            .expect("text should be collected");
+
+        assert_eq!(text, "hello");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_collect_text_falls_back_to_streamed_deltas() {
+        let runtime = fake_runtime(vec![FakeTurnScript {
+            events: vec![
+                Ok(TurnEvent::OutputTextDelta {
+                    handle: "msg-1".to_string(),
+                    delta: "hel".to_string(),
+                }),
+                Ok(TurnEvent::OutputTextDelta {
+                    handle: "msg-1".to_string(),
+                    delta: "lo".to_string(),
+                }),
+                Ok(TurnEvent::Completed {
+                    response_id: "resp-1".to_string(),
+                    token_usage: None,
+                }),
+            ],
+            gate: None,
+            hold_open: None,
+        }]);
+        let manager = AgentBuilder::new(runtime).build();
+        let session = manager.create_session();
+
+        let text = session
+            .run_collect_text(SessionInput::from_user_text("hi"))
+            .await
+            .expect("text should be collected");
+
+        assert_eq!(text, "hello");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_collect_text_waits_through_follow_up_turn() {
+        let runtime = fake_runtime(vec![
+            FakeTurnScript {
+                events: vec![
+                    Ok(TurnEvent::ToolCall(ToolCallRequest {
+                        id: None,
+                        tool_name: "echo_tool".to_string(),
+                        call_id: "call-1".to_string(),
+                        payload: ToolCallPayload::JsonArguments {
+                            arguments: "{}".to_string(),
+                        },
+                    })),
+                    Ok(TurnEvent::Completed {
+                        response_id: "resp-1".to_string(),
+                        token_usage: None,
+                    }),
+                ],
+                gate: None,
+                hold_open: None,
+            },
+            FakeTurnScript {
+                events: vec![
+                    Ok(TurnEvent::ItemStarted {
+                        handle: "msg-2".to_string(),
+                        item: assistant_item("done"),
+                    }),
+                    Ok(TurnEvent::ItemCompleted {
+                        handle: "msg-2".to_string(),
+                        item: assistant_item("done"),
+                    }),
+                    Ok(TurnEvent::Completed {
+                        response_id: "resp-2".to_string(),
+                        token_usage: None,
+                    }),
+                ],
+                gate: None,
+                hold_open: None,
+            },
+        ]);
+        let manager = AgentBuilder::new(runtime)
+            .register_tool(Arc::new(EchoTool))
+            .build();
+        let session = manager.create_session();
+
+        let text = session
+            .run_collect_text(SessionInput::from_user_text("hi"))
+            .await
+            .expect("text should be collected after follow-up");
+
+        assert_eq!(text, "done");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_collect_text_maps_turn_failed() {
+        let runtime = fake_runtime(Vec::new());
+        let manager = AgentBuilder::new(runtime)
+            .register_skill_provider(Arc::new(TestSkillProvider {
+                skills: Vec::new(),
+                error: Some("boom".to_string()),
+                contexts: Arc::new(StdMutex::new(Vec::new())),
+            }))
+            .build();
+        let session = manager.create_session();
+
+        let err = session
+            .run_collect_text(SessionInput::from_user_text("hi"))
+            .await
+            .expect_err("turn failure should be returned");
+
+        assert!(matches!(err, Error::TurnFailed(message) if message == "boom"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ask_once_creates_session_and_returns_text() {
+        let runtime = fake_runtime(vec![FakeTurnScript {
+            events: vec![
+                Ok(TurnEvent::ItemStarted {
+                    handle: "msg-1".to_string(),
+                    item: assistant_item("hello"),
+                }),
+                Ok(TurnEvent::ItemCompleted {
+                    handle: "msg-1".to_string(),
+                    item: assistant_item("hello"),
+                }),
+                Ok(TurnEvent::Completed {
+                    response_id: "resp-1".to_string(),
+                    token_usage: None,
+                }),
+            ],
+            gate: None,
+            hold_open: None,
+        }]);
+        let manager = AgentBuilder::new(runtime).build();
+
+        let text = manager
+            .ask_once("hi")
+            .await
+            .expect("text should be collected");
+
+        assert_eq!(text, "hello");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -14,6 +14,8 @@ pub enum Error {
     EventChannelClosed,
     #[error("turn aborted")]
     Aborted,
+    #[error("turn failed: {0}")]
+    TurnFailed(String),
     #[error("runtime error: {0}")]
     Runtime(#[from] lha_llm::Error),
     #[error(transparent)]

@@ -4,6 +4,10 @@ use crate::api::Provider as ApiProvider;
 use crate::api::WireApi as ApiWireApi;
 use crate::api::is_azure_responses_wire_base_url;
 use crate::api::provider::RetryConfig as ApiRetryConfig;
+use crate::env::LHA_API_KEY_ENV_VAR;
+use crate::env::LHA_BASE_URL_ENV_VAR;
+use crate::env::LHA_ENDPOINT_ENV_VAR;
+use crate::env::read_required_env_with_lookup;
 use http::HeaderMap;
 use http::header::HeaderName;
 use http::header::HeaderValue;
@@ -12,7 +16,9 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::env::VarError;
+use std::str::FromStr;
 use std::time::Duration;
+use url::Url;
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_STREAM_MAX_RETRIES: u64 = 5;
@@ -20,6 +26,11 @@ const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
 const MAX_STREAM_MAX_RETRIES: u64 = 100;
 const MAX_REQUEST_MAX_RETRIES: u64 = 100;
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
+type NormalizedCompatibleBaseUrl = (
+    String,
+    Option<RuntimeEndpointKind>,
+    Option<HashMap<String, String>>,
+);
 
 /// Internal protocol profile spoken by the target runtime endpoint.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -34,6 +45,48 @@ pub(crate) enum ConversationDialect {
 
     /// Anthropic-compatible Messages API exposed at `/v1/messages`.
     Messages,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeEndpointKind {
+    Chat,
+    Responses,
+    Messages,
+}
+
+impl RuntimeEndpointKind {
+    fn dialect(self) -> ConversationDialect {
+        match self {
+            Self::Chat => ConversationDialect::Chat,
+            Self::Responses => ConversationDialect::Responses,
+            Self::Messages => ConversationDialect::Messages,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Chat => "chat",
+            Self::Responses => "responses",
+            Self::Messages => "messages",
+        }
+    }
+}
+
+impl FromStr for RuntimeEndpointKind {
+    type Err = Error;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "chat" => Ok(Self::Chat),
+            "responses" => Ok(Self::Responses),
+            "messages" => Ok(Self::Messages),
+            _ => Err(Error::InvalidRequest {
+                message: format!(
+                    "invalid {LHA_ENDPOINT_ENV_VAR}: expected one of chat, responses, messages"
+                ),
+            }),
+        }
+    }
 }
 
 /// Serializable description of a runtime endpoint.
@@ -115,6 +168,61 @@ impl RuntimeEndpoint {
             Some(base_url.into()),
             ConversationDialect::Messages,
         )
+    }
+
+    pub fn from_lha_env(name: impl Into<String>) -> Result<Self> {
+        Self::from_lha_env_with_lookup(name, |var| std::env::var(var).ok())
+    }
+
+    pub(crate) fn from_lha_env_with_lookup(
+        name: impl Into<String>,
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> Result<Self> {
+        let base_url = read_required_env_with_lookup(LHA_BASE_URL_ENV_VAR, &lookup)?;
+        read_required_env_with_lookup(LHA_API_KEY_ENV_VAR, &lookup)?;
+        let endpoint_kind = lookup(LHA_ENDPOINT_ENV_VAR)
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| value.parse())
+            .transpose()?;
+
+        Self::infer_compatible(name, base_url, LHA_API_KEY_ENV_VAR, endpoint_kind)
+    }
+
+    pub fn infer_compatible(
+        name: impl Into<String>,
+        base_url: impl Into<String>,
+        api_key_env: impl Into<String>,
+        endpoint_kind: Option<RuntimeEndpointKind>,
+    ) -> Result<Self> {
+        let name = name.into();
+        let api_key_env = api_key_env.into();
+        if api_key_env.trim().is_empty() {
+            return Err(Error::InvalidRequest {
+                message: "api key environment variable name must not be empty".to_string(),
+            });
+        }
+
+        let (base_url, inferred_kind, query_params) = normalize_compatible_base_url(base_url)?;
+        if let (Some(inferred_kind), Some(endpoint_kind)) = (inferred_kind, endpoint_kind)
+            && inferred_kind != endpoint_kind
+        {
+            return Err(Error::InvalidRequest {
+                message: format!(
+                    "base URL endpoint suffix implies {} but {} requested {}",
+                    inferred_kind.label(),
+                    LHA_ENDPOINT_ENV_VAR,
+                    endpoint_kind.label()
+                ),
+            });
+        }
+
+        let endpoint_kind = endpoint_kind
+            .or(inferred_kind)
+            .unwrap_or(RuntimeEndpointKind::Chat);
+        let mut endpoint = Self::new_custom(name, Some(base_url), endpoint_kind.dialect())
+            .with_env_key(Some(api_key_env));
+        endpoint.query_params = query_params;
+        Ok(endpoint)
     }
 
     pub fn uses_responses_api(&self) -> bool {
@@ -426,6 +534,92 @@ impl RuntimeEndpoint {
     }
 }
 
+fn normalize_compatible_base_url(
+    base_url: impl Into<String>,
+) -> Result<NormalizedCompatibleBaseUrl> {
+    let base_url = base_url.into();
+    let mut url = Url::parse(&base_url).map_err(|err| Error::InvalidRequest {
+        message: format!("invalid base URL: {err}"),
+    })?;
+    if url.fragment().is_some() {
+        return Err(Error::InvalidRequest {
+            message: "base URL must not include a fragment".to_string(),
+        });
+    }
+
+    let query_params = query_params_from_url(&url);
+    url.set_query(None);
+
+    let mut segments = url
+        .path_segments()
+        .ok_or_else(|| Error::InvalidRequest {
+            message: "base URL must use a hierarchical URL scheme".to_string(),
+        })?
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    while segments.last().is_some_and(std::string::String::is_empty) {
+        segments.pop();
+    }
+
+    let inferred_kind = inferred_kind_from_segments(&segments);
+    if let Some(kind) = inferred_kind {
+        let strip_count = match kind {
+            RuntimeEndpointKind::Chat => 2,
+            RuntimeEndpointKind::Responses | RuntimeEndpointKind::Messages => 1,
+        };
+        for _ in 0..strip_count {
+            segments.pop();
+        }
+        set_url_path_segments(&mut url, &segments)?;
+    }
+
+    Ok((base_url_string(url), inferred_kind, query_params))
+}
+
+fn query_params_from_url(url: &Url) -> Option<HashMap<String, String>> {
+    let params = url
+        .query_pairs()
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect::<HashMap<_, _>>();
+    (!params.is_empty()).then_some(params)
+}
+
+fn inferred_kind_from_segments(segments: &[String]) -> Option<RuntimeEndpointKind> {
+    if segments.len() >= 2
+        && segments[segments.len() - 2] == "chat"
+        && segments[segments.len() - 1] == "completions"
+    {
+        Some(RuntimeEndpointKind::Chat)
+    } else if segments
+        .last()
+        .is_some_and(|segment| segment == "responses")
+    {
+        Some(RuntimeEndpointKind::Responses)
+    } else if segments.last().is_some_and(|segment| segment == "messages") {
+        Some(RuntimeEndpointKind::Messages)
+    } else {
+        None
+    }
+}
+
+fn set_url_path_segments(url: &mut Url, segments: &[String]) -> Result<()> {
+    let mut path_segments = url.path_segments_mut().map_err(|_| Error::InvalidRequest {
+        message: "base URL must use a hierarchical URL scheme".to_string(),
+    })?;
+    path_segments.clear();
+    path_segments.extend(segments.iter().map(String::as_str));
+    Ok(())
+}
+
+fn base_url_string(url: Url) -> String {
+    let root_path = url.path() == "/";
+    let mut value = url.to_string();
+    if root_path && value.ends_with('/') {
+        value.pop();
+    }
+    value
+}
+
 pub fn built_in_runtime_endpoints() -> HashMap<String, RuntimeEndpoint> {
     use RuntimeEndpoint as P;
 
@@ -433,4 +627,190 @@ pub fn built_in_runtime_endpoints() -> HashMap<String, RuntimeEndpoint> {
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn lookup(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let vars = vars
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect::<HashMap<_, _>>();
+        move |name| vars.get(name).cloned()
+    }
+
+    #[test]
+    fn from_lha_env_requires_base_url() {
+        let err = RuntimeEndpoint::from_lha_env_with_lookup(
+            "sdk",
+            lookup(&[(LHA_API_KEY_ENV_VAR, "secret")]),
+        )
+        .expect_err("missing base url should fail");
+
+        assert!(matches!(err, Error::EnvVar { var, .. } if var == LHA_BASE_URL_ENV_VAR));
+    }
+
+    #[test]
+    fn from_lha_env_requires_api_key() {
+        let err = RuntimeEndpoint::from_lha_env_with_lookup(
+            "sdk",
+            lookup(&[(LHA_BASE_URL_ENV_VAR, "https://api.example.com/v1")]),
+        )
+        .expect_err("missing api key should fail");
+
+        assert!(matches!(err, Error::EnvVar { var, .. } if var == LHA_API_KEY_ENV_VAR));
+    }
+
+    #[test]
+    fn from_lha_env_rejects_invalid_endpoint_kind() {
+        let err = RuntimeEndpoint::from_lha_env_with_lookup(
+            "sdk",
+            lookup(&[
+                (LHA_BASE_URL_ENV_VAR, "https://api.example.com/v1"),
+                (LHA_API_KEY_ENV_VAR, "secret"),
+                (LHA_ENDPOINT_ENV_VAR, "bad"),
+            ]),
+        )
+        .expect_err("invalid endpoint should fail");
+
+        assert!(
+            matches!(err, Error::InvalidRequest { message } if message.contains("chat, responses, messages"))
+        );
+    }
+
+    #[test]
+    fn infer_compatible_defaults_to_chat_for_plain_base_url() {
+        let endpoint = RuntimeEndpoint::infer_compatible(
+            "sdk",
+            "https://api.example.com/v1",
+            "TEST_API_KEY",
+            None,
+        )
+        .expect("endpoint should be inferred");
+
+        assert!(endpoint.uses_chat_completions_api());
+        assert_eq!(
+            endpoint.base_url.as_deref(),
+            Some("https://api.example.com/v1")
+        );
+        assert_eq!(endpoint.env_key.as_deref(), Some("TEST_API_KEY"));
+    }
+
+    #[test]
+    fn infer_compatible_detects_chat_completions_suffix() {
+        let endpoint = RuntimeEndpoint::infer_compatible(
+            "sdk",
+            "https://api.example.com/v1/chat/completions",
+            "TEST_API_KEY",
+            None,
+        )
+        .expect("endpoint should be inferred");
+
+        assert!(endpoint.uses_chat_completions_api());
+        assert_eq!(
+            endpoint.base_url.as_deref(),
+            Some("https://api.example.com/v1")
+        );
+    }
+
+    #[test]
+    fn infer_compatible_detects_responses_suffix() {
+        let endpoint = RuntimeEndpoint::infer_compatible(
+            "sdk",
+            "https://api.example.com/v1/responses",
+            "TEST_API_KEY",
+            None,
+        )
+        .expect("endpoint should be inferred");
+
+        assert!(endpoint.uses_responses_api());
+        assert_eq!(
+            endpoint.base_url.as_deref(),
+            Some("https://api.example.com/v1")
+        );
+    }
+
+    #[test]
+    fn infer_compatible_detects_messages_suffix() {
+        let endpoint = RuntimeEndpoint::infer_compatible(
+            "sdk",
+            "https://api.anthropic.com/v1/messages",
+            "TEST_API_KEY",
+            None,
+        )
+        .expect("endpoint should be inferred");
+
+        assert!(endpoint.uses_messages_api());
+        assert_eq!(
+            endpoint.base_url.as_deref(),
+            Some("https://api.anthropic.com/v1")
+        );
+    }
+
+    #[test]
+    fn infer_compatible_strips_detected_endpoint_suffix() {
+        let endpoint = RuntimeEndpoint::infer_compatible(
+            "sdk",
+            "https://api.example.com/v1/responses/",
+            "TEST_API_KEY",
+            None,
+        )
+        .expect("endpoint should be inferred");
+
+        assert_eq!(
+            endpoint.base_url.as_deref(),
+            Some("https://api.example.com/v1")
+        );
+    }
+
+    #[test]
+    fn infer_compatible_preserves_query_params_as_runtime_query_params() {
+        let endpoint = RuntimeEndpoint::infer_compatible(
+            "sdk",
+            "https://api.example.com/v1/responses?api-version=2024-01-01&deployment=test",
+            "TEST_API_KEY",
+            None,
+        )
+        .expect("endpoint should be inferred");
+
+        let mut expected = HashMap::new();
+        expected.insert("api-version".to_string(), "2024-01-01".to_string());
+        expected.insert("deployment".to_string(), "test".to_string());
+        assert_eq!(
+            endpoint.base_url.as_deref(),
+            Some("https://api.example.com/v1")
+        );
+        assert_eq!(endpoint.query_params, Some(expected));
+    }
+
+    #[test]
+    fn infer_compatible_rejects_fragment() {
+        let err = RuntimeEndpoint::infer_compatible(
+            "sdk",
+            "https://api.example.com/v1#frag",
+            "TEST_API_KEY",
+            None,
+        )
+        .expect_err("fragment should fail");
+
+        assert!(matches!(err, Error::InvalidRequest { message } if message.contains("fragment")));
+    }
+
+    #[test]
+    fn infer_compatible_rejects_url_suffix_and_endpoint_override_conflict() {
+        let err = RuntimeEndpoint::infer_compatible(
+            "sdk",
+            "https://api.example.com/v1/responses",
+            "TEST_API_KEY",
+            Some(RuntimeEndpointKind::Chat),
+        )
+        .expect_err("conflict should fail");
+
+        assert!(
+            matches!(err, Error::InvalidRequest { message } if message.contains("responses") && message.contains("chat"))
+        );
+    }
 }

@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use crate::Personality;
 use crate::Verbosity;
+use crate::env::LHA_MODEL_ENV_VAR;
+use crate::env::read_required_env_with_lookup;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -356,6 +358,42 @@ pub struct ModelInfo {
 }
 
 impl ModelInfo {
+    pub fn minimal(model: impl Into<String>) -> Self {
+        let model = model.into();
+        Self {
+            slug: model.clone(),
+            display_name: model,
+            description: None,
+            default_reasoning_level: None,
+            supported_reasoning_levels: Vec::new(),
+            visibility: ModelVisibility::List,
+            supported_in_api: true,
+            priority: 0,
+            upgrade: None,
+            base_instructions: "You are a helpful assistant.".to_string(),
+            model_messages: None,
+            supports_reasoning_summaries: false,
+            support_verbosity: false,
+            default_verbosity: None,
+            truncation_policy: TruncationPolicyConfig::bytes(10_000),
+            supports_parallel_tool_calls: false,
+            context_window: None,
+            auto_compact_token_limit: None,
+            effective_context_window_percent: default_effective_context_window_percent(),
+            pricing: None,
+        }
+    }
+
+    pub fn minimal_from_lha_env() -> crate::Result<Self> {
+        Self::minimal_from_lha_env_with_lookup(|var| std::env::var(var).ok())
+    }
+
+    pub(crate) fn minimal_from_lha_env_with_lookup(
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> crate::Result<Self> {
+        read_required_env_with_lookup(LHA_MODEL_ENV_VAR, lookup).map(Self::minimal)
+    }
+
     pub fn auto_compact_token_limit(&self) -> Option<i64> {
         self.auto_compact_token_limit.or_else(|| {
             self.context_window
@@ -495,6 +533,7 @@ fn nearest_effort(target: ReasoningEffort, supported: &[ReasoningEffort]) -> Rea
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
 
     #[test]
@@ -557,6 +596,37 @@ mod tests {
                 .band_for_input_tokens(272_001)
                 .map(|band| band.input),
             Some(UsdPerMillionTokensMicros::from_micros(5_000_000))
+        );
+    }
+
+    #[test]
+    fn model_info_minimal_uses_conservative_defaults() {
+        let model_info = ModelInfo::minimal("test-model");
+
+        assert_eq!(
+            model_info,
+            ModelInfo {
+                slug: "test-model".to_string(),
+                display_name: "test-model".to_string(),
+                description: None,
+                default_reasoning_level: None,
+                supported_reasoning_levels: Vec::new(),
+                visibility: ModelVisibility::List,
+                supported_in_api: true,
+                priority: 0,
+                upgrade: None,
+                base_instructions: "You are a helpful assistant.".to_string(),
+                model_messages: None,
+                supports_reasoning_summaries: false,
+                support_verbosity: false,
+                default_verbosity: None,
+                truncation_policy: TruncationPolicyConfig::bytes(10_000),
+                supports_parallel_tool_calls: false,
+                context_window: None,
+                auto_compact_token_limit: None,
+                effective_context_window_percent: 95,
+                pricing: None,
+            }
         );
     }
 }

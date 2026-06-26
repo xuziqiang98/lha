@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -32,8 +34,11 @@ use crate::semantic::TurnEventStream;
 use crate::semantic::TurnRequest;
 use crate::semantic::adapt_response_stream;
 use crate::telemetry::RuntimeTelemetry;
+use crate::telemetry::noop_runtime_telemetry;
 use crate::transport::StreamingPreference;
 use futures::StreamExt;
+
+static NEXT_DEFAULT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 #[async_trait]
 trait PromptConversationCompactor: Send + Sync {
@@ -91,6 +96,116 @@ pub struct RuntimeBuildSpec {
     pub web_search_mode: Option<WebSearchMode>,
     pub experimental_beta_feature_keys: Vec<String>,
     pub sse_fixture_path: Option<String>,
+}
+
+pub struct RuntimeBuildSpecBuilder {
+    spec: RuntimeBuildSpec,
+}
+
+impl RuntimeBuildSpec {
+    pub fn builder(endpoint: RuntimeEndpoint, model_info: ModelInfo) -> RuntimeBuildSpecBuilder {
+        let endpoint_id = endpoint.name.clone();
+        RuntimeBuildSpecBuilder {
+            spec: RuntimeBuildSpec {
+                endpoint_id,
+                http_client: HttpClient::new(),
+                model_info,
+                telemetry: noop_runtime_telemetry(),
+                endpoint,
+                effort: None,
+                summary: ReasoningSummary::Auto,
+                session_id: format!(
+                    "lha-sdk-session-{}",
+                    NEXT_DEFAULT_SESSION_ID.fetch_add(1, Ordering::SeqCst)
+                ),
+                origin_tag: None,
+                show_raw_agent_reasoning: false,
+                model_verbosity: None,
+                web_search_mode: None,
+                experimental_beta_feature_keys: Vec::new(),
+                sse_fixture_path: None,
+            },
+        }
+    }
+
+    pub fn builder_from_lha_env(name: impl Into<String>) -> Result<RuntimeBuildSpecBuilder> {
+        Self::builder_from_lha_env_with_lookup(name, |var| std::env::var(var).ok())
+    }
+
+    pub(crate) fn builder_from_lha_env_with_lookup(
+        name: impl Into<String>,
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> Result<RuntimeBuildSpecBuilder> {
+        let endpoint = RuntimeEndpoint::from_lha_env_with_lookup(name, &lookup)?;
+        let model_info = ModelInfo::minimal_from_lha_env_with_lookup(lookup)?;
+        Ok(Self::builder(endpoint, model_info))
+    }
+}
+
+impl RuntimeBuildSpecBuilder {
+    pub fn endpoint_id(mut self, endpoint_id: impl Into<String>) -> Self {
+        self.spec.endpoint_id = endpoint_id.into();
+        self
+    }
+
+    pub fn http_client(mut self, http_client: HttpClient) -> Self {
+        self.spec.http_client = http_client;
+        self
+    }
+
+    pub fn telemetry(mut self, telemetry: Arc<dyn RuntimeTelemetry>) -> Self {
+        self.spec.telemetry = telemetry;
+        self
+    }
+
+    pub fn effort(mut self, effort: Option<ReasoningEffort>) -> Self {
+        self.spec.effort = effort;
+        self
+    }
+
+    pub fn summary(mut self, summary: ReasoningSummary) -> Self {
+        self.spec.summary = summary;
+        self
+    }
+
+    pub fn session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.spec.session_id = session_id.into();
+        self
+    }
+
+    pub fn origin_tag(mut self, origin_tag: impl Into<String>) -> Self {
+        self.spec.origin_tag = Some(origin_tag.into());
+        self
+    }
+
+    pub fn show_raw_agent_reasoning(mut self, show_raw_agent_reasoning: bool) -> Self {
+        self.spec.show_raw_agent_reasoning = show_raw_agent_reasoning;
+        self
+    }
+
+    pub fn model_verbosity(mut self, model_verbosity: Option<Verbosity>) -> Self {
+        self.spec.model_verbosity = model_verbosity;
+        self
+    }
+
+    pub fn web_search_mode(mut self, web_search_mode: Option<WebSearchMode>) -> Self {
+        self.spec.web_search_mode = web_search_mode;
+        self
+    }
+
+    pub fn experimental_beta_feature_keys(mut self, keys: Vec<String>) -> Self {
+        self.spec.experimental_beta_feature_keys = keys;
+        self
+    }
+
+    pub fn sse_fixture_path(mut self, path: impl Into<String>) -> Self {
+        self.spec.sse_fixture_path = Some(path.into());
+        self
+    }
+
+    pub fn build(self) -> RuntimeBuildSpec {
+        self.spec
+    }
 }
 
 pub trait RuntimeClientFactory: Send + Sync {
@@ -425,4 +540,96 @@ fn is_retryable_stream_error(err: &Error) -> bool {
         err,
         Error::Retryable { .. } | Error::Stream(_) | Error::RequestTimeout
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::env::LHA_API_KEY_ENV_VAR;
+    use crate::env::LHA_BASE_URL_ENV_VAR;
+    use crate::env::LHA_MODEL_ENV_VAR;
+    use pretty_assertions::assert_eq;
+
+    fn lookup(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let vars = vars
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect::<HashMap<_, _>>();
+        move |name| vars.get(name).cloned()
+    }
+
+    #[test]
+    fn runtime_build_spec_builder_sets_expected_defaults() {
+        let endpoint = RuntimeEndpoint::openai_compatible_chat("sdk", "https://api.example.com/v1")
+            .with_env_key(Some("TEST_API_KEY".to_string()));
+        let model_info = ModelInfo::minimal("test-model");
+        let spec = RuntimeBuildSpec::builder(endpoint.clone(), model_info.clone()).build();
+
+        assert_eq!(spec.endpoint_id, "sdk");
+        assert_eq!(spec.model_info, model_info);
+        assert_eq!(spec.endpoint, endpoint);
+        assert_eq!(spec.effort, None);
+        assert_eq!(spec.summary, ReasoningSummary::Auto);
+        assert!(spec.session_id.starts_with("lha-sdk-session-"));
+        assert_eq!(spec.origin_tag, None);
+        assert!(!spec.show_raw_agent_reasoning);
+        assert_eq!(spec.model_verbosity, None);
+        assert_eq!(spec.web_search_mode, None);
+        assert_eq!(spec.experimental_beta_feature_keys, Vec::<String>::new());
+        assert_eq!(spec.sse_fixture_path, None);
+    }
+
+    #[test]
+    fn runtime_build_spec_builder_applies_overrides() {
+        let endpoint = RuntimeEndpoint::openai_compatible_chat("sdk", "https://api.example.com/v1");
+        let spec = RuntimeBuildSpec::builder(endpoint, ModelInfo::minimal("test-model"))
+            .endpoint_id("custom")
+            .effort(Some(ReasoningEffort::High))
+            .summary(ReasoningSummary::Detailed)
+            .session_id("session-123")
+            .origin_tag("example")
+            .show_raw_agent_reasoning(true)
+            .model_verbosity(Some(Verbosity::High))
+            .web_search_mode(Some(WebSearchMode::Live))
+            .experimental_beta_feature_keys(vec!["beta".to_string()])
+            .sse_fixture_path("fixture.sse")
+            .build();
+
+        assert_eq!(spec.endpoint_id, "custom");
+        assert_eq!(spec.effort, Some(ReasoningEffort::High));
+        assert_eq!(spec.summary, ReasoningSummary::Detailed);
+        assert_eq!(spec.session_id, "session-123");
+        assert_eq!(spec.origin_tag, Some("example".to_string()));
+        assert!(spec.show_raw_agent_reasoning);
+        assert_eq!(spec.model_verbosity, Some(Verbosity::High));
+        assert_eq!(spec.web_search_mode, Some(WebSearchMode::Live));
+        assert_eq!(
+            spec.experimental_beta_feature_keys,
+            vec!["beta".to_string()]
+        );
+        assert_eq!(spec.sse_fixture_path, Some("fixture.sse".to_string()));
+    }
+
+    #[test]
+    fn runtime_build_spec_builder_from_lha_env_uses_endpoint_and_model() {
+        let spec = RuntimeBuildSpec::builder_from_lha_env_with_lookup(
+            "sdk",
+            lookup(&[
+                (LHA_BASE_URL_ENV_VAR, "https://api.example.com/v1/responses"),
+                (LHA_API_KEY_ENV_VAR, "secret"),
+                (LHA_MODEL_ENV_VAR, "test-model"),
+            ]),
+        )
+        .expect("builder should be created")
+        .build();
+
+        assert_eq!(spec.endpoint_id, "sdk");
+        assert!(spec.endpoint.uses_responses_api());
+        assert_eq!(
+            spec.endpoint.base_url.as_deref(),
+            Some("https://api.example.com/v1")
+        );
+        assert_eq!(spec.endpoint.env_key.as_deref(), Some(LHA_API_KEY_ENV_VAR));
+        assert_eq!(spec.model_info, ModelInfo::minimal("test-model"));
+    }
 }

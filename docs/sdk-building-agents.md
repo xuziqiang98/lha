@@ -15,7 +15,76 @@ Use the crates this way:
   sandbox approvals, app-server protocol, product tools, and local config on top
   of `lha-llm` and `lha-core`.
 
-## What you build
+
+## 5-minute hello world
+
+For the shortest path, configure the SDK with environment variables and use the
+collect-text convenience API. These variables are SDK defaults; the values are
+still owned by your application or deployment environment:
+
+```sh
+export LHA_BASE_URL="https://api.example.com/v1"
+export LHA_API_KEY="..."
+export LHA_MODEL="gpt-4.1"
+# Optional: chat, responses, or messages.
+export LHA_ENDPOINT="chat"
+```
+
+`LHA_BASE_URL` can be either a provider base URL or a concrete endpoint URL:
+
+- `.../chat/completions` selects Chat Completions and stores the base URL
+  without that suffix.
+- `.../responses` selects the Responses API and stores the base URL without
+  that suffix.
+- `.../messages` selects the Anthropic-compatible Messages API and stores the
+  base URL without that suffix.
+- If no endpoint suffix can be inferred and `LHA_ENDPOINT` is unset, the SDK
+  defaults to OpenAI-compatible Chat Completions.
+
+Use `LHA_ENDPOINT=chat|responses|messages` when the URL alone is ambiguous. If
+that explicit value conflicts with an endpoint suffix in `LHA_BASE_URL`, the SDK
+returns an error instead of silently using the wrong wire protocol.
+
+A minimal `Cargo.toml` can start with:
+
+```toml
+[dependencies]
+anyhow = "1"
+lha-core = "1"
+lha-llm = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+Then ask one question and collect the final text:
+
+```rust
+use lha_core::AgentBuilder;
+use lha_llm::{DefaultRuntimeClientFactory, RuntimeBuildSpec, RuntimeClientFactory};
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let runtime = DefaultRuntimeClientFactory::new().build_client(
+        RuntimeBuildSpec::builder_from_lha_env("hello-world")?.build(),
+    );
+
+    let agent = AgentBuilder::new(runtime).build();
+    let answer = agent.ask_once("hello").await?;
+
+    println!("{answer}");
+    Ok(())
+}
+```
+
+`ask_once` creates a fresh in-memory session, runs one user turn, waits for any
+tool follow-up turns to finish, and returns the final assistant text. It is the
+right entry point for simple agents, scripts, and smoke tests. Use the lower
+level `run()` + `next_event()` stream when you need live UI rendering, tool
+progress, reasoning display, MCP details, cancellation controls, or a long-lived
+conversation.
+
+## Going deeper: sessions, tools, and event streams
+
+### What you build
 
 A minimal downstream agent has four moving pieces:
 
@@ -28,7 +97,7 @@ A minimal downstream agent has four moving pieces:
 application owns the surrounding UX: reading user input, rendering streamed
 text, logging tool calls, persisting state, or deciding when to stop.
 
-## Cargo.toml
+### Cargo.toml
 
 For a small application that uses OpenAI-compatible Responses and one local
 tool, start with:
@@ -52,7 +121,7 @@ feature on `lha-core`:
 lha-core = { version = "1", features = ["mcp"] }
 ```
 
-## Step 1: choose a runtime
+### Step 1: choose a runtime
 
 The runtime is the model-facing part of the stack. You have two choices:
 
@@ -66,7 +135,10 @@ key from `OPENAI_API_KEY`; it also honors `OPENAI_BASE_URL`,
 `OPENAI_ORGANIZATION`, and `OPENAI_PROJECT` when those environment variables
 are set.
 
-A real-provider runtime requires these `RuntimeBuildSpec` fields:
+`RuntimeBuildSpec::builder(endpoint, model_info)` fills conservative defaults for
+HTTP, telemetry, session IDs, reasoning, verbosity, web search, beta keys, and
+SSE fixtures. If you construct `RuntimeBuildSpec` manually, the full struct has
+these fields:
 
 - `endpoint_id`: stable identifier for this provider, such as `"openai"`;
 - `http_client`: the `reqwest::Client` used for HTTP and streaming requests;
@@ -84,14 +156,14 @@ A real-provider runtime requires these `RuntimeBuildSpec` fields:
 - `experimental_beta_feature_keys`: provider beta feature keys; and
 - `sse_fixture_path`: optional fixture path for tests.
 
-## Step 2: provide model metadata
+### Step 2: provide model metadata
 
-`lha-llm` currently expects callers to provide a complete `ModelInfo` for the
-selected model. The SDK does not require you to use LHA's product model catalog.
-The helper below is documentation-only code you can copy into your application
-and adjust for the model you select. These examples enumerate the current public
-fields; if your application does not provide billing metadata, set
-`pricing: None`.
+For quickstarts, `ModelInfo::minimal(model)` provides conservative defaults. For
+production agents, you can still provide a complete `ModelInfo` without using
+LHA's product model catalog. The helper below is documentation-only code you can
+copy into your application and adjust for the model you select. These examples
+enumerate the current public fields; if your application does not provide billing
+metadata, set `pricing: None`.
 
 ```rust
 fn model_info(model: &str) -> lha_llm::ModelInfo {
@@ -137,7 +209,7 @@ Keep this metadata aligned with the provider and model you actually use. The
 most important fields to double-check are `supports_reasoning_summaries`,
 `supports_parallel_tool_calls`, `truncation_policy`, and `context_window`.
 
-## Step 3: register tools
+### Step 3: register tools
 
 Tools are ordinary `ToolHandler` implementations. The model sees the descriptor
 from `spec()`. When the model calls that tool, `lha-core` dispatches the call to
@@ -210,7 +282,7 @@ result and continue. Use `ToolError::Fatal` when the turn should fail. Return
 `true` from `supports_parallel_tool_calls()` only when the handler is safe to run
 concurrently with other calls.
 
-## Step 4: build the agent
+### Step 4: build the agent
 
 Create the runtime, register tools, then create a session:
 
@@ -254,7 +326,7 @@ session
 The call to `run()` starts work in the background and returns a submission ID.
 Read `next_event()` to observe progress.
 
-## Step 5: consume events
+### Step 5: consume events
 
 A simple event loop usually handles streamed text, tool calls, tool results, and
 terminal turn states:
@@ -309,7 +381,7 @@ loop {
 to the transcript. Your application can render the event stream however it
 wants.
 
-## Full minimal program
+### Full minimal program
 
 This single-file example uses only `lha-core`, `lha-llm`, and ordinary support
 crates. It does not depend on the `lha` product crate or any private
@@ -321,52 +393,12 @@ use async_trait::async_trait;
 use lha_core::tools::{ToolError, ToolHandler, ToolInvocation, ToolOutput, ToolPayload};
 use lha_core::{AgentBuilder, AgentEvent, SessionInput, TurnItemDelta};
 use lha_llm::{
-    AdditionalProperties, DefaultRuntimeClientFactory, FunctionToolDescriptor, ModelInfo,
-    ModelVisibility, ReasoningEffort, ReasoningEffortPreset, ReasoningSummary, RuntimeBuildSpec,
-    RuntimeClientFactory, RuntimeEndpoint, ToolDescriptor, ToolInputSchema,
-    TruncationPolicyConfig, noop_runtime_telemetry,
+    AdditionalProperties, DefaultRuntimeClientFactory, FunctionToolDescriptor, RuntimeBuildSpec,
+    RuntimeClientFactory, ToolDescriptor, ToolInputSchema,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-
-fn model_info(model: &str) -> ModelInfo {
-    ModelInfo {
-        slug: model.to_string(),
-        display_name: model.to_string(),
-        description: None,
-        default_reasoning_level: Some(ReasoningEffort::Medium),
-        supported_reasoning_levels: vec![
-            ReasoningEffortPreset {
-                effort: ReasoningEffort::Low,
-                description: "low".to_string(),
-            },
-            ReasoningEffortPreset {
-                effort: ReasoningEffort::Medium,
-                description: "medium".to_string(),
-            },
-            ReasoningEffortPreset {
-                effort: ReasoningEffort::High,
-                description: "high".to_string(),
-            },
-        ],
-        visibility: ModelVisibility::List,
-        supported_in_api: true,
-        priority: 0,
-        upgrade: None,
-        base_instructions: "You are a helpful assistant.".to_string(),
-        model_messages: None,
-        supports_reasoning_summaries: true,
-        support_verbosity: false,
-        default_verbosity: None,
-        truncation_policy: TruncationPolicyConfig::bytes(10_000),
-        supports_parallel_tool_calls: true,
-        context_window: Some(272_000),
-        auto_compact_token_limit: None,
-        effective_context_window_percent: 95,
-        pricing: None,
-    }
-}
 
 struct EchoTool;
 
@@ -424,24 +456,11 @@ impl ToolHandler for EchoTool {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = std::env::var("LHA_EXAMPLE_MODEL").unwrap_or_else(|_| "gpt-4.1".to_string());
-    let endpoint = RuntimeEndpoint::openai().with_realtime_turn_streaming_enabled(false);
-    let runtime = DefaultRuntimeClientFactory::new().build_client(RuntimeBuildSpec {
-        endpoint_id: "openai".to_string(),
-        http_client: reqwest::Client::new(),
-        model_info: model_info(&model),
-        telemetry: noop_runtime_telemetry(),
-        endpoint,
-        effort: None,
-        summary: ReasoningSummary::Auto,
-        session_id: "example-session".to_string(),
-        origin_tag: Some("sdk-example".to_string()),
-        show_raw_agent_reasoning: false,
-        model_verbosity: None,
-        web_search_mode: None,
-        experimental_beta_feature_keys: Vec::new(),
-        sse_fixture_path: None,
-    });
+    let runtime = DefaultRuntimeClientFactory::new().build_client(
+        RuntimeBuildSpec::builder_from_lha_env("sdk-example")?
+            .origin_tag("sdk-example")
+            .build(),
+    );
 
     let manager = AgentBuilder::new(runtime)
         .with_base_instructions("You are a concise assistant.")
@@ -501,11 +520,14 @@ async fn main() -> Result<()> {
 }
 ```
 
-Run it with an API key and, optionally, a model override:
+Run it with the same SDK environment variables used by the quickstart:
 
 ```sh
-export OPENAI_API_KEY="..."
-export LHA_EXAMPLE_MODEL="gpt-4.1"
+export LHA_BASE_URL="https://api.example.com/v1"
+export LHA_API_KEY="..."
+export LHA_MODEL="gpt-4.1"
+# Optional: chat, responses, or messages.
+export LHA_ENDPOINT="chat"
 cargo run
 ```
 
@@ -541,8 +563,9 @@ adapter forwards calls to the original MCP tool name.
 
 ## Troubleshooting
 
-- `OPENAI_API_KEY` is missing: set it in the process environment or configure a
-  custom `RuntimeEndpoint` with another `env_key` or bearer token.
+- `LHA_API_KEY` is missing in the quickstart: set it in the process environment.
+  If you use `RuntimeEndpoint::openai()` directly, set `OPENAI_API_KEY` instead,
+  or configure a custom endpoint with another `env_key` or bearer token.
 - Model metadata is wrong: verify `supports_reasoning_summaries`,
   `supports_parallel_tool_calls`, `truncation_policy`, and `context_window` for
   the provider and model you selected.

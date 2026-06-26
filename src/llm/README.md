@@ -41,10 +41,14 @@ state or UI code.
 
 Use `DefaultRuntimeClientFactory` with `RuntimeBuildSpec` to construct a real
 provider-backed `SemanticRuntime`, then pass that runtime into
-`lha_core::AgentBuilder`. If you already have a custom model backend, implement
+`lha_core::AgentBuilder`. The quickstart path uses
+`RuntimeBuildSpec::builder_from_lha_env` with `LHA_BASE_URL`, `LHA_API_KEY`,
+`LHA_MODEL`, and optional `LHA_ENDPOINT`; lower-level builders remain available
+when you need explicit model metadata, endpoint configuration, telemetry, or
+streaming fixtures. If you already have a custom model backend, implement
 `SemanticRuntime` and `SemanticRuntimeSession` directly instead.
 
-For a complete downstream-agent walkthrough, see
+For the 5-minute quickstart and a complete downstream-agent walkthrough, see
 [Building Agents with lha-llm and lha-core](../../docs/sdk-building-agents.md).
 
 ## Telemetry hooks
