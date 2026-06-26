@@ -871,6 +871,35 @@ mod tests {
         overlay_content_area(Rect::new(0, 0, area.width, area.height - 3)).y
     }
 
+    const CJK_TRANSCRIPT_WORD_ORDER_TEXT: &str = "**总体判断**\n\
+- **设计分层：好**。`lha-llm` 管模型/API/transport/runtime，`lha-core` 管 agent session/event/tools，这个边界很清楚。\n\
+- **可扩展性：好**。支持 Chat Completions、Responses、Messages，多 provider、工具、MCP、event stream，这些都适合长远演进。\n\
+- **最小使用体验：一般**。我们只是发一句 `hello`，最后还是写了 `ModelInfo`、`RuntimeBuildSpec`、事件消费循环等一百多行。\n\
+- **文档方向：对**。`docs/sdk-building-agents.md` 讲得完整，但它更像“完整 SDK 教程”，不是“5 分钟起步”。";
+
+    fn assert_cjk_transcript_word_order(rendered: &str, context: &str) {
+        assert!(
+            rendered.contains("长远演进。"),
+            "{context} missing correct CJK evolution text: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("- 最小使用体验：一般。"),
+            "{context} missing next bullet marker before minimal-use text: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("长远演合进"),
+            "{context} rendered known CJK stale-cell corruption: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("合进-。"),
+            "{context} rendered stale list marker before punctuation: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("长远演进-。"),
+            "{context} rendered list marker on the previous CJK line: {rendered:?}"
+        );
+    }
+
     #[test]
     fn edit_prev_hint_is_visible() {
         let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
@@ -1096,6 +1125,29 @@ mod tests {
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
         assert_snapshot!(term.backend());
+    }
+
+    #[test]
+    fn transcript_overlay_preserves_cjk_transcript_word_order() {
+        let cell: Arc<dyn HistoryCell> = Arc::new(history_cell::AgentMessageCell::new_markdown(
+            CJK_TRANSCRIPT_WORD_ORDER_TEXT.to_string(),
+            true,
+        ));
+        let mut overlay = TranscriptOverlay::new(vec![cell]);
+        let width = 240;
+        let height = 16;
+        let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
+            crate::product::tui_app::test_backend::VT100Backend::new(width, height),
+        )
+        .expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+        terminal
+            .draw(|frame| overlay.render(frame.area(), frame.buffer_mut()))
+            .expect("draw transcript overlay");
+
+        let screen = terminal.backend().vt100().screen().contents();
+        assert_cjk_transcript_word_order(&screen, "transcript overlay CJK VT100 screen");
     }
 
     #[test]

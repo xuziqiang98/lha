@@ -124,7 +124,7 @@ impl AgentJobStatus {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct AgentJobSnapshot {
     pub(crate) id: String,
     pub(crate) agent_type: AgentJobType,
@@ -567,12 +567,10 @@ impl JobCloseHandle {
     }
 
     async fn wait_for_completion(self, id: String) -> AgentJobSnapshot {
-        if !self.status.lock().await.is_final() {
-            let mut completion = self.completion;
-            while !*completion.borrow_and_update() {
-                if completion.changed().await.is_err() {
-                    break;
-                }
+        let mut completion = self.completion;
+        while !*completion.borrow_and_update() {
+            if completion.changed().await.is_err() {
+                break;
             }
         }
 
@@ -1074,6 +1072,38 @@ mod tests {
         assert_eq!(
             agent_job_name_candidates("  Boyle  \n\n\t\nCurie\n"),
             vec!["Boyle", "Curie"]
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_for_completion_waits_for_completion_signal_even_when_status_is_final() {
+        let status = Arc::new(Mutex::new(AgentJobStatus::Cancelled));
+        let (completion_tx, completion) = watch::channel(false);
+        let handle = JobCloseHandle {
+            agent_type: AgentJobType::Explorer,
+            name: Some("Boyle".to_string()),
+            status,
+            cancellation_token: CancellationToken::new(),
+            completion,
+        };
+
+        let task = tokio::spawn(handle.wait_for_completion("agent-job-1".to_string()));
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(
+            !task.is_finished(),
+            "wait_for_completion should wait for the watcher completion signal"
+        );
+
+        completion_tx.send(true).expect("send completion");
+        let snapshot = task.await.expect("join wait_for_completion");
+        assert_eq!(
+            snapshot,
+            AgentJobSnapshot {
+                id: "agent-job-1".to_string(),
+                agent_type: AgentJobType::Explorer,
+                name: Some("Boyle".to_string()),
+                status: AgentJobStatus::Cancelled,
+            }
         );
     }
 

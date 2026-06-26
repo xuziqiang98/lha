@@ -74,7 +74,9 @@ pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
 fn is_single_binary_alias(name: &str) -> bool {
     matches!(
         name,
-        "lha-exec"
+        "apply_patch"
+            | "applypatch"
+            | "lha-exec"
             | "lha-app-server"
             | "lha-linux-sandbox"
             | "lha-mcp-server"
@@ -138,7 +140,11 @@ fn create_arg0_alias(alias_dir: &Path, name: &str, target_lha: &Path) -> io::Res
     }
 
     #[cfg(unix)]
-    symlink(target_lha, &alias)?;
+    if let Err(err) = symlink(target_lha, &alias)
+        && err.kind() != io::ErrorKind::AlreadyExists
+    {
+        return Err(err);
+    }
     #[cfg(windows)]
     std::fs::copy(target_lha, &alias).map(|_| ())?;
 
@@ -219,6 +225,16 @@ mod tests {
     #[test]
     fn creates_test_server_arg0_alias_to_lha_binary() -> io::Result<()> {
         assert_alias_points_to_lha_binary("test_stdio_server")
+    }
+
+    #[test]
+    fn creates_apply_patch_arg0_alias_to_lha_binary() -> io::Result<()> {
+        assert_alias_points_to_lha_binary("apply_patch")
+    }
+
+    #[test]
+    fn creates_applypatch_arg0_alias_to_lha_binary() -> io::Result<()> {
+        assert_alias_points_to_lha_binary("applypatch")
     }
 
     fn assert_alias_points_to_lha_binary(name: &str) -> io::Result<()> {

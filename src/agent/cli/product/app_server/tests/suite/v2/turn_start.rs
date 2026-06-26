@@ -53,6 +53,19 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const TEST_ORIGINATOR: &str = "lha_vscode";
 
+async fn read_turn_completed(mcp: &mut McpProcess) -> Result<TurnCompletedNotification> {
+    let completed_notif: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    Ok(serde_json::from_value(
+        completed_notif
+            .params
+            .expect("turn/completed params must be present"),
+    )?)
+}
+
 #[tokio::test]
 async fn turn_start_sends_originator_header() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
@@ -283,6 +296,11 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
         crate::product::app_server_protocol::TurnStatus::InProgress
     );
 
+    let first_completed = read_turn_completed(&mut mcp).await?;
+    assert_eq!(first_completed.thread_id, thread.id);
+    assert_eq!(first_completed.turn.id, turn.id);
+    assert_eq!(first_completed.turn.status, TurnStatus::Completed);
+
     // Send a second turn that exercises the overrides path: change the model.
     let turn_req2 = mcp
         .send_turn_start_request(TurnStartParams {
@@ -312,17 +330,9 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     )
     .await??;
 
-    let completed_notif: JSONRPCNotification = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
-    let completed: TurnCompletedNotification = serde_json::from_value(
-        completed_notif
-            .params
-            .expect("turn/completed params must be present"),
-    )?;
+    let completed = read_turn_completed(&mut mcp).await?;
     assert_eq!(completed.thread_id, thread.id);
+    assert_eq!(completed.turn.id, turn2.id);
     assert_eq!(completed.turn.status, TurnStatus::Completed);
 
     Ok(())

@@ -552,9 +552,10 @@ fn diff_buffers_with_full_repaint(
         // Scan the row to find the rightmost column that still matters: any non-space glyph,
         // any cell whose bg differs from the row's trailing bg, or any cell with modifiers.
         // Multi-width glyphs extend that region through their full displayed width.
-        // Default-background rows can clear the rest of the row with a single ClearToEnd. Rows
-        // with explicit background colors are repainted cell-by-cell because some terminals and
-        // multiplexers handle colored erase inconsistently for blank rows.
+        // Default-background dirty rows are cleared from column zero before repainting so stale
+        // wide-cell fragments cannot survive inside the text span. Rows with explicit background
+        // colors are repainted cell-by-cell because some terminals and multiplexers handle colored
+        // erase inconsistently for blank rows.
         let paints_explicit_background = bg != Color::Reset;
         let mut last_nonblank_column = if paints_explicit_background {
             row.len().saturating_sub(1)
@@ -580,8 +581,8 @@ fn diff_buffers_with_full_repaint(
             continue;
         }
 
-        if !paints_explicit_background && last_nonblank_column + 1 < row.len() {
-            let (x, y) = a.pos_of(row_start + last_nonblank_column + 1);
+        if !paints_explicit_background {
+            let (x, y) = a.pos_of(row_start);
             updates.push(DrawCommand::ClearToEnd { x, y, bg });
         }
 
@@ -789,7 +790,7 @@ mod tests {
     }
 
     #[test]
-    fn diff_buffers_does_not_emit_clear_to_end_for_full_width_row() {
+    fn diff_buffers_clears_dirty_default_background_row_before_repaint() {
         let area = Rect::new(0, 0, 3, 2);
         let previous = Buffer::empty(area);
         let mut next = Buffer::empty(area);
@@ -800,13 +801,12 @@ mod tests {
 
         let commands = diff_buffers(&previous, &next);
 
-        let clear_count = commands
-            .iter()
-            .filter(|command| matches!(command, DrawCommand::ClearToEnd { y, .. } if *y == 0))
-            .count();
-        assert_eq!(
-            0, clear_count,
-            "expected diff_buffers not to emit ClearToEnd; commands: {commands:?}",
+        assert!(
+            matches!(
+                commands.first(),
+                Some(DrawCommand::ClearToEnd { x: 0, y: 0, .. })
+            ),
+            "expected diff_buffers to clear the default-background row before repainting; commands: {commands:?}",
         );
         assert!(
             commands
@@ -1100,7 +1100,7 @@ mod tests {
     }
 
     #[test]
-    fn diff_buffers_clear_to_end_starts_after_wide_char() {
+    fn diff_buffers_clear_to_end_starts_at_dirty_row_start_for_wide_char() {
         let area = Rect::new(0, 0, 10, 1);
         let mut previous = Buffer::empty(area);
         let mut next = Buffer::empty(area);
@@ -1112,8 +1112,59 @@ mod tests {
         assert!(
             commands
                 .iter()
-                .any(|command| matches!(command, DrawCommand::ClearToEnd { x: 2, y: 0, .. })),
-            "expected clear-to-end to start after the remaining wide char; commands: {commands:?}"
+                .any(|command| matches!(command, DrawCommand::ClearToEnd { x: 0, y: 0, .. })),
+            "expected clear-to-end to start at the dirty row origin; commands: {commands:?}"
+        );
+    }
+
+    #[test]
+    fn diff_buffers_clears_cjk_row_with_ascii_marker_before_left_to_right_repaint() {
+        let area = Rect::new(0, 0, 80, 1);
+        let previous = Buffer::empty(area);
+        let mut next = Buffer::empty(area);
+
+        next.set_string(0, 0, "这些都适合长远演进。- 最小使用体验", Style::default());
+
+        let commands = diff_buffers(&previous, &next);
+
+        assert!(
+            matches!(
+                commands.first(),
+                Some(DrawCommand::ClearToEnd { x: 0, y: 0, .. })
+            ),
+            "expected the dirty CJK row to be cleared before repainting; commands: {commands:?}",
+        );
+        assert!(
+            commands.iter().any(|command| {
+                matches!(
+                    command,
+                    DrawCommand::Put {
+                        x: 0,
+                        y: 0,
+                        cell
+                    } if cell.symbol() == "这"
+                )
+            }),
+            "expected repaint to start at the first CJK glyph; commands: {commands:?}",
+        );
+        assert!(
+            commands.iter().any(|command| {
+                matches!(
+                    command,
+                    DrawCommand::Put {
+                        y: 0,
+                        cell,
+                        ..
+                    } if cell.symbol() == "-"
+                )
+            }),
+            "expected repaint to include the ASCII list marker in order; commands: {commands:?}",
+        );
+        assert!(
+            commands
+                .iter()
+                .all(|command| !matches!(command, DrawCommand::Put { x: 1, y: 0, .. })),
+            "expected repaint to skip the second cell of the first wide glyph; commands: {commands:?}",
         );
     }
 

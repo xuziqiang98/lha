@@ -3100,6 +3100,35 @@ fn assert_feedback_commit_message_word_order(rendered: &str, context: &str) {
     );
 }
 
+const CJK_TRANSCRIPT_WORD_ORDER_TEXT: &str = "**总体判断**\n\
+- **设计分层：好**。`lha-llm` 管模型/API/transport/runtime，`lha-core` 管 agent session/event/tools，这个边界很清楚。\n\
+- **可扩展性：好**。支持 Chat Completions、Responses、Messages，多 provider、工具、MCP、event stream，这些都适合长远演进。\n\
+- **最小使用体验：一般**。我们只是发一句 `hello`，最后还是写了 `ModelInfo`、`RuntimeBuildSpec`、事件消费循环等一百多行。\n\
+- **文档方向：对**。`docs/sdk-building-agents.md` 讲得完整，但它更像“完整 SDK 教程”，不是“5 分钟起步”。";
+
+fn assert_cjk_transcript_word_order(rendered: &str, context: &str) {
+    assert!(
+        rendered.contains("长远演进。"),
+        "{context} missing correct CJK evolution text: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("- 最小使用体验：一般。"),
+        "{context} missing next bullet marker before minimal-use text: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("长远演合进"),
+        "{context} rendered known CJK stale-cell corruption: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("合进-。"),
+        "{context} rendered stale list marker before punctuation: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("长远演进-。"),
+        "{context} rendered list marker on the previous CJK line: {rendered:?}"
+    );
+}
+
 fn assert_small_screen_final_answer_order(rendered: &str, context: &str, needle: &str) {
     assert!(
         rendered.contains(needle),
@@ -10748,6 +10777,50 @@ async fn live_agent_message_preserves_feedback_commit_message_word_order() {
 }
 
 #[tokio::test]
+async fn final_agent_message_preserves_cjk_transcript_word_order() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let width = 240;
+    let height = 32;
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
+        VT100Backend::new(width, height),
+    )
+    .expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+    chat.handle_codex_event(Event {
+        id: "cjk-transcript-turn".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "cjk-transcript-final".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: CJK_TRANSCRIPT_WORD_ORDER_TEXT.to_string(),
+            memory_citation: None,
+        }),
+    });
+
+    let mut saw_agent_message = false;
+    for event in drain_events(&mut rx) {
+        if let Some(cell) = into_insert_history_cell(event) {
+            let rendered = lines_to_single_string(&cell.display_lines(width));
+            if cell.as_any().is::<AgentMessageCell>() {
+                saw_agent_message = true;
+                assert_cjk_transcript_word_order(&rendered, "final CJK AgentMessage cell");
+            }
+            let cell: Arc<dyn HistoryCell> = Arc::from(cell);
+            chat.insert_transcript_cell(cell);
+        }
+    }
+    assert!(saw_agent_message, "expected final CJK AgentMessage cell");
+
+    let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    assert_cjk_transcript_word_order(&screen, "final CJK AgentMessage VT100 screen");
+}
+
+#[tokio::test]
 async fn streamed_agent_message_preserves_feedback_commit_message_word_order() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let width = 120;
@@ -10831,6 +10904,85 @@ async fn streamed_agent_message_preserves_feedback_commit_message_word_order() {
 
     let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
     assert_feedback_commit_message_word_order(&screen, "streamed committed VT100 screen");
+}
+
+#[tokio::test]
+async fn streamed_agent_message_preserves_cjk_transcript_word_order() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let width = 240;
+    let height = 32;
+    chat.last_rendered_width.set(Some(usize::from(width)));
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
+        VT100Backend::new(width, height),
+    )
+    .expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+    chat.handle_codex_event(Event {
+        id: "cjk-stream-turn".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+
+    for delta in [
+        "**总体判断**\n",
+        "- **设计分层：好**。`lha-llm` 管模型/API/transport/runtime，`lha-core` 管 agent session/event/tools，这个边界很清楚。\n",
+        "- **可扩展性：好**。支持 Chat Completions、Responses、Messages，多 provider、工具、MCP、event stream，这些都适合长远演",
+        "进。\n",
+        "- **最小使用体验：一般**。我们只是发一句 `hello`，最后还是写了 `ModelInfo`、`RuntimeBuildSpec`、事件消费循环等一百多行。\n",
+        "- **文档方向：对**。`docs/sdk-building-agents.md` 讲得完整，但它更像“完整 SDK 教程”，不是“5 分钟起步”。",
+    ] {
+        chat.handle_codex_event(Event {
+            id: "cjk-stream-delta".into(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: delta.to_string(),
+            }),
+        });
+        chat.on_commit_tick();
+
+        let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+        if screen.contains("最小使用体验") {
+            assert_cjk_transcript_word_order(&screen, "streamed CJK live VT100 screen");
+        }
+    }
+
+    chat.handle_codex_event(Event {
+        id: "cjk-stream-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    let mut saw_committed_answer = false;
+    for event in drain_events(&mut rx) {
+        if let Some((cell, repaint_viewport)) =
+            into_insert_history_cell_with_viewport_repaint(event)
+        {
+            let rendered = lines_to_single_string(&cell.display_lines(width));
+            if cell.as_any().is::<AgentMessageCell>() {
+                saw_committed_answer = true;
+                assert!(
+                    repaint_viewport,
+                    "streamed CJK final answer should request viewport repaint"
+                );
+                assert_cjk_transcript_word_order(&rendered, "streamed CJK committed cell");
+            }
+            let cell: Arc<dyn HistoryCell> = Arc::from(cell);
+            chat.insert_transcript_cell(cell);
+            if repaint_viewport {
+                terminal.invalidate_viewport();
+            }
+        }
+    }
+    assert!(
+        saw_committed_answer,
+        "expected streamed CJK answer to flush into history"
+    );
+
+    let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    assert_cjk_transcript_word_order(&screen, "streamed CJK committed VT100 screen");
 }
 
 #[tokio::test]
