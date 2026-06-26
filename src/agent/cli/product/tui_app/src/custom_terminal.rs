@@ -652,6 +652,7 @@ where
             }
             DrawCommand::ClearToEnd { bg: clear_bg, .. } => {
                 queue!(writer, SetAttribute(crossterm::style::Attribute::Reset))?;
+                fg = Color::Reset;
                 modifier = Modifier::empty();
                 queue!(writer, SetBackgroundColor(clear_bg.into()))?;
                 bg = clear_bg;
@@ -813,6 +814,32 @@ mod tests {
                 .iter()
                 .any(|command| matches!(command, DrawCommand::Put { x: 2, y: 0, .. })),
             "expected diff_buffers to update the final cell; commands: {commands:?}",
+        );
+    }
+
+    #[test]
+    fn draw_reapplies_foreground_after_clear_to_end_between_same_colored_rows() {
+        let backend = crate::product::tui_app::test_backend::VT100Backend::new(4, 2);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 4, 2));
+
+        terminal
+            .draw(|frame| {
+                let style = Style::default().fg(Color::Rgb(200, 10, 10));
+                frame.buffer.set_string(0, 0, "AAAA", style);
+                frame.buffer.set_string(0, 1, "BBBB", style);
+            })
+            .expect("draw colored rows");
+
+        let screen = terminal.backend().vt100().screen();
+        let expected_fg = vt100::Color::Rgb(200, 10, 10);
+        assert_eq!(
+            screen.cell(0, 0).expect("first row cell").fgcolor(),
+            expected_fg
+        );
+        assert_eq!(
+            screen.cell(1, 0).expect("second row cell").fgcolor(),
+            expected_fg
         );
     }
 
