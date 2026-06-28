@@ -1,3 +1,4 @@
+use crate::RunCollectTextError;
 use crate::builder::AgentDefinition;
 use crate::input::SessionInput;
 use crate::session::AgentSession;
@@ -23,7 +24,7 @@ impl AgentManager {
         AgentSession::new(session_id, Arc::clone(&self.definition), Vec::new())
     }
 
-    pub async fn ask_once(&self, text: impl Into<String>) -> crate::Result<String> {
+    pub async fn ask_once(&self, text: impl Into<String>) -> Result<String, RunCollectTextError> {
         let session = self.create_session();
         session
             .run_collect_text(SessionInput::from_user_text(text))

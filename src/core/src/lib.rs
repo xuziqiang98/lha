@@ -20,6 +20,7 @@ pub use builder::AgentBuilder;
 pub use builder::AgentDefinition;
 pub use error::Error;
 pub use error::Result;
+pub use error::RunCollectTextError;
 pub use events::AgentEvent;
 pub use events::TurnItemDelta;
 pub use events::TurnSummary;

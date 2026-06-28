@@ -1,5 +1,6 @@
 use crate::Error;
 use crate::Result;
+use crate::RunCollectTextError;
 use crate::builder::AgentDefinition;
 use crate::events::AgentEvent;
 use crate::events::TurnItemDelta;
@@ -180,7 +181,10 @@ impl AgentSession {
             .map_err(|_| Error::EventChannelClosed)
     }
 
-    pub async fn run_collect_text(&self, input: impl Into<SessionInput>) -> Result<String> {
+    pub async fn run_collect_text(
+        &self,
+        input: impl Into<SessionInput>,
+    ) -> std::result::Result<String, RunCollectTextError> {
         let submission_id = self.run(input.into()).await?;
         let mut streamed_text = String::new();
         let mut last_agent_message = None;
@@ -214,13 +218,13 @@ impl AgentSession {
                     error,
                     ..
                 } if event_submission_id == submission_id && terminal_result.is_none() => {
-                    terminal_result = Some(Err(Error::TurnFailed(error)));
+                    terminal_result = Some(Err(RunCollectTextError::TurnFailed(error)));
                 }
                 AgentEvent::TurnAborted {
                     submission_id: event_submission_id,
                     ..
                 } if event_submission_id == submission_id && terminal_result.is_none() => {
-                    terminal_result = Some(Err(Error::Aborted));
+                    terminal_result = Some(Err(Error::Aborted.into()));
                 }
                 AgentEvent::SessionStatusChanged {
                     status: SessionStatus::Idle,
@@ -624,6 +628,7 @@ mod tests {
     use std::sync::Mutex as StdMutex;
     use tokio::sync::Notify;
     use tokio::sync::mpsc;
+    use tokio::sync::oneshot;
     use tokio::time::Duration;
     use tokio::time::timeout;
     use tokio_util::sync::CancellationToken;
@@ -636,8 +641,13 @@ mod tests {
 
     struct FakeTurnScript {
         events: Vec<lha_llm::Result<TurnEvent>>,
-        gate: Option<Arc<Notify>>,
+        gate: Option<FakeGate>,
         hold_open: Option<Arc<Notify>>,
+    }
+
+    struct FakeGate {
+        release: Arc<Notify>,
+        ready: Option<oneshot::Sender<()>>,
     }
 
     struct FakeRuntimeSession {
@@ -702,15 +712,25 @@ mod tests {
                 .expect("script should exist");
             let (tx, rx) = mpsc::channel(16);
             tokio::spawn(async move {
-                for event in script.events {
+                let FakeTurnScript {
+                    events,
+                    gate,
+                    hold_open,
+                } = script;
+                let mut gate = gate;
+
+                for event in events {
                     if tx.send(event).await.is_err() {
                         return;
                     }
-                    if let Some(gate) = script.gate.as_ref() {
-                        gate.notified().await;
+                    if let Some(gate) = gate.take() {
+                        if let Some(ready) = gate.ready {
+                            let _ = ready.send(());
+                        }
+                        gate.release.notified().await;
                     }
                 }
-                if let Some(hold_open) = script.hold_open.as_ref() {
+                if let Some(hold_open) = hold_open.as_ref() {
                     hold_open.notified().await;
                 }
             });
@@ -1042,6 +1062,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn run_collect_text_waits_until_session_idle_before_returning() {
         let follow_up_gate = Arc::new(Notify::new());
+        let (follow_up_waiting_tx, follow_up_waiting_rx) = oneshot::channel();
         let runtime = fake_runtime(vec![
             FakeTurnScript {
                 events: vec![
@@ -1072,7 +1093,10 @@ mod tests {
                         token_usage: None,
                     }),
                 ],
-                gate: Some(Arc::clone(&follow_up_gate)),
+                gate: Some(FakeGate {
+                    release: Arc::clone(&follow_up_gate),
+                    ready: Some(follow_up_waiting_tx),
+                }),
                 hold_open: None,
             },
             FakeTurnScript {
@@ -1101,20 +1125,22 @@ mod tests {
             .await;
 
         let collect_session = session.clone();
-        let mut collect_task = tokio::spawn(async move {
+        let collect_task = tokio::spawn(async move {
             collect_session
                 .run_collect_text(SessionInput::from_user_text("first"))
                 .await
         });
 
+        timeout(Duration::from_secs(2), follow_up_waiting_rx)
+            .await
+            .expect("follow-up turn should reach gate")
+            .expect("follow-up gate waiter should be signaled");
         assert!(
-            timeout(Duration::from_millis(100), &mut collect_task)
-                .await
-                .is_err(),
+            !collect_task.is_finished(),
             "collect-text should wait for queued follow-up cleanup"
         );
 
-        follow_up_gate.notify_waiters();
+        follow_up_gate.notify_one();
         let text = timeout(Duration::from_secs(2), collect_task)
             .await
             .expect("collect task should finish")
@@ -1148,7 +1174,10 @@ mod tests {
             .await
             .expect_err("turn failure should be returned");
 
-        assert!(matches!(err, Error::TurnFailed(message) if message == "boom"));
+        assert!(matches!(
+            err,
+            RunCollectTextError::TurnFailed(message) if message == "boom"
+        ));
         assert_eq!(session.status().await, SessionStatus::Idle);
     }
 

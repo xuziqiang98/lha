@@ -86,6 +86,10 @@ level `run()` + `next_event()` stream when you need live UI rendering, tool
 progress, reasoning display, MCP details, cancellation controls, or a long-lived
 conversation.
 
+The collect-text helpers return `RunCollectTextError`. Match
+`RunCollectTextError::TurnFailed(message)` when you need to distinguish an
+agent-level turn failure from lower-level session or runtime errors.
+
 ## Going deeper: sessions, tools, and event streams
 
 ### What you build

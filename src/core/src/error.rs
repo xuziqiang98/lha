@@ -14,8 +14,6 @@ pub enum Error {
     EventChannelClosed,
     #[error("turn aborted")]
     Aborted,
-    #[error("turn failed: {0}")]
-    TurnFailed(String),
     #[error("runtime error: {0}")]
     Runtime(#[from] lha_llm::Error),
     #[error(transparent)]
@@ -25,3 +23,11 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug, Error)]
+pub enum RunCollectTextError {
+    #[error(transparent)]
+    Core(#[from] Error),
+    #[error("turn failed: {0}")]
+    TurnFailed(String),
+}

@@ -24,6 +24,10 @@ let answer = manager.ask_once("hello").await?;
 println!("{answer}");
 ```
 
+`ask_once` and `AgentSession::run_collect_text` return
+`RunCollectTextError`, whose `TurnFailed` variant preserves agent-level turn
+failures separately from lower-level session and runtime errors.
+
 For live UI rendering, tool progress, reasoning display, MCP details, or
 long-lived conversations, use the lower-level session event stream:
 
