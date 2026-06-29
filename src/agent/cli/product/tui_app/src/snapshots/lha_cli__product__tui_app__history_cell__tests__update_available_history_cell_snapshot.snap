@@ -3,7 +3,7 @@ source: src/agent/cli/src/../product/tui_app/src/history_cell.rs
 expression: rendered
 ---
 ╭────────────────────────────────────────────────────╮
-│ ✨ LHA update available! 1.0.7 -> 9.9.9            │
+│ ✨ LHA update available! 1.0.8 -> 9.9.9            │
 │ Run cargo install lha --locked to update.          │
 │                                                    │
 │ See full release notes:                            │

@@ -1,6 +1,6 @@
 [package]
 name = "lha"
-version = "1.0.7"
+version = "1.0.8"
 edition.workspace = true
 license.workspace = true
 description = "Long-Horizon Agent command-line package that installs the lha binary."
