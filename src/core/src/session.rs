@@ -952,6 +952,48 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn turn_completed_summary_joins_output_text_blocks() {
+        let runtime = fake_runtime(vec![FakeTurnScript {
+            events: vec![
+                Ok(TurnEvent::ItemStarted {
+                    handle: "msg-1".to_string(),
+                    item: assistant_item_with_output_texts(&[]),
+                }),
+                Ok(TurnEvent::ItemCompleted {
+                    handle: "msg-1".to_string(),
+                    item: assistant_item_with_output_texts(&["hel", "lo"]),
+                }),
+                Ok(TurnEvent::Completed {
+                    response_id: "resp-1".to_string(),
+                    token_usage: None,
+                }),
+            ],
+            gate: None,
+            hold_open: None,
+        }]);
+
+        let manager = AgentBuilder::new(runtime).build();
+        let session = manager.create_session();
+
+        session
+            .run(SessionInput::from_user_text("hi"))
+            .await
+            .expect("run should succeed");
+        let events = wait_for_idle(&session).await;
+        let event = events
+            .into_iter()
+            .find(|event| matches!(event, AgentEvent::TurnCompleted { .. }))
+            .expect("turn completion should be emitted");
+
+        match event {
+            AgentEvent::TurnCompleted { outcome, .. } => {
+                assert_eq!(outcome.last_agent_message, Some("hello".to_string()));
+            }
+            other => panic!("expected TurnCompleted, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn run_collect_text_returns_last_agent_message() {
         let runtime = fake_runtime(vec![FakeTurnScript {
             events: vec![
@@ -962,6 +1004,37 @@ mod tests {
                 Ok(TurnEvent::ItemCompleted {
                     handle: "msg-1".to_string(),
                     item: assistant_item("hello"),
+                }),
+                Ok(TurnEvent::Completed {
+                    response_id: "resp-1".to_string(),
+                    token_usage: None,
+                }),
+            ],
+            gate: None,
+            hold_open: None,
+        }]);
+        let manager = AgentBuilder::new(runtime).build();
+        let session = manager.create_session();
+
+        let text = session
+            .run_collect_text(SessionInput::from_user_text("hi"))
+            .await
+            .expect("text should be collected");
+
+        assert_eq!(text, "hello");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_collect_text_joins_completed_output_text_blocks_without_deltas() {
+        let runtime = fake_runtime(vec![FakeTurnScript {
+            events: vec![
+                Ok(TurnEvent::ItemStarted {
+                    handle: "msg-1".to_string(),
+                    item: assistant_item_with_output_texts(&[]),
+                }),
+                Ok(TurnEvent::ItemCompleted {
+                    handle: "msg-1".to_string(),
+                    item: assistant_item_with_output_texts(&["hel", "lo"]),
                 }),
                 Ok(TurnEvent::Completed {
                     response_id: "resp-1".to_string(),

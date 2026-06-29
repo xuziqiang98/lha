@@ -271,10 +271,7 @@ pub(crate) fn outcome_summary(outcome: TurnStreamOutcome) -> TurnSummary {
 fn last_assistant_message(item: &TranscriptItem) -> Option<String> {
     match item {
         TranscriptItem::Message { role, content, .. } if role == "assistant" => {
-            content.iter().rev().find_map(|entry| match entry {
-                ContentItem::OutputText { text } => Some(text.clone()),
-                ContentItem::InputText { .. } | ContentItem::InputImage { .. } => None,
-            })
+            assistant_output_text(content)
         }
         TranscriptItem::Reasoning { .. }
         | TranscriptItem::HostedActivity { .. }
@@ -283,6 +280,23 @@ fn last_assistant_message(item: &TranscriptItem) -> Option<String> {
         | TranscriptItem::Unknown { .. } => None,
         TranscriptItem::Message { .. } => None,
     }
+}
+
+fn assistant_output_text(content: &[ContentItem]) -> Option<String> {
+    let mut saw_output_text = false;
+    let mut combined = String::new();
+
+    for entry in content {
+        match entry {
+            ContentItem::OutputText { text } => {
+                saw_output_text = true;
+                combined.push_str(text);
+            }
+            ContentItem::InputText { .. } | ContentItem::InputImage { .. } => {}
+        }
+    }
+
+    saw_output_text.then_some(combined)
 }
 
 fn estimate_token_count(response: &ToolResultItem) -> i64 {
