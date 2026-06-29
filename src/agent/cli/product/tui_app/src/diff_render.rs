@@ -8,6 +8,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line as RtLine;
 use ratatui::text::Span as RtSpan;
 use ratatui::widgets::Paragraph;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -40,6 +41,7 @@ const DARK_256_DEL_LINE_BG_IDX: u8 = 52;
 const LIGHT_256_ADD_LINE_BG_IDX: u8 = 194;
 const LIGHT_256_DEL_LINE_BG_IDX: u8 = 224;
 const LIGHT_256_GUTTER_FG_IDX: u8 = 236;
+const DIFF_TAB_WIDTH: usize = 8;
 
 // Internal representation for diff line rendering
 #[derive(Clone, Copy)]
@@ -260,7 +262,8 @@ fn render_changes_block(rows: Vec<Row>, wrap_cols: usize, cwd: &Path) -> Vec<RtL
         }
 
         let mut lines = vec![];
-        render_change(&r.change, &mut lines, wrap_cols - 4);
+        let diff_width = wrap_cols.saturating_sub(4).max(1);
+        render_change(&r.change, &mut lines, diff_width);
         out.extend(prefix_lines(lines, "    ".into(), "    ".into()));
     }
 
@@ -438,7 +441,8 @@ fn push_wrapped_diff_line_with_style_context(
     style_context: DiffRenderStyleContext,
 ) -> Vec<RtLine<'static>> {
     let ln_str = line_number.to_string();
-    let mut remaining_text: &str = text;
+    let expanded_text = expand_tabs_for_diff_display(text);
+    let mut remaining_text = expanded_text.as_ref();
 
     // Reserve a fixed number of spaces (equal to the widest line number plus a
     // trailing spacer) so the sign column stays aligned across the diff block.
@@ -513,6 +517,27 @@ fn push_wrapped_diff_line_with_style_context(
         }
     }
     lines
+}
+
+fn expand_tabs_for_diff_display(text: &str) -> Cow<'_, str> {
+    if !text.contains('\t') {
+        return Cow::Borrowed(text);
+    }
+
+    let mut expanded = String::with_capacity(text.len());
+    let mut column = 0usize;
+    for ch in text.chars() {
+        if ch == '\t' {
+            let spaces = DIFF_TAB_WIDTH - (column % DIFF_TAB_WIDTH);
+            expanded.extend(std::iter::repeat_n(' ', spaces));
+            column = column.saturating_add(spaces);
+        } else {
+            expanded.push(ch);
+            column = column.saturating_add(UnicodeWidthChar::width(ch).unwrap_or(0));
+        }
+    }
+
+    Cow::Owned(expanded)
 }
 
 fn line_number_width(max_line_number: usize) -> usize {
@@ -789,16 +814,18 @@ mod tests {
         // easier to validate indentation visually in snapshots.
         let text = lines
             .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
+            .map(line_text)
             .map(|s| s.trim_end().to_string())
             .collect::<Vec<_>>()
             .join("\n");
         assert_snapshot!(name, text);
+    }
+
+    fn line_text(line: &RtLine<'static>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
     }
 
     fn line_display_width(line: &RtLine<'static>) -> usize {
@@ -813,6 +840,15 @@ mod tests {
             assert!(
                 line_display_width(line) <= width,
                 "line exceeds {width} cols: {line:?}"
+            );
+        }
+    }
+
+    fn assert_lines_have_no_tabs(lines: &[RtLine<'static>]) {
+        for line in lines {
+            assert!(
+                !line_text(line).contains('\t'),
+                "line contains raw tab: {line:?}"
             );
         }
     }
@@ -850,6 +886,18 @@ mod tests {
             split_prefix_by_display_width("天地玄黄", 0),
             ("", "天地玄黄")
         );
+    }
+
+    #[test]
+    fn expand_tabs_for_diff_display_uses_fixed_terminal_tab_stops() {
+        let borrowed = expand_tabs_for_diff_display("no tabs");
+        assert!(matches!(borrowed, Cow::Borrowed("no tabs")));
+        assert_eq!(
+            expand_tabs_for_diff_display("\tfoo").as_ref(),
+            "        foo"
+        );
+        assert_eq!(expand_tabs_for_diff_display("a\tb").as_ref(), "a       b");
+        assert_eq!(expand_tabs_for_diff_display("界\tx").as_ref(), "界      x");
     }
 
     #[test]
@@ -984,6 +1032,52 @@ mod tests {
                 .fg(Color::Green)
                 .bg(rgb_color(DARK_TC_ADD_LINE_BG_RGB))
         );
+    }
+
+    #[test]
+    fn tabbed_diff_lines_expand_tabs_before_wrapping() {
+        let style_context = DiffRenderStyleContext {
+            theme: DiffTheme::Dark,
+            color_level: DiffColorLevel::TrueColor,
+            diff_backgrounds: fallback_diff_backgrounds(DiffTheme::Dark, DiffColorLevel::TrueColor),
+        };
+        let width = 24;
+        let add_lines = push_wrapped_diff_line_with_style_context(
+            1053,
+            DiffLineType::Insert,
+            "\t\tconst uint8_t data[] = {",
+            width,
+            line_number_width(1053),
+            style_context,
+        );
+        let del_lines = push_wrapped_diff_line_with_style_context(
+            1054,
+            DiffLineType::Delete,
+            "\t\t0x80,                                                 /* sid_flags */",
+            width,
+            line_number_width(1054),
+            style_context,
+        );
+
+        assert!(add_lines.len() > 1);
+        assert!(del_lines.len() > 1);
+        assert_lines_have_no_tabs(&add_lines);
+        assert_lines_have_no_tabs(&del_lines);
+        assert_lines_fit(&add_lines, width);
+        assert_lines_fit(&del_lines, width);
+        assert!(line_text(&add_lines[0]).starts_with("1053 +"));
+        for line in add_lines.iter().skip(1) {
+            assert!(
+                line_text(line).starts_with("      "),
+                "continuation line should align under the diff content: {line:?}"
+            );
+        }
+        for line in &add_lines {
+            assert_eq!(line.style.bg, Some(rgb_color(DARK_TC_ADD_LINE_BG_RGB)));
+        }
+        for line in &del_lines {
+            assert_eq!(line.style.bg, Some(rgb_color(DARK_TC_DEL_LINE_BG_RGB)));
+        }
     }
 
     #[test]
@@ -1274,6 +1368,56 @@ mod tests {
 
         // Render with backend width wider than wrap width to avoid Paragraph auto-wrap.
         snapshot_lines("apply_update_block_wraps_long_lines", lines, 80, 12);
+    }
+
+    #[test]
+    fn create_diff_summary_expands_tabs_and_keeps_lines_within_wrap_width() {
+        let original = "\t\told_flags = 1;\n\t\treturn BGP_ATTR_PARSE_PROCEED;\n";
+        let modified = "\t\tconst uint8_t data[] = {\n\t\t0x80,                                                 /* sid_flags */\n\t\treturn BGP_ATTR_PARSE_PROCEED;\n";
+        let patch = diffy::create_patch(original, modified).to_string();
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("tests/bgpd/test_mp_attr.c"),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: None,
+            },
+        );
+
+        let wrap_cols = 80;
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), wrap_cols);
+
+        assert_lines_have_no_tabs(&lines);
+        assert_lines_fit(&lines, wrap_cols);
+        let style_context = current_diff_render_style_context();
+        let insert_style = style_line_bg_for(DiffLineType::Insert, style_context.diff_backgrounds);
+        let delete_style = style_line_bg_for(DiffLineType::Delete, style_context.diff_backgrounds);
+        let insert_line = lines
+            .iter()
+            .find(|line| line_text(line).contains("const uint8_t"))
+            .expect("insert line with expanded tabs");
+        let delete_line = lines
+            .iter()
+            .find(|line| line_text(line).contains("old_flags"))
+            .expect("delete line with expanded tabs");
+        assert_eq!(insert_line.style, insert_style);
+        assert_eq!(delete_line.style, delete_style);
+    }
+
+    #[test]
+    fn create_diff_summary_handles_width_narrower_than_diff_prefix() {
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("narrow.txt"),
+            FileChange::Add {
+                content: "\tx\n".to_string(),
+            },
+        );
+
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 2);
+
+        assert!(!lines.is_empty());
+        assert_lines_have_no_tabs(&lines);
     }
 
     #[test]
