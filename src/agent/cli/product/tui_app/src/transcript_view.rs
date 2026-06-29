@@ -94,6 +94,23 @@ impl TranscriptLiveTailKey {
     pub(crate) fn animation_tick(self) -> Option<u64> {
         self.animation_tick
     }
+
+    fn terminal_repaint_key(self) -> TranscriptLiveTailRepaintKey {
+        TranscriptLiveTailRepaintKey {
+            source: self.source,
+            width: self.width,
+            revision: self.revision,
+            is_stream_continuation: self.is_stream_continuation,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TranscriptLiveTailRepaintKey {
+    source: TranscriptLiveTailSource,
+    width: u16,
+    revision: u64,
+    is_stream_continuation: bool,
 }
 
 pub(crate) struct TranscriptLiveTail {
@@ -191,6 +208,7 @@ pub(crate) struct TranscriptView {
     live_tail_key: Option<TranscriptLiveTailKey>,
     live_tail_spacing: Option<Rc<RefCell<TranscriptLiveTailSpacing>>>,
     live_tail_lines: Vec<Line<'static>>,
+    needs_terminal_repaint: bool,
     last_width: Option<u16>,
     last_area: Option<Rect>,
     last_top_line: usize,
@@ -218,6 +236,7 @@ impl TranscriptView {
             live_tail_key: None,
             live_tail_spacing: None,
             live_tail_lines: Vec::new(),
+            needs_terminal_repaint: false,
             last_width: None,
             last_area: None,
             last_top_line: 0,
@@ -239,6 +258,9 @@ impl TranscriptView {
         let inserted_cell_visible = self.mode.is_visible(cell.as_ref(), spacing_width);
         let prior_visible_layout = self.prior_visible_committed_layout(u16::MAX);
         let tail_renderable = self.take_live_tail_renderable();
+        if tail_renderable.is_some() {
+            self.request_terminal_repaint();
+        }
         let cell_index = self.cells.len();
         let layout = Rc::new(RefCell::new(CellLayoutInfo::default()));
         let renderable = Self::render_cell(
@@ -279,6 +301,10 @@ impl TranscriptView {
         compute_tail: impl FnOnce(u16) -> Option<TranscriptLiveTail>,
     ) {
         let next_key = live_tail_key.map(|key| key.with_width(width));
+        let repaint_key_changed = self
+            .live_tail_key
+            .map(TranscriptLiveTailKey::terminal_repaint_key)
+            != next_key.map(TranscriptLiveTailKey::terminal_repaint_key);
 
         if self.live_tail_key == next_key {
             return;
@@ -289,6 +315,9 @@ impl TranscriptView {
         self.live_tail_key = next_key;
         self.live_tail_spacing = None;
         self.live_tail_lines.clear();
+        if repaint_key_changed {
+            self.request_terminal_repaint();
+        }
 
         if let Some(key) = next_key
             && let Some(tail) = compute_tail(width)
@@ -311,6 +340,26 @@ impl TranscriptView {
             self.stick_to_bottom = true;
             self.user_scrolled_during_stream = false;
         }
+    }
+
+    pub(crate) fn prepare_terminal_repaint_for_width(&mut self, width: u16) {
+        let width = width.max(1);
+        if self
+            .last_width
+            .is_some_and(|last_width| last_width != width)
+        {
+            self.request_terminal_repaint();
+        }
+    }
+
+    pub(crate) fn take_needs_terminal_repaint(&mut self) -> bool {
+        let needs_terminal_repaint = self.needs_terminal_repaint;
+        self.needs_terminal_repaint = false;
+        needs_terminal_repaint
+    }
+
+    fn request_terminal_repaint(&mut self) {
+        self.needs_terminal_repaint = true;
     }
 
     pub(crate) fn desired_height(&self, width: u16) -> u16 {
@@ -1815,6 +1864,62 @@ mod tests {
         let _ = render_test_view(&mut view, 20, 3);
 
         assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn live_tail_content_change_requests_one_shot_terminal_repaint() {
+        let mut view = TranscriptView::new(Vec::new(), TranscriptRenderMode::Display);
+        let key =
+            TranscriptLiveTailKey::new(TranscriptLiveTailSource::ActiveCell, 0, 1, false, None);
+
+        view.sync_live_tail(80, Some(key), |_| {
+            TranscriptView::live_tail_from_lines(vec!["streaming tail".into()])
+        });
+
+        assert!(view.take_needs_terminal_repaint());
+        assert!(!view.take_needs_terminal_repaint());
+
+        view.sync_live_tail(80, Some(key), |_| {
+            panic!("unchanged live-tail key should reuse cached tail")
+        });
+
+        assert!(!view.take_needs_terminal_repaint());
+    }
+
+    #[test]
+    fn live_tail_animation_tick_does_not_request_terminal_repaint() {
+        let mut view = TranscriptView::new(Vec::new(), TranscriptRenderMode::Display);
+        let first =
+            TranscriptLiveTailKey::new(TranscriptLiveTailSource::ActiveCell, 0, 1, false, Some(1));
+        let next =
+            TranscriptLiveTailKey::new(TranscriptLiveTailSource::ActiveCell, 0, 1, false, Some(2));
+
+        view.sync_live_tail(80, Some(first), |_| {
+            TranscriptView::live_tail_from_lines(vec!["spinner frame 1".into()])
+        });
+        assert!(view.take_needs_terminal_repaint());
+
+        view.sync_live_tail(80, Some(next), |_| {
+            TranscriptView::live_tail_from_lines(vec!["spinner frame 2".into()])
+        });
+
+        assert!(!view.take_needs_terminal_repaint());
+    }
+
+    #[test]
+    fn width_change_requests_one_shot_terminal_repaint_after_render() {
+        let mut view = TranscriptView::new(
+            vec![Arc::new(TestCell(
+                "request。input slimming 不是直接改写整个 agent 状态",
+            ))],
+            TranscriptRenderMode::Display,
+        );
+
+        let _ = render_test_view(&mut view, 80, 4);
+        view.prepare_terminal_repaint_for_width(64);
+
+        assert!(view.take_needs_terminal_repaint());
+        assert!(!view.take_needs_terminal_repaint());
     }
 
     #[test]

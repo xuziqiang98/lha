@@ -2179,6 +2179,12 @@ impl App {
             return Ok(());
         }
         let size = tui.terminal.size()?;
+        if self
+            .chat_widget
+            .prepare_transcript_terminal_repaint(size.width)
+        {
+            tui.terminal.invalidate_viewport();
+        }
         tui.draw(size.height, |frame| {
             self.chat_widget.render(frame.area(), frame.buffer);
             if let Some(state) = &self.provider_config_modal {

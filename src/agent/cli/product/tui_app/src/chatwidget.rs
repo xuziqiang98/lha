@@ -7222,6 +7222,20 @@ impl ChatWidget {
         );
     }
 
+    pub(crate) fn prepare_transcript_terminal_repaint(&self, area_width: u16) -> bool {
+        let sidebar_width = crate::product::tui_app::sidebar::sidebar_width(area_width);
+        let main_width = sidebar_width.map_or(area_width, |sidebar_width| {
+            area_width.saturating_sub(sidebar_width)
+        });
+        let mut transcript = self.transcript.borrow_mut();
+        let main_width = main_width.max(1);
+        transcript.prepare_terminal_repaint_for_width(main_width);
+        transcript.sync_live_tail(main_width, self.transcript_live_tail_key(), |tail_width| {
+            self.transcript_live_tail_for_mode(tail_width, TranscriptRenderMode::Display)
+        });
+        transcript.take_needs_terminal_repaint()
+    }
+
     fn handle_transcript_scroll_key(&mut self, key_event: KeyEvent) -> bool {
         if !self.bottom_pane.no_modal_or_popup_active()
             && !self.bottom_pane.allow_background_transcript_interaction()

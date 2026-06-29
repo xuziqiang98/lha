@@ -3106,6 +3106,54 @@ const CJK_TRANSCRIPT_WORD_ORDER_TEXT: &str = "**总体判断**\n\
 - **最小使用体验：一般**。我们只是发一句 `hello`，最后还是写了 `ModelInfo`、`RuntimeBuildSpec`、事件消费循环等一百多行。\n\
 - **文档方向：对**。`docs/sdk-building-agents.md` 讲得完整，但它更像“完整 SDK 教程”，不是“5 分钟起步”。";
 
+const SCREENSHOT_CJK_ASCII_ORDER_TEXT: &str = "我看了 `papers/template.tex` 和原始 `docs/input-slimming.md`，你的三个疑问都成立。\n\
+\n\
+- `R_t=B(H_t)` 里的 `B`：原始文档里定义了，`B` 是 runtime 的 build-request 过程，所以读者会卡住。\n\
+- 是否有必要区分 `R_t` 和 `H_t`：有必要。input slimming 实际改写的是 request 层面的 `R_t`，不是直接改写整个 agent 状态 `H_t`。\n\
+- `\\tilde{R}_t` 和 `X_\\tau` 的关系：现在确实跳跃，需要把单步 request。input slimming 过渡到整条 trajectory。";
+
+fn assert_screenshot_cjk_ascii_order(rendered: &str, context: &str) {
+    for needle in [
+        "papers/template.tex",
+        "R_t=B(H_t)",
+        "不是直接改写整个 agent 状态",
+        "读者会卡住。",
+        "request。input slimming",
+    ] {
+        assert!(
+            rendered.contains(needle),
+            "{context} missing correct mixed-width text {needle:?}: {rendered:?}"
+        );
+    }
+    for stale in [
+        "papers/template了.tex",
+        "_tR",
+        "不是直接改整个 agent写 状态",
+        "卡住- 是否有。必要",
+        "requestinput slimming。",
+    ] {
+        assert!(
+            !rendered.contains(stale),
+            "{context} rendered known stale-cell corruption {stale:?}: {rendered:?}"
+        );
+    }
+}
+
+fn assert_no_screenshot_cjk_ascii_stale_order(rendered: &str, context: &str) {
+    for stale in [
+        "papers/template了.tex",
+        "_tR",
+        "不是直接改整个 agent写 状态",
+        "卡住- 是否有。必要",
+        "requestinput slimming。",
+    ] {
+        assert!(
+            !rendered.contains(stale),
+            "{context} rendered known stale-cell corruption {stale:?}: {rendered:?}"
+        );
+    }
+}
+
 fn assert_cjk_transcript_word_order(rendered: &str, context: &str) {
     assert!(
         rendered.contains("长远演进。"),
@@ -3154,6 +3202,10 @@ fn render_chat_to_vt100_screen(
     chat: &ChatWidget,
     terminal: &mut crate::product::tui_app::custom_terminal::Terminal<VT100Backend>,
 ) -> String {
+    let width = terminal.backend().vt100().screen().size().1;
+    if chat.prepare_transcript_terminal_repaint(width) {
+        terminal.invalidate_viewport();
+    }
     terminal
         .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
         .expect("draw chat widget");
@@ -10821,6 +10873,76 @@ async fn final_agent_message_preserves_cjk_transcript_word_order() {
 }
 
 #[tokio::test]
+async fn final_agent_message_preserves_screenshot_cjk_ascii_order() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let width = 180;
+    let height = 36;
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
+        VT100Backend::new(width, height),
+    )
+    .expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+    chat.handle_codex_event(Event {
+        id: "screenshot-order-turn".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "screenshot-order-final".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: SCREENSHOT_CJK_ASCII_ORDER_TEXT.to_string(),
+            memory_citation: None,
+        }),
+    });
+
+    let mut saw_agent_message = false;
+    for event in drain_events(&mut rx) {
+        if let Some(cell) = into_insert_history_cell(event) {
+            let rendered = lines_to_single_string(&cell.display_lines(width));
+            if cell.as_any().is::<AgentMessageCell>() {
+                saw_agent_message = true;
+                assert_screenshot_cjk_ascii_order(
+                    &rendered,
+                    "screenshot CJK/ASCII AgentMessage cell",
+                );
+            }
+            let cell: Arc<dyn HistoryCell> = Arc::from(cell);
+            chat.insert_transcript_cell(cell);
+        }
+    }
+    assert!(
+        saw_agent_message,
+        "expected screenshot CJK/ASCII AgentMessage cell"
+    );
+
+    let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    assert_screenshot_cjk_ascii_order(&screen, "screenshot CJK/ASCII VT100 screen");
+
+    let narrow_width = 132;
+    let mut narrow_terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
+        VT100Backend::new(narrow_width, height),
+    )
+    .expect("narrow terminal");
+    narrow_terminal.set_viewport_area(Rect::new(0, 0, narrow_width, height));
+    let narrow_screen = render_chat_to_vt100_screen(&chat, &mut narrow_terminal);
+    assert_no_screenshot_cjk_ascii_stale_order(
+        &narrow_screen,
+        "rewrapped screenshot CJK/ASCII VT100 screen",
+    );
+    let compact_narrow: String = narrow_screen
+        .chars()
+        .filter(|ch| !ch.is_whitespace() && *ch != '│')
+        .collect();
+    assert!(
+        compact_narrow.contains("不是直接改写整个agent状态"),
+        "rewrapped screenshot CJK/ASCII screen lost compact state text: {narrow_screen:?}"
+    );
+}
+
+#[tokio::test]
 async fn streamed_agent_message_preserves_feedback_commit_message_word_order() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let width = 120;
@@ -10983,6 +11105,123 @@ async fn streamed_agent_message_preserves_cjk_transcript_word_order() {
 
     let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
     assert_cjk_transcript_word_order(&screen, "streamed CJK committed VT100 screen");
+}
+
+#[tokio::test]
+async fn live_tail_completion_repaint_repairs_screenshot_cjk_ascii_divergence() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let width = 180;
+    let height = 36;
+    chat.last_rendered_width.set(Some(usize::from(width)));
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
+        VT100Backend::new(width, height),
+    )
+    .expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+    chat.handle_codex_event(Event {
+        id: "screenshot-live-turn".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+
+    for delta in [
+        "我看了 `papers/template.tex` 和原始 `docs/input-slimming.md`，你的三个疑问都成立。\n\n",
+        "- `R_t=B(H_t)` 里的 `B`：原始文档里定义了，`B` 是 runtime 的 build-request 过程，所以读者会卡住。\n",
+        "- 是否有必要区分 `R_t` 和 `H_t`：有必要。input slimming 实际改写的是 request 层面的 `R_t`，不是直接改写整个 agent 状态 `H_t`。\n",
+        "- `\\tilde{R}_t` 和 `X_\\tau` 的关系：现在确实跳跃，需要把单步 request。input slimming 过渡到整条 trajectory。\n",
+    ] {
+        chat.handle_codex_event(Event {
+            id: "screenshot-live-delta".into(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: delta.to_string(),
+            }),
+        });
+        chat.on_commit_tick();
+        let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+        assert!(
+            !screen.contains("requestinput slimming。"),
+            "live tail rendered known request/input corruption: {screen:?}"
+        );
+    }
+
+    let mut live_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    for _ in 0..8 {
+        if live_screen.contains("request。input slimming") {
+            break;
+        }
+        chat.on_commit_tick();
+        live_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    }
+    assert_screenshot_cjk_ascii_order(&live_screen, "screenshot CJK/ASCII live tail");
+    let template_row = screen_row_containing(&live_screen, "papers/template.tex");
+    let stale_row = "我看了 papers/template了.tex 和原始 docs/input-slimming.md";
+    corrupt_vt100_row(&mut terminal, template_row, stale_row);
+    let corrupted_screen = terminal.backend().vt100().screen().contents();
+    assert!(
+        corrupted_screen.contains("papers/template了.tex"),
+        "test setup should corrupt screenshot VT100 row: {corrupted_screen:?}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "screenshot-live-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    let mut saw_committed_answer = false;
+    for event in drain_events(&mut rx) {
+        if let Some(cell) = into_insert_history_cell(event) {
+            let rendered = lines_to_single_string(&cell.display_lines(width));
+            if cell.as_any().is::<AgentMessageCell>() {
+                saw_committed_answer = true;
+                assert_screenshot_cjk_ascii_order(&rendered, "screenshot CJK/ASCII committed cell");
+            }
+            let cell: Arc<dyn HistoryCell> = Arc::from(cell);
+            chat.insert_transcript_cell(cell);
+        }
+    }
+    assert!(
+        saw_committed_answer,
+        "expected screenshot CJK/ASCII answer to flush into history"
+    );
+
+    let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    assert_screenshot_cjk_ascii_order(&screen, "screenshot CJK/ASCII repaired VT100 screen");
+}
+
+#[tokio::test]
+async fn transcript_terminal_repaint_signal_is_one_shot_for_unchanged_frame() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let width = 180;
+    chat.last_rendered_width.set(Some(usize::from(width)));
+
+    chat.handle_codex_event(Event {
+        id: "one-shot-turn".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "one-shot-delta".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "request。input slimming 不是直接改写整个 agent 状态\n".to_string(),
+        }),
+    });
+    chat.on_commit_tick();
+
+    assert!(
+        chat.prepare_transcript_terminal_repaint(width),
+        "new live tail should request one terminal repaint"
+    );
+    assert!(
+        !chat.prepare_transcript_terminal_repaint(width),
+        "unchanged live tail should not keep forcing terminal repaints"
+    );
 }
 
 #[tokio::test]
