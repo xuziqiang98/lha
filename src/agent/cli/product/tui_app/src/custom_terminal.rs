@@ -84,17 +84,6 @@ fn symbol_has_physical_repaint_risk(symbol: &str) -> bool {
         || width != symbol.chars().count()
 }
 
-fn row_has_physical_repaint_risk(row: &[Cell]) -> bool {
-    row.iter().any(|cell| {
-        (cell.skip
-            || cell.symbol() != " "
-            || cell.fg != Color::Reset
-            || cell.bg != Color::Reset
-            || cell.modifier != Modifier::empty())
-            && symbol_has_physical_repaint_risk(cell.symbol())
-    })
-}
-
 fn cursor_after_put(x: u16, y: u16, symbol: &str) -> Position {
     let width = u16::try_from(display_width(symbol).max(1)).unwrap_or(u16::MAX);
     Position {
@@ -594,6 +583,10 @@ fn diff_buffers_with_full_repaint(
         // Scan the row to find the rightmost column that still matters: any non-space glyph,
         // any cell whose bg differs from the row's trailing bg, or any cell with modifiers.
         // Multi-width glyphs extend that region through their full displayed width.
+        // Rows are dirty only when the logical buffer changed or an explicit viewport
+        // invalidation requests a repaint. Wide/CJK/OSC cells affect how we repaint a dirty row,
+        // not whether an unchanged row should be repainted every animation frame; physical screen
+        // divergence should be repaired with an explicit viewport invalidation.
         // Default-background dirty rows are cleared from column zero before repainting so stale
         // wide-cell fragments cannot survive inside the text span. Rows with explicit background
         // colors are repainted cell-by-cell because some terminals and multiplexers handle colored
@@ -618,10 +611,7 @@ fn diff_buffers_with_full_repaint(
             .iter()
             .zip(previous_row.iter())
             .any(|(current, previous)| current != previous);
-        let row_is_dirty = force_full_repaint
-            || row_changed
-            || row_has_physical_repaint_risk(row)
-            || row_has_physical_repaint_risk(previous_row);
+        let row_is_dirty = force_full_repaint || row_changed;
         if !row_is_dirty {
             continue;
         }
@@ -1235,7 +1225,7 @@ mod tests {
     }
 
     #[test]
-    fn cjk_row_repaints_after_screen_buffer_divergence() {
+    fn invalidate_viewport_repairs_cjk_row_after_screen_buffer_divergence() {
         let backend = crate::product::tui_app::test_backend::VT100Backend::new(120, 4);
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, 120, 4));
@@ -1256,6 +1246,7 @@ mod tests {
             "test setup should corrupt CJK row: {contents:?}"
         );
 
+        terminal.invalidate_viewport();
         terminal
             .draw(|frame| {
                 frame.buffer.set_string(0, 0, correct, Style::default());
@@ -1317,7 +1308,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_cjk_ascii_row_repaints_screenshot_corruption_without_invalidation() {
+    fn invalidate_viewport_repairs_mixed_cjk_ascii_row_after_screen_buffer_divergence() {
         let backend = crate::product::tui_app::test_backend::VT100Backend::new(180, 4);
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, 180, 4));
@@ -1338,6 +1329,7 @@ mod tests {
             "test setup should corrupt mixed CJK/ASCII row: {contents:?}"
         );
 
+        terminal.invalidate_viewport();
         terminal
             .draw(|frame| {
                 frame.buffer.set_string(0, 0, correct, Style::default());
@@ -1510,6 +1502,37 @@ mod tests {
                 .iter()
                 .all(|command| !matches!(command, DrawCommand::Put { x: 1, y: 0, .. })),
             "expected repaint to skip the second cell of the first wide glyph; commands: {commands:?}",
+        );
+    }
+
+    #[test]
+    fn diff_buffers_skips_unchanged_cjk_rows_when_status_animates() {
+        let area = Rect::new(0, 0, 80, 4);
+        let mut previous = Buffer::empty(area);
+        let mut next = Buffer::empty(area);
+
+        let static_cjk = "这是一个静态中文回答，状态动画不应该让这一行每帧重绘。";
+        previous.set_string(0, 0, static_cjk, Style::default());
+        next.set_string(0, 0, static_cjk, Style::default());
+
+        previous.set_string(0, 3, "• Working /", Style::default());
+        next.set_string(0, 3, "• Working -", Style::default());
+
+        let commands = diff_buffers(&previous, &next);
+
+        assert!(
+            commands.iter().all(|command| !matches!(
+                command,
+                DrawCommand::ClearToEnd { y: 0, .. } | DrawCommand::Put { y: 0, .. }
+            )),
+            "unchanged CJK row should not repaint during unrelated animation; commands: {commands:?}",
+        );
+        assert!(
+            commands.iter().any(|command| matches!(
+                command,
+                DrawCommand::ClearToEnd { y: 3, .. } | DrawCommand::Put { y: 3, .. }
+            )),
+            "changed status row should still repaint; commands: {commands:?}",
         );
     }
 
