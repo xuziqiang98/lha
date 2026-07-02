@@ -24,7 +24,9 @@
 use std::io;
 use std::io::Write;
 
+use crossterm::cursor::Hide;
 use crossterm::cursor::MoveTo;
+use crossterm::cursor::Show;
 use crossterm::queue;
 use crossterm::style::Colors;
 use crossterm::style::Print;
@@ -420,14 +422,16 @@ where
         // Buffer. Thus, we're taking the important data out of the Frame and dropping it.
         let cursor_position = frame.cursor_position;
 
+        self.queue_hide_cursor()?;
+
         // Draw to stdout
         self.flush()?;
 
         match cursor_position {
-            None => self.hide_cursor()?,
+            None => {}
             Some(position) => {
-                self.show_cursor()?;
-                self.set_cursor_position(position)?;
+                self.queue_set_cursor_position(position)?;
+                self.queue_show_cursor()?;
             }
         }
 
@@ -452,6 +456,18 @@ where
         Ok(())
     }
 
+    fn queue_hide_cursor(&mut self) -> io::Result<()> {
+        queue!(self.backend, Hide)?;
+        self.hidden_cursor = true;
+        Ok(())
+    }
+
+    fn queue_show_cursor(&mut self) -> io::Result<()> {
+        queue!(self.backend, Show)?;
+        self.hidden_cursor = false;
+        Ok(())
+    }
+
     /// Gets the current cursor position.
     ///
     /// This is the position of the cursor after the last draw call.
@@ -464,6 +480,13 @@ where
     pub fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
         let position = position.into();
         self.backend.set_cursor_position(position)?;
+        self.last_known_cursor_pos = position;
+        Ok(())
+    }
+
+    fn queue_set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
+        let position = position.into();
+        queue!(self.backend, MoveTo(position.x, position.y))?;
         self.last_known_cursor_pos = position;
         Ok(())
     }
@@ -779,6 +802,121 @@ mod tests {
         contents.chars().filter(|c| !c.is_whitespace()).collect()
     }
 
+    #[derive(Debug)]
+    struct RecordingBackend {
+        output: Vec<u8>,
+        size: Size,
+        cursor_position: Position,
+    }
+
+    impl RecordingBackend {
+        fn new(width: u16, height: u16) -> Self {
+            Self {
+                output: Vec::new(),
+                size: Size::new(width, height),
+                cursor_position: Position::ORIGIN,
+            }
+        }
+
+        fn output_string(&self) -> String {
+            String::from_utf8(self.output.clone()).expect("terminal output should be utf8")
+        }
+    }
+
+    impl Write for RecordingBackend {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.output.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Backend for RecordingBackend {
+        fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
+        where
+            I: Iterator<Item = (u16, u16, &'a Cell)>,
+        {
+            for (x, y, cell) in content {
+                queue!(self, MoveTo(x, y), Print(cell.symbol()))?;
+                self.cursor_position = cursor_after_put(x, y, cell.symbol());
+            }
+            Ok(())
+        }
+
+        fn hide_cursor(&mut self) -> io::Result<()> {
+            queue!(self, Hide)
+        }
+
+        fn show_cursor(&mut self) -> io::Result<()> {
+            queue!(self, Show)
+        }
+
+        fn get_cursor_position(&mut self) -> io::Result<Position> {
+            Ok(self.cursor_position)
+        }
+
+        fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
+            let position = position.into();
+            queue!(self, MoveTo(position.x, position.y))?;
+            self.cursor_position = position;
+            Ok(())
+        }
+
+        fn clear(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn clear_region(&mut self, _clear_type: ClearType) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn size(&self) -> io::Result<Size> {
+            Ok(self.size)
+        }
+
+        fn window_size(&mut self) -> io::Result<ratatui::backend::WindowSize> {
+            Ok(ratatui::backend::WindowSize {
+                columns_rows: self.size,
+                pixels: Size::ZERO,
+            })
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn scroll_region_up(
+            &mut self,
+            _region: std::ops::Range<u16>,
+            _line_count: u16,
+        ) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn scroll_region_down(
+            &mut self,
+            _region: std::ops::Range<u16>,
+            _line_count: u16,
+        ) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn queued_command(command: impl crossterm::Command) -> String {
+        let mut bytes = Vec::new();
+        queue!(&mut bytes, command).expect("queue test command");
+        String::from_utf8(bytes).expect("queued command should be utf8")
+    }
+
+    fn index_of(haystack: &str, needle: &str, context: &str) -> usize {
+        haystack
+            .find(needle)
+            .unwrap_or_else(|| panic!("missing {context}: {haystack:?}"))
+    }
+
     fn cell_with_symbol(symbol: &str) -> Cell {
         let mut cell = Cell::default();
         cell.set_symbol(symbol);
@@ -816,6 +954,92 @@ mod tests {
             display_width("\x1b]8;;https://example.test\x07依\x1b]8;;\x07"),
             2
         );
+    }
+
+    #[test]
+    fn draw_hides_cursor_before_repaint_and_shows_after_final_move() {
+        let backend = RecordingBackend::new(80, 4);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 80, 4));
+        assert!(!terminal.hidden_cursor);
+
+        let final_cursor = Position { x: 3, y: 2 };
+        terminal
+            .draw(|frame| {
+                frame
+                    .buffer
+                    .set_string(0, 0, "目标程序 + fuzz harness", Style::default());
+                frame.set_cursor_position(final_cursor);
+            })
+            .expect("draw mixed-width frame");
+
+        let output = terminal.backend().output_string();
+        let hide = queued_command(Hide);
+        let show = queued_command(Show);
+        let repaint_move = queued_command(MoveTo(0, 0));
+        let final_move = queued_command(MoveTo(final_cursor.x, final_cursor.y));
+
+        let hide_index = index_of(&output, &hide, "hide cursor command");
+        let repaint_move_index = index_of(&output, &repaint_move, "initial repaint move");
+        let text_index = index_of(&output, "目", "mixed-width repaint text");
+        let final_move_index = output
+            .rfind(&final_move)
+            .unwrap_or_else(|| panic!("missing final cursor move: {output:?}"));
+        let show_index = index_of(&output, &show, "show cursor command");
+
+        assert!(
+            hide_index < repaint_move_index,
+            "cursor should hide before first repaint move: {output:?}"
+        );
+        assert!(
+            hide_index < text_index,
+            "cursor should hide before mixed-width text is printed: {output:?}"
+        );
+        assert!(
+            final_move_index < show_index,
+            "final cursor move should happen before show cursor: {output:?}"
+        );
+        assert!(
+            show_index > text_index,
+            "cursor should show only after repaint output: {output:?}"
+        );
+
+        let after_show = &output[show_index + show.len()..];
+        assert!(
+            !after_show.contains(&repaint_move),
+            "repaint move should not happen after show cursor: {output:?}"
+        );
+        assert!(!terminal.hidden_cursor);
+        assert_eq!(terminal.last_known_cursor_pos, final_cursor);
+    }
+
+    #[test]
+    fn draw_keeps_cursor_hidden_when_frame_has_no_cursor_position() {
+        let backend = RecordingBackend::new(80, 4);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 80, 4));
+
+        terminal
+            .draw(|frame| {
+                frame
+                    .buffer
+                    .set_string(0, 0, "目标程序 + fuzz harness", Style::default());
+            })
+            .expect("draw mixed-width frame without cursor");
+
+        let output = terminal.backend().output_string();
+        let hide = queued_command(Hide);
+        let show = queued_command(Show);
+
+        assert!(
+            output.contains(&hide),
+            "cursor should be hidden before repaint: {output:?}"
+        );
+        assert!(
+            !output.contains(&show),
+            "cursor should not be shown when frame has no cursor position: {output:?}"
+        );
+        assert!(terminal.hidden_cursor);
     }
 
     #[test]
