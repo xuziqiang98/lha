@@ -37,6 +37,7 @@ use derive_more::IsVariant;
 use ratatui::backend::Backend;
 use ratatui::backend::ClearType;
 use ratatui::buffer::Buffer;
+use ratatui::buffer::Cell;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
@@ -70,6 +71,26 @@ fn display_width(symbol: &str) -> usize {
         }
     }
     visible.width()
+}
+
+fn symbol_has_physical_repaint_risk(symbol: &str) -> bool {
+    let width = display_width(symbol);
+    symbol.contains('\x1b')
+        || !symbol.is_ascii()
+        || width == 0
+        || width > 1
+        || width != symbol.chars().count()
+}
+
+fn row_has_physical_repaint_risk(row: &[Cell]) -> bool {
+    row.iter().any(|cell| {
+        (cell.skip
+            || cell.symbol() != " "
+            || cell.fg != Color::Reset
+            || cell.bg != Color::Reset
+            || cell.modifier != Modifier::empty())
+            && symbol_has_physical_repaint_risk(cell.symbol())
+    })
 }
 
 fn cursor_after_put(x: u16, y: u16, symbol: &str) -> Position {
@@ -518,8 +539,6 @@ where
     }
 }
 
-use ratatui::buffer::Cell;
-
 #[derive(Debug, IsVariant)]
 enum DrawCommand {
     Put { x: u16, y: u16, cell: Cell },
@@ -572,11 +591,14 @@ fn diff_buffers_with_full_repaint(
             column += width.max(1); // treat zero-width symbols as width 1
         }
 
+        let row_changed = row
+            .iter()
+            .zip(previous_row.iter())
+            .any(|(current, previous)| current != previous);
         let row_is_dirty = force_full_repaint
-            || row
-                .iter()
-                .zip(previous_row.iter())
-                .any(|(current, previous)| current != previous);
+            || row_changed
+            || row_has_physical_repaint_risk(row)
+            || row_has_physical_repaint_risk(previous_row);
         if !row_is_dirty {
             continue;
         }
@@ -647,8 +669,14 @@ where
                     bg = cell.bg;
                 }
 
-                queue!(writer, Print(cell.symbol()))?;
-                next_cursor_pos = Some(cursor_after_put(x, y, cell.symbol()));
+                let symbol = cell.symbol();
+                let symbol_has_risk = symbol_has_physical_repaint_risk(symbol);
+                queue!(writer, Print(symbol))?;
+                next_cursor_pos = if symbol_has_risk {
+                    None
+                } else {
+                    Some(cursor_after_put(x, y, symbol))
+                };
             }
             DrawCommand::ClearToEnd { bg: clear_bg, .. } => {
                 queue!(writer, SetAttribute(crossterm::style::Attribute::Reset))?;
@@ -983,7 +1011,7 @@ mod tests {
     }
 
     #[test]
-    fn invalidate_viewport_repairs_cjk_row_after_screen_buffer_divergence() {
+    fn cjk_row_repaints_after_screen_buffer_divergence() {
         let backend = crate::product::tui_app::test_backend::VT100Backend::new(120, 4);
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, 120, 4));
@@ -1009,18 +1037,6 @@ mod tests {
                 frame.buffer.set_string(0, 0, correct, Style::default());
             })
             .expect("draw unchanged frame");
-        let contents = terminal.backend().vt100().screen().contents();
-        assert!(
-            contents.contains(corrupted),
-            "unchanged buffer should not repair physical-screen divergence: {contents:?}"
-        );
-
-        terminal.invalidate_viewport();
-        terminal
-            .draw(|frame| {
-                frame.buffer.set_string(0, 0, correct, Style::default());
-            })
-            .expect("draw invalidated frame");
 
         let contents = terminal.backend().vt100().screen().contents();
         assert!(
@@ -1034,6 +1050,84 @@ mod tests {
         assert!(
             !contents.contains("细“大节"),
             "terminal kept stale CJK quote/order corruption: {contents:?}"
+        );
+    }
+
+    #[test]
+    fn unchanged_ascii_row_keeps_incremental_diff_behavior_after_screen_buffer_divergence() {
+        let backend = crate::product::tui_app::test_backend::VT100Backend::new(120, 4);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 120, 4));
+
+        let correct = "fix(cybergym): harden scoped threat-model graph seeding";
+        let corrupted = "fix(cybergym):en hard scoped threat-model graph seeding";
+
+        terminal
+            .draw(|frame| {
+                frame.buffer.set_string(0, 0, correct, Style::default());
+            })
+            .expect("draw correct ASCII frame");
+
+        corrupt_backend_row(&mut terminal, 0, corrupted);
+        let contents = terminal.backend().vt100().screen().contents();
+        assert!(
+            contents.contains(corrupted),
+            "test setup should corrupt ASCII row: {contents:?}"
+        );
+
+        terminal
+            .draw(|frame| {
+                frame.buffer.set_string(0, 0, correct, Style::default());
+            })
+            .expect("draw unchanged ASCII frame");
+
+        let contents = terminal.backend().vt100().screen().contents();
+        assert!(
+            contents.contains(corrupted),
+            "unchanged pure ASCII row should keep incremental diff behavior: {contents:?}"
+        );
+        assert!(
+            !contents.contains(correct),
+            "unchanged pure ASCII row should not be unconditionally repainted: {contents:?}"
+        );
+    }
+
+    #[test]
+    fn mixed_cjk_ascii_row_repaints_screenshot_corruption_without_invalidation() {
+        let backend = crate::product::tui_app::test_backend::VT100Backend::new(180, 4);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 180, 4));
+
+        let correct = "所以 `cybergym-server-data/.../out/<fuzzer>` 本身就是“目标程序 + fuzz harness”的组合体。";
+        let corrupted = "所以 `cybergym-server-data/.../out/<fuzzer>` 本身就是“目标程序 + fuzz”的 harness组合体。";
+
+        terminal
+            .draw(|frame| {
+                frame.buffer.set_string(0, 0, correct, Style::default());
+            })
+            .expect("draw correct mixed-width frame");
+
+        corrupt_backend_row(&mut terminal, 0, corrupted);
+        let contents = terminal.backend().vt100().screen().contents();
+        assert!(
+            contents.contains("fuzz”的 harness组合体"),
+            "test setup should corrupt mixed CJK/ASCII row: {contents:?}"
+        );
+
+        terminal
+            .draw(|frame| {
+                frame.buffer.set_string(0, 0, correct, Style::default());
+            })
+            .expect("draw unchanged mixed-width frame");
+
+        let contents = terminal.backend().vt100().screen().contents();
+        assert!(
+            contents.contains(correct),
+            "terminal should repaint stale mixed CJK/ASCII row: {contents:?}"
+        );
+        assert!(
+            !contents.contains("fuzz”的 harness组合体"),
+            "terminal kept stale screenshot corruption: {contents:?}"
         );
     }
 
