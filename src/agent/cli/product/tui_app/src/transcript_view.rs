@@ -53,6 +53,7 @@ use unicode_width::UnicodeWidthStr;
 
 const DRAG_AUTOSCROLL_LINES_PER_TICK: isize = 1;
 const DRAG_AUTOSCROLL_EDGE_ROWS: u16 = 1;
+pub(crate) const TRANSCRIPT_VIEWPORT_REPAIR_FRAMES: u8 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TranscriptLiveTailSource {
@@ -208,7 +209,7 @@ pub(crate) struct TranscriptView {
     live_tail_key: Option<TranscriptLiveTailKey>,
     live_tail_spacing: Option<Rc<RefCell<TranscriptLiveTailSpacing>>>,
     live_tail_lines: Vec<Line<'static>>,
-    needs_terminal_repaint: bool,
+    terminal_repaint_frames_remaining: u8,
     last_width: Option<u16>,
     last_area: Option<Rect>,
     last_top_line: usize,
@@ -236,7 +237,7 @@ impl TranscriptView {
             live_tail_key: None,
             live_tail_spacing: None,
             live_tail_lines: Vec::new(),
-            needs_terminal_repaint: false,
+            terminal_repaint_frames_remaining: 0,
             last_width: None,
             last_area: None,
             last_top_line: 0,
@@ -256,10 +257,16 @@ impl TranscriptView {
         let follow_bottom = self.is_scrolled_to_bottom();
         let spacing_width = self.last_width.unwrap_or(u16::MAX).max(1);
         let inserted_cell_visible = self.mode.is_visible(cell.as_ref(), spacing_width);
+        let inserted_cell_has_repaint_risk = inserted_cell_visible
+            && self
+                .mode
+                .lines(cell.as_ref(), spacing_width)
+                .iter()
+                .any(line_has_physical_repaint_risk);
         let prior_visible_layout = self.prior_visible_committed_layout(u16::MAX);
         let tail_renderable = self.take_live_tail_renderable();
         if tail_renderable.is_some() {
-            self.request_terminal_repaint();
+            self.request_terminal_repaint_settle();
         }
         let cell_index = self.cells.len();
         let layout = Rc::new(RefCell::new(CellLayoutInfo::default()));
@@ -279,6 +286,9 @@ impl TranscriptView {
                 spacing.borrow_mut().prior_visible_layout = self.cell_layouts.last().map(Rc::clone);
             }
             self.renderables.push(tail);
+        }
+        if inserted_cell_has_repaint_risk {
+            self.request_terminal_repaint_settle();
         }
         if follow_bottom {
             self.stick_to_bottom = true;
@@ -316,7 +326,7 @@ impl TranscriptView {
         self.live_tail_spacing = None;
         self.live_tail_lines.clear();
         if repaint_key_changed {
-            self.request_terminal_repaint();
+            self.request_terminal_repaint_settle();
         }
 
         if let Some(key) = next_key
@@ -348,18 +358,32 @@ impl TranscriptView {
             .last_width
             .is_some_and(|last_width| last_width != width)
         {
-            self.request_terminal_repaint();
+            self.request_terminal_repaint_settle();
         }
     }
 
-    pub(crate) fn take_needs_terminal_repaint(&mut self) -> bool {
-        let needs_terminal_repaint = self.needs_terminal_repaint;
-        self.needs_terminal_repaint = false;
-        needs_terminal_repaint
+    pub(crate) fn request_terminal_repaint_once(&mut self) {
+        self.terminal_repaint_frames_remaining = self.terminal_repaint_frames_remaining.max(1);
     }
 
-    fn request_terminal_repaint(&mut self) {
-        self.needs_terminal_repaint = true;
+    pub(crate) fn request_terminal_repaint_settle(&mut self) {
+        self.request_terminal_repaint_once();
+        self.terminal_repaint_frames_remaining = self
+            .terminal_repaint_frames_remaining
+            .max(TRANSCRIPT_VIEWPORT_REPAIR_FRAMES);
+    }
+
+    pub(crate) fn take_terminal_repaint_request(&mut self) -> bool {
+        if self.terminal_repaint_frames_remaining == 0 {
+            return false;
+        }
+
+        self.terminal_repaint_frames_remaining -= 1;
+        true
+    }
+
+    pub(crate) fn has_pending_terminal_repaint(&self) -> bool {
+        self.terminal_repaint_frames_remaining > 0
     }
 
     pub(crate) fn desired_height(&self, width: u16) -> u16 {
@@ -1495,6 +1519,29 @@ impl TranscriptRenderMode {
     }
 }
 
+fn line_has_physical_repaint_risk(line: &Line<'_>) -> bool {
+    line.spans
+        .iter()
+        .any(|span| text_has_physical_repaint_risk(span.content.as_ref()))
+}
+
+fn text_has_physical_repaint_risk(text: &str) -> bool {
+    let mut char_count = 0;
+    for ch in text.chars() {
+        char_count += 1;
+        if !ch.is_ascii()
+            || ch == '\u{1b}'
+            || ch == '\u{9b}'
+            || ch == '\u{9d}'
+            || ch.width().unwrap_or(0) != 1
+        {
+            return true;
+        }
+    }
+
+    UnicodeWidthStr::width(text) != char_count
+}
+
 fn layout_wants_separator_after(layout: CellLayoutInfo) -> bool {
     layout.should_insert_separator_after || layout.force_separator_after
 }
@@ -1867,7 +1914,7 @@ mod tests {
     }
 
     #[test]
-    fn live_tail_content_change_requests_one_shot_terminal_repaint() {
+    fn live_tail_content_change_requests_bounded_terminal_repaint() {
         let mut view = TranscriptView::new(Vec::new(), TranscriptRenderMode::Display);
         let key =
             TranscriptLiveTailKey::new(TranscriptLiveTailSource::ActiveCell, 0, 1, false, None);
@@ -1876,14 +1923,16 @@ mod tests {
             TranscriptView::live_tail_from_lines(vec!["streaming tail".into()])
         });
 
-        assert!(view.take_needs_terminal_repaint());
-        assert!(!view.take_needs_terminal_repaint());
+        for _ in 0..TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
+            assert!(view.take_terminal_repaint_request());
+        }
+        assert!(!view.take_terminal_repaint_request());
 
         view.sync_live_tail(80, Some(key), |_| {
             panic!("unchanged live-tail key should reuse cached tail")
         });
 
-        assert!(!view.take_needs_terminal_repaint());
+        assert!(!view.take_terminal_repaint_request());
     }
 
     #[test]
@@ -1897,17 +1946,20 @@ mod tests {
         view.sync_live_tail(80, Some(first), |_| {
             TranscriptView::live_tail_from_lines(vec!["spinner frame 1".into()])
         });
-        assert!(view.take_needs_terminal_repaint());
+        for _ in 0..TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
+            assert!(view.take_terminal_repaint_request());
+        }
+        assert!(!view.take_terminal_repaint_request());
 
         view.sync_live_tail(80, Some(next), |_| {
             TranscriptView::live_tail_from_lines(vec!["spinner frame 2".into()])
         });
 
-        assert!(!view.take_needs_terminal_repaint());
+        assert!(!view.take_terminal_repaint_request());
     }
 
     #[test]
-    fn width_change_requests_one_shot_terminal_repaint_after_render() {
+    fn width_change_requests_bounded_terminal_repaint_after_render() {
         let mut view = TranscriptView::new(
             vec![Arc::new(TestCell(
                 "request。input slimming 不是直接改写整个 agent 状态",
@@ -1918,8 +1970,35 @@ mod tests {
         let _ = render_test_view(&mut view, 80, 4);
         view.prepare_terminal_repaint_for_width(64);
 
-        assert!(view.take_needs_terminal_repaint());
-        assert!(!view.take_needs_terminal_repaint());
+        for _ in 0..TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
+            assert!(view.take_terminal_repaint_request());
+        }
+        assert!(!view.take_terminal_repaint_request());
+    }
+
+    #[test]
+    fn transcript_terminal_repaint_budget_is_consumed_over_three_draws_for_risky_rows() {
+        let mut view = TranscriptView::new(Vec::new(), TranscriptRenderMode::Display);
+
+        view.insert_cell(Arc::new(TestCell("也就是说同一轮 follow-up 仍然发：")));
+
+        for _ in 0..TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
+            assert!(view.take_terminal_repaint_request());
+        }
+        assert!(!view.has_pending_terminal_repaint());
+        assert!(!view.take_terminal_repaint_request());
+    }
+
+    #[test]
+    fn ascii_only_transcript_cell_does_not_request_transcript_terminal_repaint() {
+        let mut view = TranscriptView::new(Vec::new(), TranscriptRenderMode::Display);
+
+        view.insert_cell(Arc::new(TestCell(
+            "plain ascii follow-up text stays incremental",
+        )));
+
+        assert!(!view.has_pending_terminal_repaint());
+        assert!(!view.take_terminal_repaint_request());
     }
 
     #[test]

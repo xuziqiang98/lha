@@ -93,6 +93,7 @@ use crate::product::tui_app::sidebar::SidebarWidget;
 use crate::product::tui_app::style::proposed_plan_style;
 use crate::product::tui_app::test_backend::VT100Backend;
 use crate::product::tui_app::transcript_selection::TranscriptSelectionPoint;
+use crate::product::tui_app::transcript_view::TRANSCRIPT_VIEWPORT_REPAIR_FRAMES;
 use crate::product::tui_app::transcript_view::TranscriptRenderMode;
 use crate::product::tui_app::transcript_view::TranscriptView;
 use crate::product::tui_app::tui::FrameRequester;
@@ -3277,6 +3278,20 @@ fn assert_small_screen_final_answer_order(rendered: &str, context: &str, needle:
     assert!(
         !rendered.contains("git diffcheck"),
         "{context} rendered known git diff corruption: {rendered:?}"
+    );
+}
+
+const FOLLOW_UP_CJK_ORDER_TEXT: &str = "也就是说同一轮 follow-up 仍然发：";
+const FOLLOW_UP_CJK_STALE_ORDER_TEXT: &str = "也就是说同一 follow轮-up 仍然发：";
+
+fn assert_follow_up_cjk_order(rendered: &str, context: &str) {
+    assert!(
+        rendered.contains(FOLLOW_UP_CJK_ORDER_TEXT),
+        "{context} missing correct follow-up text: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains(FOLLOW_UP_CJK_STALE_ORDER_TEXT),
+        "{context} rendered known follow-up stale order: {rendered:?}"
     );
 }
 
@@ -11420,7 +11435,7 @@ async fn live_tail_completion_repaints_cybergym_fuzzer_cjk_ascii_divergence() {
 }
 
 #[tokio::test]
-async fn transcript_terminal_repaint_signal_is_one_shot_for_unchanged_frame() {
+async fn transcript_terminal_repaint_signal_is_bounded_for_unchanged_frame() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     let width = 180;
     chat.last_rendered_width.set(Some(usize::from(width)));
@@ -11440,13 +11455,15 @@ async fn transcript_terminal_repaint_signal_is_one_shot_for_unchanged_frame() {
     });
     chat.on_commit_tick();
 
-    assert!(
-        chat.prepare_transcript_terminal_repaint(width),
-        "new live tail should request one terminal repaint"
-    );
+    for _ in 0..TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
+        assert!(
+            chat.prepare_transcript_terminal_repaint(width),
+            "new live tail should request bounded terminal repaint"
+        );
+    }
     assert!(
         !chat.prepare_transcript_terminal_repaint(width),
-        "unchanged live tail should not keep forcing terminal repaints"
+        "unchanged live tail should not keep forcing terminal repaints after budget"
     );
 }
 
@@ -11914,6 +11931,77 @@ async fn streamed_answer_viewport_repaint_repairs_cjk_vt100_screen_divergence() 
     assert!(
         !screen.contains("工具输出”细“大节"),
         "viewport repaint kept stale CJK corruption: {screen:?}"
+    );
+}
+
+#[tokio::test]
+async fn follow_up_main_transcript_viewport_repaint_repairs_vt100_order() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let width = 120;
+    let height = 24;
+    chat.last_rendered_width.set(Some(usize::from(width)));
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
+        VT100Backend::new(width, height),
+    )
+    .expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+    chat.insert_transcript_cell(Arc::new(AgentMessageCell::new_markdown(
+        FOLLOW_UP_CJK_ORDER_TEXT.to_string(),
+        true,
+    )));
+
+    let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    assert_follow_up_cjk_order(&screen, "follow-up initial main transcript screen");
+    let row = screen_row_containing(&screen, FOLLOW_UP_CJK_ORDER_TEXT);
+    corrupt_vt100_row(&mut terminal, row, FOLLOW_UP_CJK_STALE_ORDER_TEXT);
+    let corrupted_screen = terminal.backend().vt100().screen().contents();
+    assert!(
+        corrupted_screen.contains(FOLLOW_UP_CJK_STALE_ORDER_TEXT),
+        "test setup should corrupt follow-up VT100 row: {corrupted_screen:?}"
+    );
+
+    let repaired_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    assert_follow_up_cjk_order(
+        &repaired_screen,
+        "follow-up repaired main transcript screen",
+    );
+}
+
+#[tokio::test]
+async fn viewport_repaint_budget_exhaustion_keeps_unchanged_cjk_rows_incremental() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let width = 120;
+    let height = 24;
+    chat.last_rendered_width.set(Some(usize::from(width)));
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
+        VT100Backend::new(width, height),
+    )
+    .expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+    chat.insert_transcript_cell(Arc::new(AgentMessageCell::new_markdown(
+        FOLLOW_UP_CJK_ORDER_TEXT.to_string(),
+        true,
+    )));
+
+    let mut screen = String::new();
+    for _ in 0..TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
+        screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+        assert_follow_up_cjk_order(&screen, "follow-up budget frame");
+    }
+    let row = screen_row_containing(&screen, FOLLOW_UP_CJK_ORDER_TEXT);
+    corrupt_vt100_row(&mut terminal, row, FOLLOW_UP_CJK_STALE_ORDER_TEXT);
+    let corrupted_screen = terminal.backend().vt100().screen().contents();
+    assert!(
+        corrupted_screen.contains(FOLLOW_UP_CJK_STALE_ORDER_TEXT),
+        "test setup should corrupt exhausted follow-up VT100 row: {corrupted_screen:?}"
+    );
+
+    let unchanged_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    assert!(
+        unchanged_screen.contains(FOLLOW_UP_CJK_STALE_ORDER_TEXT),
+        "exhausted budget should not repair unchanged CJK row every frame: {unchanged_screen:?}"
     );
 }
 

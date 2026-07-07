@@ -7233,7 +7233,11 @@ impl ChatWidget {
         transcript.sync_live_tail(main_width, self.transcript_live_tail_key(), |tail_width| {
             self.transcript_live_tail_for_mode(tail_width, TranscriptRenderMode::Display)
         });
-        transcript.take_needs_terminal_repaint()
+        let needs_repaint = transcript.take_terminal_repaint_request();
+        if transcript.has_pending_terminal_repaint() {
+            self.frame_requester.schedule_frame();
+        }
+        needs_repaint
     }
 
     fn handle_transcript_scroll_key(&mut self, key_event: KeyEvent) -> bool {
