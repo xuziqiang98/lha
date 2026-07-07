@@ -11455,15 +11455,13 @@ async fn transcript_terminal_repaint_signal_is_bounded_for_unchanged_frame() {
     });
     chat.on_commit_tick();
 
-    for _ in 0..TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
-        assert!(
-            chat.prepare_transcript_terminal_repaint(width),
-            "new live tail should request bounded terminal repaint"
-        );
-    }
     assert!(
         !chat.prepare_transcript_terminal_repaint(width),
-        "unchanged live tail should not keep forcing terminal repaints after budget"
+        "new live tail should use normal diff repaint instead of terminal repair"
+    );
+    assert!(
+        !chat.prepare_transcript_terminal_repaint(width),
+        "unchanged live tail should not force terminal repaints"
     );
 }
 

@@ -100,7 +100,6 @@ impl TranscriptLiveTailKey {
         TranscriptLiveTailRepaintKey {
             source: self.source,
             width: self.width,
-            revision: self.revision,
             is_stream_continuation: self.is_stream_continuation,
         }
     }
@@ -110,7 +109,6 @@ impl TranscriptLiveTailKey {
 struct TranscriptLiveTailRepaintKey {
     source: TranscriptLiveTailSource,
     width: u16,
-    revision: u64,
     is_stream_continuation: bool,
 }
 
@@ -311,10 +309,12 @@ impl TranscriptView {
         compute_tail: impl FnOnce(u16) -> Option<TranscriptLiveTail>,
     ) {
         let next_key = live_tail_key.map(|key| key.with_width(width));
-        let repaint_key_changed = self
-            .live_tail_key
-            .map(TranscriptLiveTailKey::terminal_repaint_key)
-            != next_key.map(TranscriptLiveTailKey::terminal_repaint_key);
+        let repaint_key_changed =
+            self.live_tail_key
+                .zip(next_key)
+                .is_some_and(|(current, next)| {
+                    current.terminal_repaint_key() != next.terminal_repaint_key()
+                });
 
         if self.live_tail_key == next_key {
             return;
@@ -1914,25 +1914,62 @@ mod tests {
     }
 
     #[test]
-    fn live_tail_content_change_requests_bounded_terminal_repaint() {
+    fn live_tail_content_change_recomputes_without_terminal_repaint() {
         let mut view = TranscriptView::new(Vec::new(), TranscriptRenderMode::Display);
-        let key =
+        let first =
             TranscriptLiveTailKey::new(TranscriptLiveTailSource::ActiveCell, 0, 1, false, None);
+        let next =
+            TranscriptLiveTailKey::new(TranscriptLiveTailSource::ActiveCell, 0, 2, false, None);
+        let calls = std::cell::Cell::new(0usize);
 
-        view.sync_live_tail(80, Some(key), |_| {
+        view.sync_live_tail(80, Some(first), |_| {
+            calls.set(calls.get() + 1);
             TranscriptView::live_tail_from_lines(vec!["streaming tail".into()])
         });
-
-        for _ in 0..TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
-            assert!(view.take_terminal_repaint_request());
-        }
+        assert!(!view.has_pending_terminal_repaint());
         assert!(!view.take_terminal_repaint_request());
 
-        view.sync_live_tail(80, Some(key), |_| {
+        view.sync_live_tail(80, Some(next), |_| {
+            calls.set(calls.get() + 1);
+            TranscriptView::live_tail_from_lines(vec!["streaming tail updated".into()])
+        });
+
+        assert_eq!(calls.get(), 2);
+        assert!(!view.has_pending_terminal_repaint());
+        assert!(!view.take_terminal_repaint_request());
+
+        view.sync_live_tail(80, Some(next), |_| {
             panic!("unchanged live-tail key should reuse cached tail")
         });
 
         assert!(!view.take_terminal_repaint_request());
+    }
+
+    #[test]
+    fn repeated_live_tail_revision_changes_do_not_refresh_terminal_repaint_budget() {
+        let mut view = TranscriptView::new(Vec::new(), TranscriptRenderMode::Display);
+        let calls = std::cell::Cell::new(0usize);
+
+        for revision in 1..=5 {
+            let key = TranscriptLiveTailKey::new(
+                TranscriptLiveTailSource::ActiveCell,
+                0,
+                revision,
+                false,
+                None,
+            );
+            view.sync_live_tail(80, Some(key), |_| {
+                calls.set(calls.get() + 1);
+                TranscriptView::live_tail_from_lines(vec![Line::from(format!(
+                    "streaming tail {revision}"
+                ))])
+            });
+
+            assert!(!view.has_pending_terminal_repaint());
+            assert!(!view.take_terminal_repaint_request());
+        }
+
+        assert_eq!(calls.get(), 5);
     }
 
     #[test]
@@ -1946,15 +1983,14 @@ mod tests {
         view.sync_live_tail(80, Some(first), |_| {
             TranscriptView::live_tail_from_lines(vec!["spinner frame 1".into()])
         });
-        for _ in 0..TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
-            assert!(view.take_terminal_repaint_request());
-        }
+        assert!(!view.has_pending_terminal_repaint());
         assert!(!view.take_terminal_repaint_request());
 
         view.sync_live_tail(80, Some(next), |_| {
             TranscriptView::live_tail_from_lines(vec!["spinner frame 2".into()])
         });
 
+        assert!(!view.has_pending_terminal_repaint());
         assert!(!view.take_terminal_repaint_request());
     }
 

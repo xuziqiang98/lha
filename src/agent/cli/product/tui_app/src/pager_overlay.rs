@@ -591,7 +591,7 @@ impl TranscriptOverlay {
         self.render_hints(bottom, buf);
     }
 
-    fn prepare_terminal_repaint_for_width(
+    pub(crate) fn prepare_terminal_repaint_for_width(
         &mut self,
         area_width: u16,
         frame_requester: &tui::FrameRequester,
@@ -669,7 +669,8 @@ impl TranscriptOverlay {
             }
             TuiEvent::Draw => {
                 let frame_requester = tui.frame_requester();
-                if self.prepare_terminal_repaint_for_width(
+                if prepare_transcript_overlay_terminal_repaint(
+                    self,
                     tui.terminal.viewport_area.width,
                     &frame_requester,
                 ) {
@@ -686,6 +687,14 @@ impl TranscriptOverlay {
     pub(crate) fn is_done(&self) -> bool {
         self.is_done
     }
+}
+
+pub(crate) fn prepare_transcript_overlay_terminal_repaint(
+    overlay: &mut TranscriptOverlay,
+    terminal_width: u16,
+    frame_requester: &tui::FrameRequester,
+) -> bool {
+    overlay.prepare_terminal_repaint_for_width(terminal_width, frame_requester)
 }
 
 fn transcript_scroll_key(key_event: KeyEvent) -> Option<TranscriptScroll> {
@@ -839,6 +848,7 @@ mod tests {
     use super::*;
     use crate::product::agent::protocol::ExecCommandSource;
     use crate::product::agent::protocol::ReviewDecision;
+    use crate::product::tui_app::transcript_view::TRANSCRIPT_VIEWPORT_REPAIR_FRAMES;
     use crate::product::tui_app::transcript_view::TranscriptLiveTailSource;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
@@ -1268,6 +1278,39 @@ mod tests {
             &repaired_screen,
             "follow-up repaired transcript overlay screen",
         );
+    }
+
+    #[test]
+    fn transcript_overlay_repaint_helper_consumes_initial_budget_and_schedules_tail() {
+        let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
+            lines: vec![Line::from("plain transcript")],
+        })]);
+        let (frame_requester, mut frame_rx) = tui::FrameRequester::test_with_receiver();
+
+        for frame in 0..TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
+            assert!(
+                prepare_transcript_overlay_terminal_repaint(&mut overlay, 80, &frame_requester,),
+                "expected overlay repaint budget on frame {frame}"
+            );
+            if frame + 1 < TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
+                assert!(
+                    frame_rx.try_recv().is_ok(),
+                    "pending overlay repaint should schedule the next frame"
+                );
+            } else {
+                assert!(
+                    frame_rx.try_recv().is_err(),
+                    "exhausted overlay repaint budget should not schedule another frame"
+                );
+            }
+        }
+
+        assert!(!prepare_transcript_overlay_terminal_repaint(
+            &mut overlay,
+            80,
+            &frame_requester,
+        ));
+        assert!(frame_rx.try_recv().is_err());
     }
 
     #[test]

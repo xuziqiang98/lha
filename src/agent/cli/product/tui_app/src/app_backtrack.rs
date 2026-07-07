@@ -37,6 +37,7 @@ use crate::product::tui_app::app::App;
 use crate::product::tui_app::history_cell::SessionInfoCell;
 use crate::product::tui_app::history_cell::UserHistoryCell;
 use crate::product::tui_app::pager_overlay::Overlay;
+use crate::product::tui_app::pager_overlay::prepare_transcript_overlay_terminal_repaint;
 use crate::product::tui_app::tui;
 use crate::product::tui_app::tui::TuiEvent;
 use color_eyre::eyre::Result;
@@ -349,14 +350,18 @@ impl App {
             let live_tail_key = self.chat_widget.transcript_live_tail_key();
             let chat_widget = &self.chat_widget;
             let mut schedule_drag_frame = false;
+            let overlay_width = tui.terminal.size()?.width.max(1);
+            t.sync_live_tail(overlay_width, live_tail_key, |w| {
+                chat_widget.transcript_live_tail_for_mode(
+                    w,
+                    crate::product::tui_app::transcript_view::TranscriptRenderMode::Transcript,
+                )
+            });
+            let frame_requester = tui.frame_requester();
+            if prepare_transcript_overlay_terminal_repaint(t, overlay_width, &frame_requester) {
+                tui.terminal.invalidate_viewport();
+            }
             tui.draw(u16::MAX, |frame| {
-                let width = frame.area().width.max(1);
-                t.sync_live_tail(width, live_tail_key, |w| {
-                    chat_widget.transcript_live_tail_for_mode(
-                        w,
-                        crate::product::tui_app::transcript_view::TranscriptRenderMode::Transcript,
-                    )
-                });
                 if t.advance_drag_autoscroll(frame.area()) {
                     schedule_drag_frame = true;
                 }
