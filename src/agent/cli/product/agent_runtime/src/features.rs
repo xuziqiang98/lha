@@ -143,6 +143,8 @@ pub enum Feature {
     InputSlimmingLiveZone,
     /// Use input-slimming retrieval while compacting when raw compact prompts are too large.
     RetrievalAwareCompact,
+    /// Retain only ranked input-slimming markers after compacting slimmed history.
+    RankedMarkerCompact,
 }
 
 impl Feature {
@@ -562,6 +564,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::RankedMarkerCompact,
+        key: "ranked_marker_compact",
+        stage: Stage::Experimental {
+            name: "Ranked-marker compact",
+            menu_description: "Let auto compact summarize slimmed history and retain only top-ranked retrievable markers.",
+            announcement: "NEW: Ranked-marker compact can keep compacted histories smaller when Input Slimming is enabled.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::RemoteModels,
         key: "remote_models",
         stage: Stage::UnderDevelopment,
@@ -974,6 +986,38 @@ mod tests {
     }
 
     #[test]
+    fn ranked_marker_compact_feature_defaults_off() {
+        let stage = Feature::RankedMarkerCompact.stage();
+
+        assert_eq!(
+            Stage::Experimental {
+                name: "Ranked-marker compact",
+                menu_description: "Let auto compact summarize slimmed history and retain only top-ranked retrievable markers.",
+                announcement: "NEW: Ranked-marker compact can keep compacted histories smaller when Input Slimming is enabled.",
+            },
+            stage
+        );
+        assert!(!Feature::RankedMarkerCompact.default_enabled());
+        assert_eq!(
+            Some("Ranked-marker compact"),
+            stage.experimental_menu_name()
+        );
+        assert_eq!(
+            Some(
+                "Let auto compact summarize slimmed history and retain only top-ranked retrievable markers.",
+            ),
+            stage.experimental_menu_description()
+        );
+        assert_eq!(
+            Some(
+                "NEW: Ranked-marker compact can keep compacted histories smaller when Input Slimming is enabled.",
+            ),
+            stage.experimental_announcement()
+        );
+        assert!(!Features::with_defaults().enabled(Feature::RankedMarkerCompact));
+    }
+
+    #[test]
     fn features_table_accepts_input_slimming() {
         let cfg = ConfigToml {
             features: Some(FeaturesToml {
@@ -981,6 +1025,7 @@ mod tests {
                     ("input_slimming".to_string(), true),
                     ("input_slimming_live_zone".to_string(), true),
                     ("retrieval_aware_compact".to_string(), true),
+                    ("ranked_marker_compact".to_string(), true),
                 ]),
             }),
             ..Default::default()
@@ -992,6 +1037,7 @@ mod tests {
         assert!(features.enabled(Feature::InputSlimming));
         assert!(features.enabled(Feature::InputSlimmingLiveZone));
         assert!(features.enabled(Feature::RetrievalAwareCompact));
+        assert!(features.enabled(Feature::RankedMarkerCompact));
     }
 
     #[test]
@@ -1001,6 +1047,7 @@ mod tests {
         assert!(schema.contains("\"input_slimming\""));
         assert!(schema.contains("\"input_slimming_live_zone\""));
         assert!(schema.contains("\"retrieval_aware_compact\""));
+        assert!(schema.contains("\"ranked_marker_compact\""));
     }
 
     #[test]

@@ -240,6 +240,14 @@ fn input_slimming_hashes_from_text_for_test(text: &str) -> HashSet<String> {
     hashes
 }
 
+fn ranked_marker_section_hashes_for_test(text: &str) -> HashSet<String> {
+    let Some(section_start) = text.find("Ranked retrievable markers:") else {
+        return HashSet::new();
+    };
+    let section = &text[section_start..];
+    input_slimming_hashes_from_text_for_test(section)
+}
+
 fn input_slimming_sidecar_hashes_from_rollout(text: &str) -> HashSet<String> {
     text.lines()
         .filter_map(|line| serde_json::from_str::<RolloutLine>(line).ok())
@@ -4277,6 +4285,407 @@ async fn retrieval_aware_compact_uses_slimmed_compact_prompt_and_preserves_marke
     assert!(
         follow_up_hashes.is_subset(&sidecar_hashes),
         "persisted compact markers should all have input_slimming_stored_input sidecars"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ranked_marker_compact_uses_slimmed_prompt_without_retrieve_tool() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_model("test-gpt-5")
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.features.enable(Feature::InputSlimmingLiveZone);
+            config.features.enable(Feature::RankedMarkerCompact);
+            config.tool_output_token_limit = Some(200_000);
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(12_000);
+        });
+    let test = builder.build(&server).await.unwrap();
+
+    let prefix = "ranked-marker-slimmed-prompt";
+    let line_count = 5_000;
+    let file = test.cwd.path().join("ranked-marker-slimmed-prompt.txt");
+    fs::write(&file, read_file_fixture_contents(prefix, line_count)).unwrap();
+    let call_id = "ranked-marker-slimmed-prompt-output";
+    let args = json!({
+        "file_path": file.to_string_lossy(),
+        "offset": 1,
+        "limit": line_count,
+    })
+    .to_string();
+
+    let read_turn = sse(vec![
+        ev_function_call(call_id, "read_file", &args),
+        ev_completed_with_tokens("r1", 1_000),
+    ]);
+    let compact_turn = sse(vec![
+        ev_assistant_message("m1", "Ranked compact summary without retrieved evidence."),
+        ev_completed_with_tokens("r2", 10),
+    ]);
+    let post_compact_follow_up = sse(vec![
+        ev_assistant_message("m2", FINAL_REPLY),
+        ev_completed_with_tokens("r3", 10),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![read_turn, compact_turn, post_compact_follow_up],
+    )
+    .await;
+
+    test.submit_turn("read ranked marker slimmed prompt file")
+        .await
+        .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected ranked-marker compact before the tool follow-up"
+    );
+    let compact_body = requests[1].body_json();
+    let compact_body_text = compact_body.to_string();
+    assert!(
+        body_contains_text(&compact_body_text, SUMMARIZATION_PROMPT),
+        "ranked-marker compact should include the summarization prompt"
+    );
+    assert!(
+        compact_body_text.contains("<<lha-input:"),
+        "ranked-marker compact should use input-slimmed replacements"
+    );
+    assert!(
+        !compact_body_text.contains("lha_input_retrieve"),
+        "ranked-marker compact should not expose the retrieve tool"
+    );
+    assert!(
+        compact_body
+            .get("tools")
+            .and_then(serde_json::Value::as_array)
+            .is_none_or(Vec::is_empty),
+        "ranked-marker compact should send no tools"
+    );
+    assert!(
+        !compact_body_text.contains(&format!("L{line_count}: {prefix}-line-{line_count}")),
+        "ranked-marker compact should not send the full raw tool output"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ranked_marker_compact_appends_only_top_ranked_markers() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_model("test-gpt-5")
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.features.enable(Feature::InputSlimmingLiveZone);
+            config.features.enable(Feature::RankedMarkerCompact);
+            config.tool_output_token_limit = Some(300_000);
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(2_000);
+        });
+    let test = builder.build(&server).await.unwrap();
+
+    let line_count = 1_200;
+    let low_prefix = "ranked-low-marker";
+    let high_prefix = "ranked-high-error-failed-panic-test-result";
+    let mut calls = Vec::new();
+    let mut function_events = Vec::new();
+    for index in 0..13 {
+        let prefix = if index == 0 {
+            low_prefix.to_string()
+        } else if index == 12 {
+            high_prefix.to_string()
+        } else {
+            format!("ranked-ordinary-marker-{index}")
+        };
+        let file = test.cwd.path().join(format!("ranked-marker-{index}.txt"));
+        fs::write(&file, read_file_fixture_contents(&prefix, line_count)).unwrap();
+        let call_id = format!("ranked-marker-top-k-output-{index}");
+        let args = json!({
+            "file_path": file.to_string_lossy(),
+            "offset": 1,
+            "limit": line_count,
+        })
+        .to_string();
+        function_events.push(ev_function_call(&call_id, "read_file", &args));
+        calls.push((prefix, call_id));
+    }
+    function_events.push(ev_completed_with_tokens("r1", 1_000));
+
+    let tool_turn = sse(function_events);
+    let compact_turn = sse(vec![
+        ev_assistant_message("m1", "Ranked compact summary for top-k markers."),
+        ev_completed_with_tokens("r2", 10),
+    ]);
+    let post_compact_follow_up = sse(vec![
+        ev_assistant_message("m2", FINAL_REPLY),
+        ev_completed_with_tokens("r3", 10),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![tool_turn, compact_turn, post_compact_follow_up],
+    )
+    .await;
+
+    test.submit_turn("read many ranked marker files")
+        .await
+        .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected ranked-marker compact before the follow-up"
+    );
+    let compact_body = requests[1].body_json().to_string();
+    let high_hash = input_slimming_hash_for_test(&read_file_tool_output(high_prefix, line_count));
+    let low_hash = input_slimming_hash_for_test(&read_file_tool_output(low_prefix, line_count));
+    assert!(
+        compact_body.contains(&format!("<<lha-input:{high_hash}>>")),
+        "compact prompt should contain the high-signal marker"
+    );
+    assert!(
+        compact_body.contains(&format!("<<lha-input:{low_hash}>>")),
+        "compact prompt should contain the low-signal marker before ranking"
+    );
+
+    let follow_up_body = requests[2].body_json().to_string();
+    let ranked_hashes = ranked_marker_section_hashes_for_test(&follow_up_body);
+    assert!(
+        follow_up_body.contains("Ranked retrievable markers:"),
+        "post-compact follow-up should include ranked marker section"
+    );
+    assert!(
+        ranked_hashes.len() <= 12,
+        "ranked marker retention should keep at most 12 markers"
+    );
+    assert!(
+        ranked_hashes.contains(&high_hash),
+        "failure/test output should be retained"
+    );
+    assert!(
+        !ranked_hashes.contains(&low_hash),
+        "lowest-ranked marker should be omitted"
+    );
+    assert!(
+        calls
+            .iter()
+            .all(|(_, call_id)| !follow_up_body.contains(call_id)),
+        "ranked marker section should not preserve transient tool call ids"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ranked_marker_compact_retrieval_count_boosts_marker() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_model("test-gpt-5")
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.features.enable(Feature::InputSlimmingLiveZone);
+            config.features.enable(Feature::RankedMarkerCompact);
+            config.tool_output_token_limit = Some(300_000);
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(20_000);
+        });
+    let test = builder.build(&server).await.unwrap();
+
+    let retrieved_prefix = "ranked-retrieved-marker";
+    let line_count = 1_500;
+    let retrieved_file = test.cwd.path().join("ranked-retrieved-marker.txt");
+    fs::write(
+        &retrieved_file,
+        read_file_fixture_contents(retrieved_prefix, line_count),
+    )
+    .unwrap();
+    let retrieved_hash =
+        input_slimming_hash_for_test(&read_file_tool_output(retrieved_prefix, line_count));
+    let read_args = json!({
+        "file_path": retrieved_file.to_string_lossy(),
+        "offset": 1,
+        "limit": line_count,
+    })
+    .to_string();
+    let retrieve_args = json!({
+        "hash": retrieved_hash,
+        "query": format!("{retrieved_prefix}-line-{line_count}"),
+    })
+    .to_string();
+
+    let first_read_turn = sse(vec![
+        ev_function_call("ranked-retrieved-read", "read_file", &read_args),
+        ev_completed_with_tokens("r1", 1_000),
+    ]);
+    let first_follow_up = sse(vec![
+        ev_assistant_message("m1", "retrieved marker source recorded"),
+        ev_completed_with_tokens("r2", 1_000),
+    ]);
+    let retrieve_turn = sse(vec![
+        ev_function_call(
+            "ranked-retrieved-marker-retrieve",
+            "lha_input_retrieve",
+            &retrieve_args,
+        ),
+        ev_completed_with_tokens("r3", 10),
+    ]);
+    let retrieve_follow_up = sse(vec![
+        ev_assistant_message("m2", "retrieved marker inspected"),
+        ev_completed_with_tokens("r4", 10),
+    ]);
+
+    let mut later_events = Vec::new();
+    for index in 0..13 {
+        let prefix = format!("ranked-retrieval-boost-ordinary-{index}");
+        let file = test.cwd.path().join(format!("ranked-boost-{index}.txt"));
+        fs::write(&file, read_file_fixture_contents(&prefix, line_count)).unwrap();
+        let call_id = format!("ranked-retrieval-boost-output-{index}");
+        let args = json!({
+            "file_path": file.to_string_lossy(),
+            "offset": 1,
+            "limit": line_count,
+        })
+        .to_string();
+        later_events.push(ev_function_call(&call_id, "read_file", &args));
+    }
+    later_events.push(ev_completed_with_tokens("r5", 1_000));
+    let later_tool_turn = sse(later_events);
+    let compact_turn = sse(vec![
+        ev_assistant_message("m3", "Ranked compact summary after retrieval boost."),
+        ev_completed_with_tokens("r6", 10),
+    ]);
+    let post_compact_follow_up = sse(vec![
+        ev_assistant_message("m4", FINAL_REPLY),
+        ev_completed_with_tokens("r7", 10),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            first_read_turn,
+            first_follow_up,
+            retrieve_turn,
+            retrieve_follow_up,
+            later_tool_turn,
+            compact_turn,
+            post_compact_follow_up,
+        ],
+    )
+    .await;
+
+    test.submit_turn("read marker that will be retrieved")
+        .await
+        .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.submit_turn("retrieve the earlier marker")
+        .await
+        .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.submit_turn("read more marker candidates")
+        .await
+        .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        7,
+        "expected retrieval, ranked compact, and post-compact follow-up"
+    );
+    let follow_up_body = requests[6].body_json().to_string();
+    let ranked_hashes = ranked_marker_section_hashes_for_test(&follow_up_body);
+    assert!(
+        ranked_hashes.contains(&retrieved_hash),
+        "retrieved marker should be retained despite older occurrence"
+    );
+    assert!(
+        ranked_hashes.len() <= 12,
+        "retrieved marker retention should still respect top-k budget"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ranked_marker_compact_does_not_append_raw_original_text() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_model("test-gpt-5")
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.features.enable(Feature::InputSlimmingLiveZone);
+            config.features.enable(Feature::RankedMarkerCompact);
+            config.tool_output_token_limit = Some(200_000);
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(12_000);
+        });
+    let test = builder.build(&server).await.unwrap();
+
+    let prefix = "ranked-hidden-raw-original";
+    let line_count = 5_000;
+    let hidden_raw_line = format!("L2500: {prefix}-line-2500");
+    let file = test.cwd.path().join("ranked-hidden-raw-original.txt");
+    fs::write(&file, read_file_fixture_contents(prefix, line_count)).unwrap();
+    let args = json!({
+        "file_path": file.to_string_lossy(),
+        "offset": 1,
+        "limit": line_count,
+    })
+    .to_string();
+
+    let read_turn = sse(vec![
+        ev_function_call("ranked-hidden-raw-output", "read_file", &args),
+        ev_completed_with_tokens("r1", 1_000),
+    ]);
+    let compact_turn = sse(vec![
+        ev_assistant_message("m1", "Ranked compact summary without raw sentinel."),
+        ev_completed_with_tokens("r2", 10),
+    ]);
+    let post_compact_follow_up = sse(vec![
+        ev_assistant_message("m2", FINAL_REPLY),
+        ev_completed_with_tokens("r3", 10),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![read_turn, compact_turn, post_compact_follow_up],
+    )
+    .await;
+
+    test.submit_turn("read hidden raw ranked marker file")
+        .await
+        .unwrap();
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 3);
+    let follow_up_body = requests[2].body_json().to_string();
+    assert!(
+        follow_up_body.contains("Ranked retrievable markers:"),
+        "ranked compact should append retrievable marker references"
+    );
+    assert!(
+        follow_up_body.contains("<<lha-input:"),
+        "ranked compact should retain marker references"
+    );
+    assert!(
+        !follow_up_body.contains(&hidden_raw_line),
+        "ranked marker section should not append raw original text"
+    );
+    assert!(
+        !follow_up_body.contains("Original input for <<lha-input:"),
+        "ranked marker section should not include retrieval payloads"
     );
 }
 

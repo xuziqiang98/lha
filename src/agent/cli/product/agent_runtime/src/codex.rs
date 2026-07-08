@@ -14,8 +14,10 @@ use crate::product::agent::buddy_intro::BUDDY_COMPANION_DISABLED_INSTRUCTIONS;
 use crate::product::agent::buddy_intro::buddy_model_instructions;
 use crate::product::agent::compact;
 use crate::product::agent::compact::RetrievalAwareCompactEstimate;
+use crate::product::agent::compact::estimate_ranked_marker_auto_compact_tokens;
 use crate::product::agent::compact::estimate_retrieval_aware_auto_compact_tokens;
 use crate::product::agent::compact::run_inline_auto_compact_task;
+use crate::product::agent::compact::run_inline_ranked_marker_auto_compact_task;
 use crate::product::agent::compact::run_inline_retrieval_aware_auto_compact_task;
 use crate::product::agent::compact::should_use_remote_compact_task;
 use crate::product::agent::compact_remote::run_inline_remote_auto_compact_task;
@@ -5703,8 +5705,17 @@ pub(crate) async fn run_turn(
             decision = "turn_start_auto_compact_check",
         );
     }
-    let retrieval_aware_active = retrieval_aware_compact_active(sess.as_ref());
-    let raw_compaction_tokens = if retrieval_aware_active {
+    let marker_aware_activation = marker_aware_compact_activation(sess.as_ref());
+    if marker_aware_activation == MarkerAwareCompactActivation::Conflict {
+        sess.send_event(
+            &turn_context,
+            EventMsg::Warning(WarningEvent {
+                message: MARKER_COMPACT_CONFLICT_WARNING.to_string(),
+            }),
+        )
+        .await;
+    }
+    let raw_compaction_tokens = if marker_aware_activation.is_active() {
         None
     } else {
         estimate_raw_auto_compact_tokens(&sess, &turn_context).await
@@ -5724,11 +5735,12 @@ pub(crate) async fn run_turn(
             decision = "turn_start_raw_compaction_check",
         );
     }
-    if retrieval_aware_active {
+    if marker_aware_activation.is_active() {
         debug!(
             current_context_pressure = total_usage_tokens,
             raw_compaction_tokens,
-            decision = "turn_start_retrieval_aware_preflight_deferred",
+            marker_compact_strategy = marker_aware_activation.decision_prefix(),
+            decision = "turn_start_marker_aware_preflight_deferred",
         );
     } else if !should_defer_auto_compact
         && (total_usage_tokens >= compact_limit || raw_compaction_limit_reached)
@@ -5951,7 +5963,9 @@ pub(crate) async fn run_turn(
                     );
                 }
 
-                let compact_strategy = if needs_follow_up && retrieval_aware_compact_active(&sess) {
+                let compact_strategy = if needs_follow_up
+                    && marker_aware_compact_activation(&sess).is_active()
+                {
                     let next_input = sess.clone_history().await.for_prompt();
                     let measure_selection = SamplingRequestToolSelection {
                         explicit_app_paths: &explicit_app_paths,
@@ -5978,7 +5992,7 @@ pub(crate) async fn run_turn(
                                 raw_compaction_tokens,
                                 send_limit_reached,
                                 raw_compaction_limit_reached,
-                                decision = "post_response_retrieval_aware_compact_check",
+                                decision = "post_response_marker_aware_compact_check",
                             );
                             if send_limit_reached || raw_compaction_limit_reached {
                                 let strategy = select_auto_compact_strategy(
@@ -5997,7 +6011,7 @@ pub(crate) async fn run_turn(
                         }
                         Err(err) => {
                             warn!(
-                                "failed to measure retrieval-aware follow-up pressure; falling back to raw compact check: {err:?}"
+                                "failed to measure marker-aware follow-up pressure; falling back to raw compact check: {err:?}"
                             );
                             (token_limit_reached || raw_compaction_limit_reached)
                                 .then_some(AutoCompactStrategy::Raw)
@@ -6078,7 +6092,9 @@ pub(crate) async fn run_turn(
                     .await;
                     let strategy = match strategy {
                         AutoCompactStrategy::DeferRawPressureOnly => AutoCompactStrategy::Raw,
-                        AutoCompactStrategy::Raw | AutoCompactStrategy::RetrievalAware => strategy,
+                        AutoCompactStrategy::Raw
+                        | AutoCompactStrategy::RetrievalAware
+                        | AutoCompactStrategy::RankedMarker => strategy,
                     };
                     run_auto_compact_with_strategy(
                         &sess,
@@ -6164,6 +6180,8 @@ struct PreflightCompactPressure {
     raw_compaction_tokens: Option<i64>,
 }
 
+const MARKER_COMPACT_CONFLICT_WARNING: &str = "Marker compact strategies are mutually exclusive; enable only one of retrieval_aware_compact or ranked_marker_compact.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AutoCompactTrigger {
     TurnStart,
@@ -6187,6 +6205,7 @@ impl AutoCompactTrigger {
 enum AutoCompactStrategy {
     Raw,
     RetrievalAware,
+    RankedMarker,
     DeferRawPressureOnly,
 }
 
@@ -6195,7 +6214,47 @@ impl AutoCompactStrategy {
         match self {
             Self::Raw => "raw",
             Self::RetrievalAware => "retrieval_aware",
+            Self::RankedMarker => "ranked_marker",
             Self::DeferRawPressureOnly => "defer_raw_pressure_only",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MarkerAwareCompactActivation {
+    Disabled,
+    RetrievalAware,
+    RankedMarker,
+    Conflict,
+}
+
+impl MarkerAwareCompactActivation {
+    fn is_active(self) -> bool {
+        matches!(self, Self::RetrievalAware | Self::RankedMarker)
+    }
+
+    fn compact_strategy(self) -> Option<AutoCompactStrategy> {
+        match self {
+            Self::RetrievalAware => Some(AutoCompactStrategy::RetrievalAware),
+            Self::RankedMarker => Some(AutoCompactStrategy::RankedMarker),
+            Self::Disabled | Self::Conflict => None,
+        }
+    }
+
+    fn metric_prefix(self) -> Option<&'static str> {
+        match self {
+            Self::RetrievalAware => Some("lha.compact.retrieval_aware"),
+            Self::RankedMarker => Some("lha.compact.ranked_marker"),
+            Self::Disabled | Self::Conflict => None,
+        }
+    }
+
+    fn decision_prefix(self) -> &'static str {
+        match self {
+            Self::RetrievalAware => "retrieval_aware",
+            Self::RankedMarker => "ranked_marker",
+            Self::Disabled => "disabled",
+            Self::Conflict => "conflict",
         }
     }
 }
@@ -6331,22 +6390,42 @@ fn should_preflight_compact(
     decision
 }
 
-fn retrieval_aware_compact_active(sess: &Session) -> bool {
-    sess.enabled(Feature::RetrievalAwareCompact)
-        && input_slimming_activation_allows_retrieval_aware_compact(resolve_input_slimming_scope(
-            &sess.features(),
-        ))
+fn marker_aware_compact_activation(sess: &Session) -> MarkerAwareCompactActivation {
+    let features = sess.features();
+    let retrieval_aware_enabled = features.enabled(Feature::RetrievalAwareCompact);
+    let ranked_marker_enabled = features.enabled(Feature::RankedMarkerCompact);
+    if retrieval_aware_enabled && ranked_marker_enabled {
+        return MarkerAwareCompactActivation::Conflict;
+    }
+    if !input_slimming_activation_allows_marker_aware_compact(resolve_input_slimming_scope(
+        &features,
+    )) {
+        return MarkerAwareCompactActivation::Disabled;
+    }
+    if retrieval_aware_enabled {
+        MarkerAwareCompactActivation::RetrievalAware
+    } else if ranked_marker_enabled {
+        MarkerAwareCompactActivation::RankedMarker
+    } else {
+        MarkerAwareCompactActivation::Disabled
+    }
 }
 
-fn input_slimming_activation_allows_retrieval_aware_compact(
+fn input_slimming_activation_allows_marker_aware_compact(
     activation: InputSlimmingActivation,
 ) -> bool {
     matches!(activation, InputSlimmingActivation::Scope(_))
 }
 
-fn record_retrieval_aware_counter(
+fn input_slimming_activation_allows_retrieval_aware_compact(
+    activation: InputSlimmingActivation,
+) -> bool {
+    input_slimming_activation_allows_marker_aware_compact(activation)
+}
+
+fn record_marker_compact_counter(
     turn_context: &TurnContext,
-    name: &'static str,
+    name: &str,
     trigger: AutoCompactTrigger,
     extra: &[(&'static str, &'static str)],
 ) {
@@ -6370,9 +6449,10 @@ async fn select_auto_compact_strategy(
 ) -> AutoCompactStrategy {
     let send_limit_reached = send_pressure_reaches_auto_compact_limit(turn_context, send_pressure);
     let raw_limit_reached = raw_compaction_pressure_compacts(turn_context, raw_compaction_tokens);
-    if !retrieval_aware_compact_active(sess) {
+    let activation = marker_aware_compact_activation(sess);
+    let Some(marker_strategy) = activation.compact_strategy() else {
         return AutoCompactStrategy::Raw;
-    }
+    };
 
     if !send_limit_reached && raw_limit_reached {
         debug!(
@@ -6380,14 +6460,17 @@ async fn select_auto_compact_strategy(
             raw_compact_pressure = raw_compaction_tokens,
             auto_compact_trigger = trigger.as_str(),
             auto_compact_strategy = AutoCompactStrategy::DeferRawPressureOnly.as_str(),
-            decision = "retrieval_aware_defer_raw_compaction_pressure",
+            marker_compact_strategy = activation.decision_prefix(),
+            decision = "marker_aware_defer_raw_compaction_pressure",
         );
-        record_retrieval_aware_counter(
-            turn_context,
-            "lha.compact.retrieval_aware.deferred_raw_pressure",
-            trigger,
-            &[],
-        );
+        if let Some(prefix) = activation.metric_prefix() {
+            record_marker_compact_counter(
+                turn_context,
+                &format!("{prefix}.deferred_raw_pressure"),
+                trigger,
+                &[],
+            );
+        }
         return AutoCompactStrategy::DeferRawPressureOnly;
     }
 
@@ -6395,45 +6478,58 @@ async fn select_auto_compact_strategy(
         return AutoCompactStrategy::Raw;
     }
 
-    let estimate = estimate_retrieval_aware_auto_compact_tokens(sess, turn_context).await;
-    let retrieval_compaction_tokens = estimate.input_tokens;
-    let retrieval_fits = estimate.contains_marker
-        && retrieval_compaction_tokens
+    let estimate = match activation {
+        MarkerAwareCompactActivation::RetrievalAware => {
+            estimate_retrieval_aware_auto_compact_tokens(sess, turn_context).await
+        }
+        MarkerAwareCompactActivation::RankedMarker => {
+            estimate_ranked_marker_auto_compact_tokens(sess, turn_context).await
+        }
+        MarkerAwareCompactActivation::Disabled | MarkerAwareCompactActivation::Conflict => {
+            return AutoCompactStrategy::Raw;
+        }
+    };
+    let marker_compaction_tokens = estimate.input_tokens;
+    let marker_prompt_fits = estimate.contains_marker
+        && marker_compaction_tokens
             .is_some_and(|tokens| !raw_compaction_pressure_compacts(turn_context, Some(tokens)));
     debug!(
         send_pressure,
         raw_compact_pressure = raw_compaction_tokens,
-        retrieval_compact_pressure = retrieval_compaction_tokens,
-        retrieval_contains_marker = estimate.contains_marker,
-        retrieval_slimmed_count = estimate.slimmed_count,
+        marker_compact_pressure = marker_compaction_tokens,
+        marker_contains_marker = estimate.contains_marker,
+        marker_slimmed_count = estimate.slimmed_count,
         auto_compact_trigger = trigger.as_str(),
-        auto_compact_strategy = if retrieval_fits {
-            AutoCompactStrategy::RetrievalAware.as_str()
+        marker_compact_strategy = activation.decision_prefix(),
+        auto_compact_strategy = if marker_prompt_fits {
+            marker_strategy.as_str()
         } else {
             AutoCompactStrategy::Raw.as_str()
         },
-        decision = if retrieval_fits {
-            "retrieval_aware_compact"
+        decision = if marker_prompt_fits {
+            "marker_aware_compact"
         } else {
-            "retrieval_aware_fallback_raw"
+            "marker_aware_fallback_raw"
         },
     );
 
-    if retrieval_fits {
-        AutoCompactStrategy::RetrievalAware
+    if marker_prompt_fits {
+        marker_strategy
     } else {
-        let reason = retrieval_aware_fallback_reason(estimate);
-        record_retrieval_aware_counter(
-            turn_context,
-            "lha.compact.retrieval_aware.fallback_raw",
-            trigger,
-            &[("reason", reason)],
-        );
+        let reason = marker_aware_fallback_reason(estimate);
+        if let Some(prefix) = activation.metric_prefix() {
+            record_marker_compact_counter(
+                turn_context,
+                &format!("{prefix}.fallback_raw"),
+                trigger,
+                &[("reason", reason)],
+            );
+        }
         AutoCompactStrategy::Raw
     }
 }
 
-fn retrieval_aware_fallback_reason(estimate: RetrievalAwareCompactEstimate) -> &'static str {
+fn marker_aware_fallback_reason(estimate: RetrievalAwareCompactEstimate) -> &'static str {
     if !estimate.contains_marker {
         "no_markers_or_candidates"
     } else if estimate.input_tokens.is_none() {
@@ -6448,7 +6544,7 @@ async fn preflight_auto_compact_strategy(
     turn_context: &TurnContext,
     pressure: PreflightCompactPressure,
 ) -> Option<AutoCompactStrategy> {
-    if !retrieval_aware_compact_active(sess) {
+    if !marker_aware_compact_activation(sess).is_active() {
         return should_preflight_compact(turn_context, pressure)
             .then_some(AutoCompactStrategy::Raw);
     }
@@ -6518,31 +6614,54 @@ async fn run_auto_compact_with_strategy(
         auto_compact_strategy = strategy.as_str(),
         decision = "run_auto_compact",
     );
-    if strategy == AutoCompactStrategy::RetrievalAware {
+    let marker_activation = match strategy {
+        AutoCompactStrategy::RetrievalAware => Some(MarkerAwareCompactActivation::RetrievalAware),
+        AutoCompactStrategy::RankedMarker => Some(MarkerAwareCompactActivation::RankedMarker),
+        AutoCompactStrategy::Raw | AutoCompactStrategy::DeferRawPressureOnly => None,
+    };
+    if let Some(activation) = marker_activation {
         let runtime_capabilities = turn_context.runtime.runtime_capabilities();
         let remote_compaction_bypassed =
             should_use_remote_compact_task(sess.as_ref(), &runtime_capabilities);
-        record_retrieval_aware_counter(
-            turn_context.as_ref(),
-            "lha.compact.retrieval_aware.used",
-            trigger,
-            &[(
-                "remote_compaction_bypassed",
-                if remote_compaction_bypassed {
-                    "true"
-                } else {
-                    "false"
-                },
-            )],
-        );
+        if let Some(prefix) = activation.metric_prefix() {
+            record_marker_compact_counter(
+                turn_context.as_ref(),
+                &format!("{prefix}.used"),
+                trigger,
+                &[(
+                    "remote_compaction_bypassed",
+                    if remote_compaction_bypassed {
+                        "true"
+                    } else {
+                        "false"
+                    },
+                )],
+            );
+        }
         if remote_compaction_bypassed {
             debug!(
                 trigger = trigger.as_str(),
-                decision = "retrieval_aware_bypass_remote_compaction",
+                marker_compact_strategy = activation.decision_prefix(),
+                decision = "marker_aware_bypass_remote_compaction",
             );
         }
-        run_inline_retrieval_aware_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context))
-            .await;
+        match strategy {
+            AutoCompactStrategy::RetrievalAware => {
+                run_inline_retrieval_aware_auto_compact_task(
+                    Arc::clone(sess),
+                    Arc::clone(turn_context),
+                )
+                .await;
+            }
+            AutoCompactStrategy::RankedMarker => {
+                run_inline_ranked_marker_auto_compact_task(
+                    Arc::clone(sess),
+                    Arc::clone(turn_context),
+                )
+                .await;
+            }
+            AutoCompactStrategy::Raw | AutoCompactStrategy::DeferRawPressureOnly => {}
+        }
         return;
     }
 
@@ -8272,6 +8391,46 @@ mod tests {
         assert!(!input_slimming_activation_allows_retrieval_aware_compact(
             InputSlimmingActivation::Conflict,
         ));
+    }
+
+    #[tokio::test]
+    async fn marker_compact_config_conflict_uses_raw_strategy() {
+        let (mut session, turn_context) = make_session_and_context().await;
+        session.features.enable(Feature::InputSlimming);
+        session.features.enable(Feature::RetrievalAwareCompact);
+        session.features.enable(Feature::RankedMarkerCompact);
+        let compact_limit = auto_compact_limit(&turn_context);
+
+        let strategy = preflight_auto_compact_strategy(
+            &session,
+            &turn_context,
+            PreflightCompactPressure {
+                request_input_tokens: Some(compact_limit),
+                raw_compaction_tokens: Some(compact_limit),
+            },
+        )
+        .await;
+
+        assert_eq!(strategy, Some(AutoCompactStrategy::Raw));
+    }
+
+    #[tokio::test]
+    async fn ranked_marker_compact_falls_back_raw_when_prompt_has_no_markers() {
+        let (mut session, turn_context) = make_session_and_context().await;
+        session.features.enable(Feature::InputSlimmingLiveZone);
+        session.features.enable(Feature::RankedMarkerCompact);
+        let compact_limit = auto_compact_limit(&turn_context);
+
+        let strategy = select_auto_compact_strategy(
+            &session,
+            &turn_context,
+            AutoCompactTrigger::Preflight,
+            Some(compact_limit),
+            Some(compact_limit),
+        )
+        .await;
+
+        assert_eq!(strategy, AutoCompactStrategy::Raw);
     }
 
     #[test]

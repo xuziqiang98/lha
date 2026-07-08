@@ -227,6 +227,33 @@ impl InputSlimmingStore {
             .collect()
     }
 
+    pub(crate) async fn rankable_entries_for(
+        &self,
+        hashes: &HashSet<String>,
+    ) -> Vec<(String, StoredInput)> {
+        let mut guard = self.inner.lock().await;
+        let ttl = guard.ttl;
+        let mut entries = Vec::new();
+        let mut expired = Vec::new();
+
+        for hash in hashes {
+            let Some(entry) = guard.entries.get(hash).cloned() else {
+                continue;
+            };
+            if entry.created_at.elapsed() >= ttl {
+                expired.push(hash.clone());
+                continue;
+            }
+            entries.push((hash.clone(), entry));
+        }
+
+        for hash in expired {
+            guard.entries.pop(&hash);
+        }
+
+        entries
+    }
+
     pub(crate) async fn retrieve(&self, hash: &str, query: Option<&str>) -> RetrieveResult {
         let Some(entry) = self.get_for_retrieval(hash).await else {
             return RetrieveResult {

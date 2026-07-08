@@ -39,6 +39,7 @@ pub(crate) use store::InputSlimmingStoreError;
 pub(crate) use store::RetrieveResult;
 use store::SlimmedReplacement;
 use store::SlimmedReplacementCacheKey;
+pub(crate) use store::StoredInput;
 pub(crate) use store::StoredInputMetadata;
 use store::hash_text;
 pub(crate) use tool::INPUT_RETRIEVE_TOOL_NAME;

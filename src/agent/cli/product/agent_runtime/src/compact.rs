@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
@@ -14,8 +15,10 @@ use crate::product::agent::input_slimming::INPUT_SLIMMING_MARKER_PREFIX;
 use crate::product::agent::input_slimming::InputSlimmer;
 use crate::product::agent::input_slimming::InputSlimmingContext;
 use crate::product::agent::input_slimming::InputSlimmingMode;
+use crate::product::agent::input_slimming::InputSlimmingStrategy;
 use crate::product::agent::input_slimming::InputSlimmingWireApi;
 use crate::product::agent::input_slimming::RetrieveResult;
+use crate::product::agent::input_slimming::StoredInput;
 use crate::product::agent::input_slimming::create_lha_input_retrieve_tool;
 use crate::product::agent::input_slimming::record_input_slimming_retrieve_metrics;
 use crate::product::agent::input_slimming::retrieve_input_slimming_for_tool;
@@ -74,6 +77,8 @@ const LEGACY_ACTIVE_GOAL_PLAN_REMINDER_PREFIX: &str =
     "The active programmer goal references a proposed plan stored at:";
 const RETRIEVAL_AWARE_COMPACT_RETRIEVE_LIMIT: usize = 8;
 const RETRIEVAL_AWARE_COMPACT_TURN_LIMIT: usize = 12;
+const RANKED_MARKER_COMPACT_MAX_MARKERS: usize = 12;
+const RANKED_MARKER_COMPACT_MARKER_SECTION_MAX_TOKENS: usize = 900;
 const RETRIEVAL_AWARE_COMPACT_ADDENDUM: &str = r#"Retrieval-aware compact addendum:
 
 You are compacting an input-slimmed transcript. Markers like <<lha-input:hash>> refer to original tool outputs available through the lha_input_retrieve(hash, query?) tool.
@@ -86,6 +91,9 @@ If you do not retrieve a marker, preserve the marker in the final summary and ex
 - Evidence retrieved
 - Unresolved retrievable markers
 - Next steps"#;
+const RANKED_MARKER_COMPACT_ADDENDUM: &str = r#"Ranked-marker compact addendum:
+
+You are compacting an input-slimmed transcript. Markers like <<lha-input:hash>> refer to original tool outputs that may be retained separately after compaction. Do not invent details hidden behind markers. Summarize the visible compressed snippets and surrounding task context. Retrieval is not available in this compact mode."#;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RetrievalAwareCompactEstimate {
@@ -98,6 +106,7 @@ pub(crate) struct RetrievalAwareCompactEstimate {
 enum CompactInputMode {
     Raw,
     RetrievalAwareSlimmed,
+    RankedMarkerSlimmed,
 }
 
 impl CompactInputMode {
@@ -105,6 +114,7 @@ impl CompactInputMode {
         match self {
             Self::Raw => "raw",
             Self::RetrievalAwareSlimmed => "retrieval_aware",
+            Self::RankedMarkerSlimmed => "ranked_marker",
         }
     }
 }
@@ -113,6 +123,7 @@ struct RetrievalAwareCompactPrompt {
     request: TurnRequest,
     marker_hashes: HashSet<String>,
     durable_marker_hashes: HashSet<String>,
+    marker_occurrences: Vec<InputSlimmingMarkerOccurrence>,
     slimmed_count: usize,
 }
 
@@ -124,6 +135,28 @@ struct RetrievalAwareCompactOutput {
 struct RetrievalAwareToolCallResult {
     item: ToolResultItem,
     marker_resolved: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InputSlimmingMarkerOccurrence {
+    hash: String,
+    item_index: usize,
+}
+
+#[derive(Debug, Clone)]
+struct RankedMarkerCandidate {
+    hash: String,
+    score: f64,
+    original_tokens: usize,
+    compressed_tokens: usize,
+    retrieval_count: u64,
+    latest_occurrence_index: usize,
+    occurrence_count: usize,
+    tool_name: String,
+    strategy: InputSlimmingStrategy,
+    entropy: f64,
+    text_quality: f64,
+    reason: Vec<&'static str>,
 }
 
 pub(crate) struct GuardedRetrievalSummary {
@@ -170,9 +203,8 @@ pub(crate) async fn run_inline_retrieval_aware_auto_compact_task(
     turn_context: Arc<TurnContext>,
 ) {
     let prompt = format!(
-        "{}\n\n{}",
-        turn_context.compact_prompt(),
-        RETRIEVAL_AWARE_COMPACT_ADDENDUM
+        "{}\n\n{RETRIEVAL_AWARE_COMPACT_ADDENDUM}",
+        turn_context.compact_prompt()
     );
     let input = vec![UserInput::Text {
         text: prompt,
@@ -185,6 +217,29 @@ pub(crate) async fn run_inline_retrieval_aware_auto_compact_task(
         turn_context,
         input,
         CompactInputMode::RetrievalAwareSlimmed,
+    )
+    .await;
+}
+
+pub(crate) async fn run_inline_ranked_marker_auto_compact_task(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+) {
+    let prompt = format!(
+        "{}\n\n{RANKED_MARKER_COMPACT_ADDENDUM}",
+        turn_context.compact_prompt()
+    );
+    let input = vec![UserInput::Text {
+        text: prompt,
+        // Compaction prompt is synthesized; no UI element ranges to preserve.
+        text_elements: Vec::new(),
+    }];
+
+    run_compact_task_inner(
+        sess,
+        turn_context,
+        input,
+        CompactInputMode::RankedMarkerSlimmed,
     )
     .await;
 }
@@ -249,6 +304,7 @@ async fn run_compact_task_inner(
     let mut retrieval_summary_suffix: Option<String> = None;
     let mut retrieval_marker_hashes = HashSet::new();
     let mut retrieval_durable_marker_hashes = HashSet::new();
+    let mut ranked_marker_occurrences = Vec::new();
     let mut retrieval_retrieved_hashes = HashSet::new();
     loop {
         // Clone is required because of the loop
@@ -278,6 +334,7 @@ async fn run_compact_task_inner(
                     turn_context.as_ref(),
                     &raw_prompt,
                     InputSlimmingMode::Apply,
+                    true,
                 )
                 .await
                 {
@@ -285,6 +342,7 @@ async fn run_compact_task_inner(
                         retrieval_marker_hashes = retrieval_prompt.marker_hashes.clone();
                         retrieval_durable_marker_hashes =
                             retrieval_prompt.durable_marker_hashes.clone();
+                        ranked_marker_occurrences = retrieval_prompt.marker_occurrences.clone();
                         drain_retrieval_aware_compact_to_summary(
                             Arc::clone(&sess),
                             Arc::clone(&turn_context),
@@ -292,6 +350,34 @@ async fn run_compact_task_inner(
                         )
                         .await
                         .map(Some)
+                    }
+                    Err(err) => Err(err),
+                }
+            }
+            CompactInputMode::RankedMarkerSlimmed => {
+                let raw_prompt = TurnRequest {
+                    conversation: turn_input.into_iter().collect(),
+                    base_instructions: sess.get_base_instructions().await,
+                    personality: turn_context.personality,
+                    ..Default::default()
+                };
+                match build_retrieval_aware_compact_prompt(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    &raw_prompt,
+                    InputSlimmingMode::Apply,
+                    false,
+                )
+                .await
+                {
+                    Ok(ranked_prompt) => {
+                        retrieval_marker_hashes = ranked_prompt.marker_hashes.clone();
+                        retrieval_durable_marker_hashes =
+                            ranked_prompt.durable_marker_hashes.clone();
+                        ranked_marker_occurrences = ranked_prompt.marker_occurrences.clone();
+                        drain_to_completed(&sess, turn_context.as_ref(), &ranked_prompt.request)
+                            .await
+                            .map(|()| None)
                     }
                     Err(err) => Err(err),
                 }
@@ -342,6 +428,9 @@ async fn run_compact_task_inner(
     }
 
     let compact_source_marker_hashes = transcript_items_input_slimming_hashes(history.raw_items());
+    ranked_marker_occurrences.extend(transcript_items_input_slimming_marker_occurrences(
+        history.raw_items(),
+    ));
     let mut durable_marker_hashes = sess
         .services
         .input_slimming_store
@@ -350,21 +439,30 @@ async fn run_compact_task_inner(
     durable_marker_hashes.extend(retrieval_durable_marker_hashes);
     let mut marker_hashes = compact_source_marker_hashes;
     marker_hashes.extend(retrieval_marker_hashes);
-    let retrieved_hashes = if mode == CompactInputMode::RetrievalAwareSlimmed {
-        retrieval_retrieved_hashes
-    } else {
-        HashSet::new()
+    let retrieved_hashes = match mode {
+        CompactInputMode::RetrievalAwareSlimmed => retrieval_retrieved_hashes,
+        CompactInputMode::Raw | CompactInputMode::RankedMarkerSlimmed => HashSet::new(),
     };
 
     let history_snapshot = sess.clone_history().await;
     let history_items = history_snapshot.raw_items();
     let mut summary_suffix = retrieval_summary_suffix
         .unwrap_or_else(|| get_last_assistant_message_from_turn(history_items).unwrap_or_default());
-    let guarded_summary = guard_input_slimming_markers_in_summary(
-        summary_suffix,
-        &durable_marker_hashes,
-        &retrieved_hashes,
-    );
+    let guarded_summary = if mode == CompactInputMode::RankedMarkerSlimmed {
+        append_ranked_input_slimming_markers_to_summary(
+            sess.as_ref(),
+            summary_suffix,
+            &durable_marker_hashes,
+            &ranked_marker_occurrences,
+        )
+        .await
+    } else {
+        guard_input_slimming_markers_in_summary(
+            summary_suffix,
+            &durable_marker_hashes,
+            &retrieved_hashes,
+        )
+    };
     summary_suffix = guarded_summary.summary;
     debug!(
         retrieved_marker_count = retrieved_hashes.len(),
@@ -453,13 +551,40 @@ pub(crate) async fn estimate_retrieval_aware_auto_compact_tokens(
     sess: &Session,
     turn_context: &TurnContext,
 ) -> RetrievalAwareCompactEstimate {
+    estimate_slimmed_auto_compact_tokens(
+        sess,
+        turn_context,
+        RETRIEVAL_AWARE_COMPACT_ADDENDUM,
+        true,
+        "retrieval-aware",
+    )
+    .await
+}
+
+pub(crate) async fn estimate_ranked_marker_auto_compact_tokens(
+    sess: &Session,
+    turn_context: &TurnContext,
+) -> RetrievalAwareCompactEstimate {
+    estimate_slimmed_auto_compact_tokens(
+        sess,
+        turn_context,
+        RANKED_MARKER_COMPACT_ADDENDUM,
+        false,
+        "ranked-marker",
+    )
+    .await
+}
+
+async fn estimate_slimmed_auto_compact_tokens(
+    sess: &Session,
+    turn_context: &TurnContext,
+    addendum: &str,
+    expose_retrieve_tool: bool,
+    strategy_label: &str,
+) -> RetrievalAwareCompactEstimate {
     let mut history = sess.clone_history().await;
     let compact_input = transcript_item_from_user_input(vec![UserInput::Text {
-        text: format!(
-            "{}\n\n{}",
-            turn_context.compact_prompt(),
-            RETRIEVAL_AWARE_COMPACT_ADDENDUM
-        ),
+        text: format!("{}\n\n{addendum}", turn_context.compact_prompt()),
         text_elements: Vec::new(),
     }]);
     history.record_items([&compact_input], turn_context.truncation_policy);
@@ -475,6 +600,7 @@ pub(crate) async fn estimate_retrieval_aware_auto_compact_tokens(
         turn_context,
         &prompt,
         InputSlimmingMode::ApplyPreview,
+        expose_retrieve_tool,
     )
     .await
     {
@@ -486,7 +612,7 @@ pub(crate) async fn estimate_retrieval_aware_auto_compact_tokens(
             contains_marker: !prompt.marker_hashes.is_empty(),
         },
         Err(err) => {
-            warn!("failed to estimate retrieval-aware compact prompt: {err}");
+            warn!("failed to estimate {strategy_label} compact prompt: {err}");
             RetrievalAwareCompactEstimate {
                 input_tokens: None,
                 slimmed_count: 0,
@@ -501,6 +627,7 @@ async fn build_retrieval_aware_compact_prompt(
     turn_context: &TurnContext,
     raw_prompt: &TurnRequest,
     mode: InputSlimmingMode,
+    expose_retrieve_tool: bool,
 ) -> CodexResult<RetrievalAwareCompactPrompt> {
     let estimate_request_tokens = |request: &TurnRequest| {
         turn_context
@@ -551,7 +678,8 @@ async fn build_retrieval_aware_compact_prompt(
 
     let mut request = outcome.request;
     let mut marker_hashes = turn_request_input_slimming_hashes(&request);
-    if !marker_hashes.is_empty() {
+    let marker_occurrences = turn_request_input_slimming_marker_occurrences(&request);
+    if expose_retrieve_tool && !marker_hashes.is_empty() {
         request.tools = vec![create_lha_input_retrieve_tool()];
         request.parallel_tool_calls = false;
     } else {
@@ -569,6 +697,7 @@ async fn build_retrieval_aware_compact_prompt(
         request,
         marker_hashes,
         durable_marker_hashes,
+        marker_occurrences,
         slimmed_count: outcome.metrics.slimmed,
     })
 }
@@ -833,10 +962,42 @@ fn turn_request_input_slimming_hashes(request: &TurnRequest) -> HashSet<String> 
         .unwrap_or_default()
 }
 
+fn turn_request_input_slimming_marker_occurrences(
+    request: &TurnRequest,
+) -> Vec<InputSlimmingMarkerOccurrence> {
+    marker_occurrences_from_items(request.conversation.iter())
+}
+
 fn transcript_items_input_slimming_hashes(items: &[TranscriptItem]) -> HashSet<String> {
     serde_json::to_string(items)
         .map(|text| input_slimming_hashes_from_text(&text))
         .unwrap_or_default()
+}
+
+fn transcript_items_input_slimming_marker_occurrences(
+    items: &[TranscriptItem],
+) -> Vec<InputSlimmingMarkerOccurrence> {
+    marker_occurrences_from_items(items.iter())
+}
+
+fn marker_occurrences_from_items<'a, I, T>(items: I) -> Vec<InputSlimmingMarkerOccurrence>
+where
+    I: IntoIterator<Item = &'a T>,
+    T: serde::Serialize + 'a,
+{
+    let mut occurrences = Vec::new();
+    for (item_index, item) in items.into_iter().enumerate() {
+        let mut hashes = serde_json::to_string(item)
+            .map(|text| input_slimming_hashes_from_text(&text))
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<Vec<_>>();
+        hashes.sort();
+        for hash in hashes {
+            occurrences.push(InputSlimmingMarkerOccurrence { hash, item_index });
+        }
+    }
+    occurrences
 }
 
 fn input_slimming_hashes_from_text(text: &str) -> HashSet<String> {
@@ -1032,6 +1193,364 @@ fn guard_input_slimming_markers_in_summary(
         durable_unresolved_count,
         non_durable_marker_count,
     }
+}
+
+async fn append_ranked_input_slimming_markers_to_summary(
+    sess: &Session,
+    mut summary: String,
+    durable_marker_hashes: &HashSet<String>,
+    marker_occurrences: &[InputSlimmingMarkerOccurrence],
+) -> GuardedRetrievalSummary {
+    let non_durable_marker_count =
+        neutralize_non_durable_input_slimming_markers_in_text(&mut summary, durable_marker_hashes);
+
+    if durable_marker_hashes.is_empty() {
+        return GuardedRetrievalSummary {
+            summary,
+            durable_unresolved_count: 0,
+            non_durable_marker_count,
+        };
+    }
+
+    let mut entries = sess
+        .services
+        .input_slimming_store
+        .rankable_entries_for(durable_marker_hashes)
+        .await;
+    let available_hashes = entries
+        .iter()
+        .map(|(hash, _)| hash.clone())
+        .collect::<HashSet<_>>();
+    let missing_hashes = durable_marker_hashes
+        .difference(&available_hashes)
+        .cloned()
+        .collect::<Vec<_>>();
+    for hash in missing_hashes {
+        sess.rehydrate_input_slimming_hash_from_rollout(&hash).await;
+    }
+    entries = sess
+        .services
+        .input_slimming_store
+        .rankable_entries_for(durable_marker_hashes)
+        .await;
+
+    let ranked = rank_input_slimming_markers_for_compact(entries, marker_occurrences);
+    let retained = retain_ranked_markers_under_budget(&ranked);
+    if !retained.is_empty() {
+        summary.push_str("\n\nRanked retrievable markers:\n");
+        for marker in &retained {
+            debug!(
+                hash = %marker.hash,
+                compressed_tokens = marker.compressed_tokens,
+                occurrence_count = marker.occurrence_count,
+                strategy = marker.strategy.as_str(),
+                entropy = marker.entropy,
+                text_quality = marker.text_quality,
+                decision = "ranked_marker_compact_retained_marker",
+            );
+            summary.push_str(&ranked_marker_summary_line(marker));
+            summary.push('\n');
+        }
+    }
+
+    GuardedRetrievalSummary {
+        summary,
+        durable_unresolved_count: retained.len(),
+        non_durable_marker_count,
+    }
+}
+
+fn rank_input_slimming_markers_for_compact(
+    entries: Vec<(String, StoredInput)>,
+    marker_occurrences: &[InputSlimmingMarkerOccurrence],
+) -> Vec<RankedMarkerCandidate> {
+    let occurrence_stats = marker_occurrence_stats(marker_occurrences);
+    let latest_index = marker_occurrences
+        .iter()
+        .map(|occurrence| occurrence.item_index)
+        .max()
+        .unwrap_or(0);
+    let mut candidates = entries
+        .into_iter()
+        .map(|(hash, entry)| {
+            let (latest_occurrence_index, occurrence_count) =
+                occurrence_stats.get(&hash).copied().unwrap_or((0, 0));
+            ranked_marker_candidate(
+                hash,
+                entry,
+                latest_occurrence_index,
+                occurrence_count,
+                latest_index,
+            )
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(compare_ranked_marker_candidates);
+    candidates
+}
+
+fn marker_occurrence_stats(
+    marker_occurrences: &[InputSlimmingMarkerOccurrence],
+) -> HashMap<String, (usize, usize)> {
+    let mut stats: HashMap<String, (usize, usize)> = HashMap::new();
+    for occurrence in marker_occurrences {
+        stats
+            .entry(occurrence.hash.clone())
+            .and_modify(|(latest, count)| {
+                *latest = (*latest).max(occurrence.item_index);
+                *count = count.saturating_add(1);
+            })
+            .or_insert((occurrence.item_index, 1));
+    }
+    stats
+}
+
+fn ranked_marker_candidate(
+    hash: String,
+    entry: StoredInput,
+    latest_occurrence_index: usize,
+    occurrence_count: usize,
+    latest_index: usize,
+) -> RankedMarkerCandidate {
+    let retrieval_score = (1.0_f64 + entry.retrieval_count as f64).ln();
+    let distance_from_latest = latest_index.saturating_sub(latest_occurrence_index) as f64;
+    let recency_score = 1.0 / (1.0 + distance_from_latest / 20.0);
+    let failure_signal = failure_signal(&entry.original);
+    let compression_loss_score = compression_loss_score(
+        entry.metadata.original_tokens,
+        entry.metadata.compressed_tokens,
+    );
+    let tool_priority = tool_priority(entry.metadata.tool_name.as_str());
+    let occurrence_score = occurrence_score(occurrence_count);
+    let entropy = normalized_byte_entropy(&entry.original);
+    let text_quality = text_quality(&entry.original);
+    let noise_penalty = noise_penalty(&entry.original);
+    let score = 3.0 * retrieval_score
+        + 2.0 * recency_score
+        + 2.0 * failure_signal
+        + 1.5 * compression_loss_score
+        + tool_priority
+        + occurrence_score
+        + 0.8 * entropy * text_quality
+        - 2.0 * noise_penalty;
+    let mut reason = Vec::new();
+    if entry.retrieval_count > 0 {
+        reason.push("retrieved");
+    }
+    if recency_score >= 0.75 {
+        reason.push("recent");
+    }
+    if failure_signal > 0.0 {
+        reason.push("failure-signal");
+    }
+    if compression_loss_score >= 0.5 {
+        reason.push("high-loss");
+    }
+    if tool_priority >= 0.8 {
+        reason.push("tool-priority");
+    }
+    if occurrence_count > 1 {
+        reason.push("repeated");
+    }
+    if entropy >= 0.7 && text_quality > 0.0 {
+        reason.push("dense");
+    }
+    if noise_penalty > 0.0 {
+        reason.push("noise-penalty");
+    }
+    if reason.is_empty() {
+        reason.push("ranked");
+    }
+
+    RankedMarkerCandidate {
+        hash,
+        score,
+        original_tokens: entry.metadata.original_tokens,
+        compressed_tokens: entry.metadata.compressed_tokens,
+        retrieval_count: entry.retrieval_count,
+        latest_occurrence_index,
+        occurrence_count,
+        tool_name: entry.metadata.tool_name,
+        strategy: entry.metadata.strategy,
+        entropy,
+        text_quality,
+        reason,
+    }
+}
+
+fn compare_ranked_marker_candidates(
+    left: &RankedMarkerCandidate,
+    right: &RankedMarkerCandidate,
+) -> std::cmp::Ordering {
+    right
+        .score
+        .partial_cmp(&left.score)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| right.retrieval_count.cmp(&left.retrieval_count))
+        .then_with(|| {
+            right
+                .latest_occurrence_index
+                .cmp(&left.latest_occurrence_index)
+        })
+        .then_with(|| right.original_tokens.cmp(&left.original_tokens))
+        .then_with(|| left.hash.cmp(&right.hash))
+}
+
+fn retain_ranked_markers_under_budget(
+    ranked: &[RankedMarkerCandidate],
+) -> Vec<RankedMarkerCandidate> {
+    let mut retained = Vec::new();
+    let mut section = String::from("Ranked retrievable markers:\n");
+    for marker in ranked.iter().take(RANKED_MARKER_COMPACT_MAX_MARKERS) {
+        let line = ranked_marker_summary_line(marker);
+        let mut trial = section.clone();
+        trial.push_str(&line);
+        trial.push('\n');
+        if approx_token_count(&trial) > RANKED_MARKER_COMPACT_MARKER_SECTION_MAX_TOKENS {
+            break;
+        }
+        section = trial;
+        retained.push(marker.clone());
+    }
+    retained
+}
+
+fn ranked_marker_summary_line(marker: &RankedMarkerCandidate) -> String {
+    format!(
+        "- {} score={:.2} tool={} original_tokens={} reason={}",
+        input_slimming_marker(&marker.hash),
+        marker.score,
+        marker.tool_name,
+        marker.original_tokens,
+        marker.reason.join(", ")
+    )
+}
+
+fn failure_signal(text: &str) -> f64 {
+    let lower = text.to_lowercase();
+    if [
+        "error",
+        "failed",
+        "failure",
+        "panic",
+        "traceback",
+        "assertion",
+        "segfault",
+        "timeout",
+        "exit code",
+        "test result",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+    {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+fn compression_loss_score(original_tokens: usize, compressed_tokens: usize) -> f64 {
+    if original_tokens == 0 {
+        return 0.0;
+    }
+    original_tokens.saturating_sub(compressed_tokens) as f64 / original_tokens as f64
+}
+
+fn tool_priority(tool_name: &str) -> f64 {
+    let lower = tool_name.to_lowercase();
+    if lower.contains("shell")
+        || lower.contains("unified_exec")
+        || lower.contains("cargo")
+        || lower.contains("test")
+    {
+        1.0
+    } else if lower.contains("diff") || lower.contains("apply_patch") {
+        0.8
+    } else if lower.contains("rg") || lower.contains("grep") || lower.contains("search") {
+        0.7
+    } else {
+        0.4
+    }
+}
+
+fn occurrence_score(occurrence_count: usize) -> f64 {
+    if occurrence_count == 0 {
+        return 0.0;
+    }
+    ((1.0 + occurrence_count as f64).ln() / 4.0_f64.ln()).clamp(0.0, 1.0)
+}
+
+fn normalized_byte_entropy(text: &str) -> f64 {
+    let bytes = text.as_bytes();
+    if bytes.is_empty() {
+        return 0.0;
+    }
+    let mut counts = [0usize; 256];
+    for byte in bytes {
+        counts[usize::from(*byte)] += 1;
+    }
+    let len = bytes.len() as f64;
+    let entropy = counts
+        .iter()
+        .filter(|count| **count > 0)
+        .map(|count| {
+            let p = *count as f64 / len;
+            -p * p.log2()
+        })
+        .sum::<f64>();
+    (entropy / 8.0).clamp(0.0, 1.0)
+}
+
+fn text_quality(text: &str) -> f64 {
+    if looks_like_noise_blob(text) || looks_binary_like(text) {
+        return 0.0;
+    }
+    if text.len() > 1_000 && text.lines().count() <= 2 {
+        return 0.5;
+    }
+    1.0
+}
+
+fn noise_penalty(text: &str) -> f64 {
+    if looks_like_noise_blob(text) || looks_binary_like(text) {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+fn looks_binary_like(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    let control = bytes
+        .iter()
+        .filter(|byte| matches!(**byte, 0..=8 | 11..=12 | 14..=31))
+        .count();
+    control as f64 / bytes.len() as f64 > 0.05
+}
+
+fn looks_like_noise_blob(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.len() < 256 || trimmed.lines().count() > 4 {
+        return false;
+    }
+    let compact = trimmed
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace())
+        .collect::<String>();
+    if compact.len() < 256 {
+        return false;
+    }
+    let hex_count = compact.chars().filter(char::is_ascii_hexdigit).count();
+    if hex_count as f64 / compact.len() as f64 > 0.9 {
+        return true;
+    }
+    let base64_count = compact
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '/' | '='))
+        .count();
+    base64_count as f64 / compact.len() as f64 > 0.95 && normalized_byte_entropy(&compact) > 0.45
 }
 
 pub(crate) async fn append_missing_unresolved_input_slimming_markers(
@@ -2405,6 +2924,97 @@ mod tests {
         assert_eq!(guarded.summary.matches("<<lha-input:").count(), 1);
         assert_eq!(guarded.durable_unresolved_count, 1);
         assert_eq!(guarded.non_durable_marker_count, 0);
+    }
+
+    fn ranked_marker_candidate_for_test(
+        hash: &str,
+        score: f64,
+        retrieval_count: u64,
+        latest_occurrence_index: usize,
+        original_tokens: usize,
+    ) -> RankedMarkerCandidate {
+        RankedMarkerCandidate {
+            hash: hash.to_string(),
+            score,
+            original_tokens,
+            compressed_tokens: original_tokens / 2,
+            retrieval_count,
+            latest_occurrence_index,
+            occurrence_count: 1,
+            tool_name: "shell".to_string(),
+            strategy: InputSlimmingStrategy::PlainTextHeadTail,
+            entropy: 0.5,
+            text_quality: 1.0,
+            reason: vec!["ranked"],
+        }
+    }
+
+    #[test]
+    fn ranked_marker_compact_entropy_normalizes_byte_entropy() {
+        assert_eq!(normalized_byte_entropy(""), 0.0);
+        assert!(normalized_byte_entropy("aaaaaaaaaaaaaaaa") < 0.1);
+        let four_symbols = "abcd".repeat(16);
+        let entropy = normalized_byte_entropy(&four_symbols);
+        assert!(entropy > 0.24 && entropy < 0.26);
+    }
+
+    #[test]
+    fn ranked_marker_compact_noise_penalty_detects_blob_like_text() {
+        let hex_blob = "abcdef0123456789".repeat(32);
+        let base64_blob = "QWxhZGRpbjpvcGVuIHNlc2FtZQ==".repeat(16);
+        let structured_log = (0..32)
+            .map(|index| format!("line {index}: error: failed test result"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(noise_penalty(&hex_blob), 1.0);
+        assert_eq!(noise_penalty(&base64_blob), 1.0);
+        assert_eq!(noise_penalty(&structured_log), 0.0);
+    }
+
+    #[test]
+    fn ranked_marker_compact_candidates_use_expected_tie_break_order() {
+        let mut candidates = [
+            ranked_marker_candidate_for_test("ccc", 10.0, 0, 30, 1_000),
+            ranked_marker_candidate_for_test("bbb", 10.0, 2, 20, 1_000),
+            ranked_marker_candidate_for_test("aaa", 10.0, 2, 30, 900),
+            ranked_marker_candidate_for_test("ddd", 10.0, 2, 30, 1_100),
+            ranked_marker_candidate_for_test("eee", 11.0, 0, 1, 1),
+        ];
+
+        candidates.sort_by(compare_ranked_marker_candidates);
+
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.hash.as_str())
+                .collect::<Vec<_>>(),
+            vec!["eee", "ddd", "aaa", "bbb", "ccc"]
+        );
+    }
+
+    #[test]
+    fn ranked_marker_compact_retention_respects_marker_count_budget() {
+        let ranked = (0..20)
+            .map(|index| {
+                ranked_marker_candidate_for_test(
+                    &format!("{index:024x}"),
+                    100.0 - index as f64,
+                    0,
+                    index,
+                    1_000,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let retained = retain_ranked_markers_under_budget(&ranked);
+
+        assert_eq!(retained.len(), RANKED_MARKER_COMPACT_MAX_MARKERS);
+        assert_eq!(retained[0].hash, "000000000000000000000000");
+        assert_eq!(
+            retained.last().map(|candidate| candidate.hash.as_str()),
+            Some("00000000000000000000000b")
+        );
     }
 
     #[test]

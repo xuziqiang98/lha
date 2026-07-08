@@ -253,6 +253,9 @@
             "prevent_idle_sleep": {
               "type": "boolean"
             },
+            "ranked_marker_compact": {
+              "type": "boolean"
+            },
             "remote_compaction": {
               "type": "boolean"
             },
@@ -1320,6 +1323,9 @@
           "type": "boolean"
         },
         "prevent_idle_sleep": {
+          "type": "boolean"
+        },
+        "ranked_marker_compact": {
           "type": "boolean"
         },
         "remote_compaction": {

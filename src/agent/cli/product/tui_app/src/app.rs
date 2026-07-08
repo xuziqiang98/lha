@@ -4849,6 +4849,10 @@ fn normalize_feature_updates(updates: Vec<(Feature, bool)>) -> Vec<(Feature, boo
                 push_feature_update(&mut normalized, Feature::InputSlimmingLiveZone, false);
             } else if feature == Feature::InputSlimmingLiveZone {
                 push_feature_update(&mut normalized, Feature::InputSlimming, false);
+            } else if feature == Feature::RetrievalAwareCompact {
+                push_feature_update(&mut normalized, Feature::RankedMarkerCompact, false);
+            } else if feature == Feature::RankedMarkerCompact {
+                push_feature_update(&mut normalized, Feature::RetrievalAwareCompact, false);
             }
         }
     }
@@ -6450,6 +6454,57 @@ show_raw_agent_reasoning = true
             Feature::InputSlimming,
             Some(true),
             Feature::InputSlimmingLiveZone,
+            None,
+        );
+    }
+
+    #[tokio::test]
+    async fn update_feature_flags_keeps_marker_compact_strategies_mutually_exclusive() {
+        let mut app = make_test_app().await;
+        app.config.features.enable(Feature::RetrievalAwareCompact);
+        app.chat_widget
+            .set_feature_enabled(Feature::RetrievalAwareCompact, true);
+        ConfigEditsBuilder::new(&app.config.lha_home)
+            .set_feature_enabled(Feature::RetrievalAwareCompact.key(), true)
+            .apply()
+            .await
+            .expect("seed retrieval-aware compact config");
+
+        app.update_feature_flags(vec![(Feature::RankedMarkerCompact, true)])
+            .await;
+
+        assert!(!app.config.features.enabled(Feature::RetrievalAwareCompact));
+        assert!(app.config.features.enabled(Feature::RankedMarkerCompact));
+        assert!(
+            !app.chat_widget
+                .config_ref()
+                .features
+                .enabled(Feature::RetrievalAwareCompact)
+        );
+        assert!(
+            app.chat_widget
+                .config_ref()
+                .features
+                .enabled(Feature::RankedMarkerCompact)
+        );
+        assert_feature_config_toml(
+            &app,
+            Feature::RetrievalAwareCompact,
+            None,
+            Feature::RankedMarkerCompact,
+            Some(true),
+        );
+
+        app.update_feature_flags(vec![(Feature::RetrievalAwareCompact, true)])
+            .await;
+
+        assert!(app.config.features.enabled(Feature::RetrievalAwareCompact));
+        assert!(!app.config.features.enabled(Feature::RankedMarkerCompact));
+        assert_feature_config_toml(
+            &app,
+            Feature::RetrievalAwareCompact,
+            Some(true),
+            Feature::RankedMarkerCompact,
             None,
         );
     }
