@@ -47,7 +47,6 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
     }
 }
 
-#[expect(clippy::expect_used, clippy::unwrap_used)]
 async fn run_cmd_output(
     cmd: &[&str],
     writable_roots: &[PathBuf],
@@ -168,7 +167,6 @@ async fn test_timeout() {
 /// Helper that runs `cmd` under the Linux sandbox and asserts that the command
 /// does NOT succeed. Some tools fail with an immediate sandbox denial, while
 /// others stall until the sandboxed process hits the command timeout.
-#[expect(clippy::expect_used)]
 async fn assert_network_blocked(cmd: &[&str]) {
     let cwd = std::env::current_dir().expect("cwd should exist");
     let sandbox_cwd = cwd.clone();

@@ -1067,14 +1067,14 @@ mod tests {
 
         terminal
             .draw(|frame| {
-                let style = Style::default().fg(Color::Rgb(200, 10, 10));
+                let style = Style::default().fg(Color::Red);
                 frame.buffer.set_string(0, 0, "AAAA", style);
                 frame.buffer.set_string(0, 1, "BBBB", style);
             })
             .expect("draw colored rows");
 
         let screen = terminal.backend().vt100().screen();
-        let expected_fg = vt100::Color::Rgb(200, 10, 10);
+        let expected_fg = vt100::Color::Idx(1);
         assert_eq!(
             screen.cell(0, 0).expect("first row cell").fgcolor(),
             expected_fg
