@@ -1021,6 +1021,10 @@ fn non_durable_marker_replacement(hash: &str) -> String {
     format!("input slimming marker {hash} omitted because its original is not durably retrievable")
 }
 
+fn non_retained_marker_replacement(hash: &str) -> String {
+    format!("input slimming marker {hash} omitted by ranked-marker compact budget")
+}
+
 fn neutralize_non_durable_input_slimming_markers_in_text(
     text: &mut String,
     durable_marker_hashes: &HashSet<String>,
@@ -1037,6 +1041,27 @@ fn neutralize_non_durable_input_slimming_markers_in_text(
         if text.contains(&marker) {
             neutralized = neutralized.saturating_add(1);
             *text = text.replace(&marker, &non_durable_marker_replacement(&hash));
+        }
+    }
+    neutralized
+}
+
+fn neutralize_input_slimming_markers_except(
+    text: &mut String,
+    retained_marker_hashes: &HashSet<String>,
+) -> usize {
+    let mut omitted_hashes = input_slimming_hashes_from_text(text)
+        .into_iter()
+        .filter(|hash| !retained_marker_hashes.contains(hash))
+        .collect::<Vec<_>>();
+    omitted_hashes.sort();
+
+    let mut neutralized = 0usize;
+    for hash in omitted_hashes {
+        let marker = input_slimming_marker(&hash);
+        if text.contains(&marker) {
+            neutralized = neutralized.saturating_add(1);
+            *text = text.replace(&marker, &non_retained_marker_replacement(&hash));
         }
     }
     neutralized
@@ -1236,6 +1261,11 @@ async fn append_ranked_input_slimming_markers_to_summary(
 
     let ranked = rank_input_slimming_markers_for_compact(entries, marker_occurrences);
     let retained = retain_ranked_markers_under_budget(&ranked);
+    let retained_hashes = retained
+        .iter()
+        .map(|marker| marker.hash.clone())
+        .collect::<HashSet<_>>();
+    neutralize_input_slimming_markers_except(&mut summary, &retained_hashes);
     if !retained.is_empty() {
         summary.push_str("\n\nRanked retrievable markers:\n");
         for marker in &retained {
@@ -3015,6 +3045,48 @@ mod tests {
             retained.last().map(|candidate| candidate.hash.as_str()),
             Some("00000000000000000000000b")
         );
+    }
+
+    #[test]
+    fn ranked_marker_compact_neutralizes_unretained_durable_markers_in_summary() {
+        let retained_hash = "111111111111111111111111";
+        let omitted_hash = "222222222222222222222222";
+        let retained_marker = input_slimming_marker(retained_hash);
+        let omitted_marker = input_slimming_marker(omitted_hash);
+        let retained_marker_hashes = HashSet::from([retained_hash.to_string()]);
+        let mut summary = format!("copied {retained_marker}\ncopied {omitted_marker}");
+
+        let neutralized =
+            neutralize_input_slimming_markers_except(&mut summary, &retained_marker_hashes);
+
+        assert_eq!(neutralized, 1);
+        assert!(summary.contains(&retained_marker));
+        assert!(!summary.contains(&omitted_marker));
+        assert!(summary.contains(
+            "input slimming marker 222222222222222222222222 omitted by ranked-marker compact budget"
+        ));
+    }
+
+    #[test]
+    fn ranked_marker_compact_neutralizes_all_summary_markers_when_none_retained() {
+        let first_hash = "111111111111111111111111";
+        let second_hash = "222222222222222222222222";
+        let first_marker = input_slimming_marker(first_hash);
+        let second_marker = input_slimming_marker(second_hash);
+        let retained_marker_hashes = HashSet::new();
+        let mut summary = format!("copied {first_marker}\ncopied {second_marker}");
+
+        let neutralized =
+            neutralize_input_slimming_markers_except(&mut summary, &retained_marker_hashes);
+
+        assert_eq!(neutralized, 2);
+        assert!(!summary.contains("<<lha-input:"));
+        assert!(summary.contains(
+            "input slimming marker 111111111111111111111111 omitted by ranked-marker compact budget"
+        ));
+        assert!(summary.contains(
+            "input slimming marker 222222222222222222222222 omitted by ranked-marker compact budget"
+        ));
     }
 
     #[test]
