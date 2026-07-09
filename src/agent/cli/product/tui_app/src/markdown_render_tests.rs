@@ -901,6 +901,33 @@ fn nested_five_levels_mixed_lists() {
 }
 
 #[test]
+fn html_comment_inline_is_hidden() {
+    let text = render_markdown_text("Hello <!-- -->world");
+    let expected: Text = Line::from_iter(["Hello ", "world"]).into();
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn html_comment_block_is_hidden() {
+    let text = render_markdown_text("<!-- hidden -->\nVisible");
+    let rendered = text
+        .lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(!rendered.contains("<!-- hidden -->"));
+    assert!(rendered.contains("Visible"));
+}
+
+#[test]
+fn html_leading_comment_before_visible_markdown_is_stripped() {
+    let text = render_markdown_text("<!-- -->**Planning**");
+    let expected: Text = Line::from("**Planning**").into();
+    assert_eq!(text, expected);
+}
+
+#[test]
 fn html_inline_is_verbatim() {
     let md = "Hello <span>world</span>!";
     let text = render_markdown_text(md);

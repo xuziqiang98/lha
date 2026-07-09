@@ -11699,6 +11699,136 @@ async fn review_reasoning_delta_without_final_is_discarded_on_exit() {
 }
 
 #[tokio::test]
+async fn reasoning_status_only_summary_updates_status_without_visible_transcript() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "status-only-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "status-only-reasoning-delta".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "<!-- -->**Planning Rust crate patching**\n<!-- -->**Conducting quick memory search**"
+                .into(),
+        }),
+    });
+    assert_eq!(chat.current_status.header, "Planning Rust crate patching");
+    chat.handle_codex_event(Event {
+        id: "status-only-reasoning-final".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "Planning Rust crate patching".into(),
+        }),
+    });
+
+    let visible_history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(
+        !visible_history.contains("Planning Rust crate patching"),
+        "status title should not enter visible transcript: {visible_history:?}"
+    );
+    assert!(
+        !visible_history.contains("Conducting quick memory search"),
+        "status title should not enter visible transcript: {visible_history:?}"
+    );
+    assert!(
+        !visible_history.contains("<!-- -->"),
+        "HTML comment spacer should not enter visible transcript: {visible_history:?}"
+    );
+}
+
+#[tokio::test]
+async fn bold_only_reasoning_summary_remains_visible() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "bold-only-reasoning-delta".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Found root cause**".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "bold-only-reasoning-final".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "Found root cause".into(),
+        }),
+    });
+
+    let visible_history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(
+        visible_history.contains("Found root cause"),
+        "bold-only reasoning summary should remain visible: {visible_history:?}"
+    );
+}
+
+#[tokio::test]
+async fn ordinary_reasoning_summary_remains_visible() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "ordinary-reasoning-delta".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Reasoning**\n\nVisible ordinary reasoning.".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "ordinary-reasoning-final".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "Visible ordinary reasoning.".into(),
+        }),
+    });
+
+    let visible_history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(
+        visible_history.contains("Visible ordinary reasoning."),
+        "ordinary reasoning summary should remain visible: {visible_history:?}"
+    );
+}
+
+#[tokio::test]
+async fn mixed_status_and_explanation_reasoning_remains_visible_without_html_comment() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "mixed-reasoning-delta".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "<!-- -->**Planning Rust crate patching**\n\nThe parser failure is in markdown rendering."
+                .into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "mixed-reasoning-final".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "The parser failure is in markdown rendering.".into(),
+        }),
+    });
+
+    let visible_history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(
+        visible_history.contains("The parser failure is in markdown rendering."),
+        "mixed reasoning with explanation should remain visible: {visible_history:?}"
+    );
+    assert!(
+        !visible_history.contains("<!-- -->"),
+        "HTML comment spacer should not enter visible transcript: {visible_history:?}"
+    );
+}
+
+#[tokio::test]
 async fn turn_complete_separator_viewport_repaint_repairs_review_vt100_screen_divergence() {
     let cfg = test_config().await;
     let model = "gpt-5";

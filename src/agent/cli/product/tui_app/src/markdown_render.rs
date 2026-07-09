@@ -322,6 +322,10 @@ where
     }
 
     fn html(&mut self, html: CowStr<'a>, inline: bool) {
+        let html = strip_leading_html_comments_from_html(&html);
+        if html.is_empty() {
+            return;
+        }
         self.pending_marker_line = false;
         for (i, line) in html.lines().enumerate() {
             if self.needs_newline {
@@ -533,6 +537,21 @@ where
         }
 
         prefix
+    }
+}
+
+fn strip_leading_html_comments_from_html(mut html: &str) -> &str {
+    let mut stripped = false;
+    loop {
+        let trimmed = html.trim_start();
+        if !trimmed.starts_with("<!--") {
+            return if stripped { trimmed } else { html };
+        }
+        let Some(end) = trimmed.find("-->").map(|index| index + "-->".len()) else {
+            return html;
+        };
+        stripped = true;
+        html = &trimmed[end..];
     }
 }
 

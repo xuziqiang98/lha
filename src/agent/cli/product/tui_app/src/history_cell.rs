@@ -2793,6 +2793,11 @@ fn new_reasoning_summary_block_with_visibility(
                     !visible_when_summary_present,
                 ));
             }
+            return Box::new(ReasoningSummaryCell::new(
+                "".to_string(),
+                full_reasoning_buffer.to_string(),
+                !visible_when_summary_present,
+            ));
         }
     }
     Box::new(ReasoningSummaryCell::new(
@@ -4650,6 +4655,9 @@ mod tests {
         let cell =
             new_reasoning_summary_block("**High level reasoning without closing".to_string());
 
+        let rendered_display = render_lines(&cell.display_lines(80));
+        assert_eq!(rendered_display, Vec::<String>::new());
+
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• **High level reasoning without closing"]);
     }
@@ -4659,6 +4667,12 @@ mod tests {
         let cell =
             new_reasoning_summary_block("**High level reasoning without closing**".to_string());
 
+        let rendered_display = render_lines(&cell.display_lines(80));
+        assert_eq!(
+            rendered_display,
+            vec!["• High level reasoning without closing"]
+        );
+
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• High level reasoning without closing"]);
 
@@ -4666,8 +4680,25 @@ mod tests {
             "**High level reasoning without closing**\n\n  ".to_string(),
         );
 
+        let rendered_display = render_lines(&cell.display_lines(80));
+        assert_eq!(
+            rendered_display,
+            vec!["• High level reasoning without closing"]
+        );
+
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• High level reasoning without closing"]);
+    }
+
+    #[test]
+    fn reasoning_summary_block_transcript_only_hides_fallback_display_lines() {
+        let cell = new_reasoning_summary_block_transcript_only("**Late reasoning**".to_string());
+
+        let rendered_display = render_lines(&cell.display_lines(80));
+        assert_eq!(rendered_display, Vec::<String>::new());
+
+        let rendered_transcript = render_transcript(cell.as_ref());
+        assert_eq!(rendered_transcript, vec!["• Late reasoning"]);
     }
 
     #[test]

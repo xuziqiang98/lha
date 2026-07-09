@@ -1539,7 +1539,9 @@ impl ChatWidget {
     fn on_agent_reasoning_final(&mut self) {
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
-        if !self.full_reasoning_buffer.is_empty() {
+        if !self.full_reasoning_buffer.is_empty()
+            && !reasoning_summary_is_status_only(&self.full_reasoning_buffer)
+        {
             let cell = if self.should_hide_reasoning_summary_from_display() {
                 history_cell::new_reasoning_summary_block_transcript_only(
                     self.full_reasoning_buffer.clone(),
@@ -7653,6 +7655,50 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+fn reasoning_summary_is_status_only(markdown: &str) -> bool {
+    let mut saw_status_title = false;
+
+    for line in markdown.lines() {
+        let (had_comment, line) = strip_leading_html_comments(line.trim());
+        if line.is_empty() {
+            continue;
+        }
+        if !had_comment {
+            return false;
+        }
+        let Some(title) = line
+            .strip_prefix("**")
+            .and_then(|rest| rest.strip_suffix("**"))
+        else {
+            return false;
+        };
+        if title.trim().is_empty() {
+            return false;
+        }
+        saw_status_title = true;
+    }
+
+    saw_status_title
+}
+
+fn strip_leading_html_comments(mut line: &str) -> (bool, &str) {
+    let mut stripped = false;
+    loop {
+        line = line.trim_start();
+        if line.is_empty() {
+            return (stripped, "");
+        }
+        if !line.starts_with("<!--") {
+            return (stripped, line.trim());
+        }
+        let Some(end) = line.find("-->").map(|index| index + "-->".len()) else {
+            return (stripped, line.trim());
+        };
+        stripped = true;
+        line = &line[end..];
+    }
 }
 
 fn format_duration_short(seconds: u64) -> String {
