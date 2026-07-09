@@ -98,6 +98,18 @@ struct ThreadEventEnvelope {
     event: Event,
 }
 
+fn should_skip_attached_thread_event(
+    thread_id: crate::product::protocol::ThreadId,
+    primary_thread_id: crate::product::protocol::ThreadId,
+    msg: &EventMsg,
+) -> bool {
+    thread_id != primary_thread_id
+        && matches!(
+            msg,
+            EventMsg::TurnStarted(_) | EventMsg::TurnComplete(_) | EventMsg::InputSlimming(_)
+        )
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct AgentJobProviderContext {
     model_provider_id: String,
@@ -632,7 +644,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         if matches!(event.msg, EventMsg::Error(_)) {
             error_seen = true;
         }
-        if thread_id != primary_thread_id && matches!(&event.msg, EventMsg::TurnComplete(_)) {
+        if should_skip_attached_thread_event(thread_id, primary_thread_id, &event.msg) {
             continue;
         }
         let shutdown = event_processor.process_event(event);
@@ -977,7 +989,14 @@ fn build_review_request(args: ReviewArgs) -> anyhow::Result<ReviewRequest> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::product::agent::protocol::AgentMessageEvent;
+    use crate::product::agent::protocol::InputSlimmingEvent;
+    use crate::product::agent::protocol::InputSlimmingScope;
+    use crate::product::agent::protocol::InputSlimmingTokenStats;
     use crate::product::agent::protocol::NetworkAccess;
+    use crate::product::agent::protocol::TurnCompleteEvent;
+    use crate::product::agent::protocol::TurnStartedEvent;
+    use crate::product::protocol::ThreadId;
     use pretty_assertions::assert_eq;
     use std::sync::Mutex as StdMutex;
 
@@ -988,6 +1007,100 @@ mod tests {
         unsafe {
             std::env::set_var(key, value);
         }
+    }
+
+    fn test_thread_id(s: &str) -> ThreadId {
+        ThreadId::from_string(s).expect("valid thread id")
+    }
+
+    fn input_slimming_msg() -> EventMsg {
+        let stats = InputSlimmingTokenStats {
+            tokens_before: 100,
+            tokens_after: 40,
+            tokens_saved: 60,
+            replacements: 1,
+            saved_usd_micros: None,
+        };
+
+        EventMsg::InputSlimming(InputSlimmingEvent {
+            scope: InputSlimmingScope::HistoricalToolOutputs,
+            last: stats,
+            total: stats,
+        })
+    }
+
+    fn turn_started_msg() -> EventMsg {
+        EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        })
+    }
+
+    #[test]
+    fn attached_thread_filter_skips_turn_boundaries_and_input_slimming() {
+        let primary_thread_id = test_thread_id("00000000-0000-0000-0000-000000000001");
+        let child_thread_id = test_thread_id("00000000-0000-0000-0000-000000000002");
+        let cases = [
+            ("child turn started", child_thread_id, turn_started_msg()),
+            (
+                "child turn complete",
+                child_thread_id,
+                EventMsg::TurnComplete(TurnCompleteEvent {
+                    last_agent_message: None,
+                }),
+            ),
+            (
+                "child input slimming",
+                child_thread_id,
+                input_slimming_msg(),
+            ),
+            (
+                "child ordinary message",
+                child_thread_id,
+                EventMsg::AgentMessage(AgentMessageEvent {
+                    message: "child update".to_string(),
+                    memory_citation: None,
+                }),
+            ),
+            (
+                "primary input slimming",
+                primary_thread_id,
+                input_slimming_msg(),
+            ),
+            (
+                "primary turn started",
+                primary_thread_id,
+                turn_started_msg(),
+            ),
+            (
+                "primary turn complete",
+                primary_thread_id,
+                EventMsg::TurnComplete(TurnCompleteEvent {
+                    last_agent_message: None,
+                }),
+            ),
+        ];
+
+        let actual = cases
+            .iter()
+            .map(|(name, thread_id, msg)| {
+                (
+                    *name,
+                    should_skip_attached_thread_event(*thread_id, primary_thread_id, msg),
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected = vec![
+            ("child turn started", true),
+            ("child turn complete", true),
+            ("child input slimming", true),
+            ("child ordinary message", false),
+            ("primary input slimming", false),
+            ("primary turn started", false),
+            ("primary turn complete", false),
+        ];
+
+        assert_eq!(actual, expected);
     }
 
     #[test]
