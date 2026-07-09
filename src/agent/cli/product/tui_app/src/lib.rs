@@ -60,6 +60,7 @@ mod cwd_prompt;
 mod diff_render;
 mod exec_cell;
 mod exec_command;
+mod exit_summary;
 mod experimental_features_modal;
 mod external_editor;
 mod file_search;
@@ -120,7 +121,9 @@ mod wrapping;
 pub mod test_backend;
 
 use crate::product::tui_app::tui::Tui;
+pub use app::InputSlimmingExitSummary;
 pub use cli::Cli;
+pub use exit_summary::format_exit_messages;
 pub use markdown_render::render_markdown_text;
 pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
@@ -399,6 +402,7 @@ async fn run_ratatui_app(
         let _ = tui.terminal.clear();
         Ok(AppExitInfo {
             token_usage: crate::product::agent::protocol::TokenUsage::default(),
+            input_slimming: None,
             thread_id: None,
             thread_name: None,
             update_action: None,
@@ -457,6 +461,7 @@ async fn run_ratatui_app(
                     session_log::log_session_end();
                     return Ok(AppExitInfo {
                         token_usage: crate::product::agent::protocol::TokenUsage::default(),
+                        input_slimming: None,
                         thread_id: None,
                         thread_name: None,
                         update_action: None,
@@ -515,6 +520,7 @@ async fn run_ratatui_app(
                 session_log::log_session_end();
                 return Ok(AppExitInfo {
                     token_usage: crate::product::agent::protocol::TokenUsage::default(),
+                    input_slimming: None,
                     thread_id: None,
                     thread_name: None,
                     update_action: None,

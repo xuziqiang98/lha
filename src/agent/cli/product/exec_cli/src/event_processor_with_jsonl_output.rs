@@ -13,6 +13,7 @@ use crate::product::exec_cli::exec_events::CommandExecutionStatus;
 use crate::product::exec_cli::exec_events::ErrorItem;
 use crate::product::exec_cli::exec_events::FileChangeItem;
 use crate::product::exec_cli::exec_events::FileUpdateChange;
+use crate::product::exec_cli::exec_events::InputSlimmingUsage;
 use crate::product::exec_cli::exec_events::ItemCompletedEvent;
 use crate::product::exec_cli::exec_events::ItemStartedEvent;
 use crate::product::exec_cli::exec_events::ItemUpdatedEvent;
@@ -52,6 +53,7 @@ pub struct EventProcessorWithJsonOutput {
     // Tracks the todo list for the current turn (at most one per turn).
     running_todo_list: Option<RunningTodoList>,
     last_total_token_usage: Option<crate::product::agent::protocol::TokenUsage>,
+    last_input_slimming: Option<InputSlimmingUsage>,
     running_mcp_tool_calls: HashMap<String, RunningMcpToolCall>,
     running_web_search_calls: HashMap<String, String>,
     last_critical_error: Option<ThreadErrorEvent>,
@@ -88,6 +90,7 @@ impl EventProcessorWithJsonOutput {
             running_patch_applies: HashMap::new(),
             running_todo_list: None,
             last_total_token_usage: None,
+            last_input_slimming: None,
             running_mcp_tool_calls: HashMap::new(),
             running_web_search_calls: HashMap::new(),
             last_critical_error: None,
@@ -123,6 +126,10 @@ impl EventProcessorWithJsonOutput {
                 if let Some(info) = &ev.info {
                     self.last_total_token_usage = Some(info.total_token_usage.clone());
                 }
+                Vec::new()
+            }
+            protocol::EventMsg::InputSlimming(ev) => {
+                self.last_input_slimming = Some(ev.clone().into());
                 Vec::new()
             }
             protocol::EventMsg::TurnStarted(ev) => self.handle_task_started(ev),
@@ -499,19 +506,22 @@ impl EventProcessorWithJsonOutput {
 
     fn handle_task_started(&mut self, _: &protocol::TurnStartedEvent) -> Vec<ThreadEvent> {
         self.last_critical_error = None;
+        self.last_input_slimming = None;
         vec![ThreadEvent::TurnStarted(TurnStartedEvent {})]
     }
 
     fn handle_task_complete(&mut self) -> Vec<ThreadEvent> {
-        let usage = if let Some(u) = &self.last_total_token_usage {
+        let mut usage = if let Some(u) = &self.last_total_token_usage {
             Usage {
                 input_tokens: u.input_tokens,
                 cached_input_tokens: u.cached_input_tokens,
                 output_tokens: u.output_tokens,
+                input_slimming: None,
             }
         } else {
             Usage::default()
         };
+        usage.input_slimming = self.last_input_slimming.clone();
 
         let mut items = Vec::new();
 

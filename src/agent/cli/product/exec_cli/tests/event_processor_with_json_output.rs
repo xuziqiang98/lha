@@ -8,6 +8,9 @@ use crate::product::agent::protocol::ExecCommandBeginEvent;
 use crate::product::agent::protocol::ExecCommandEndEvent;
 use crate::product::agent::protocol::ExecCommandSource;
 use crate::product::agent::protocol::FileChange;
+use crate::product::agent::protocol::InputSlimmingEvent;
+use crate::product::agent::protocol::InputSlimmingScope;
+use crate::product::agent::protocol::InputSlimmingTokenStats;
 use crate::product::agent::protocol::McpInvocation;
 use crate::product::agent::protocol::McpToolCallBeginEvent;
 use crate::product::agent::protocol::McpToolCallEndEvent;
@@ -15,6 +18,9 @@ use crate::product::agent::protocol::PatchApplyBeginEvent;
 use crate::product::agent::protocol::PatchApplyEndEvent;
 use crate::product::agent::protocol::SandboxPolicy;
 use crate::product::agent::protocol::SessionConfiguredEvent;
+use crate::product::agent::protocol::TokenCountEvent;
+use crate::product::agent::protocol::TokenUsage;
+use crate::product::agent::protocol::TokenUsageInfo;
 use crate::product::agent::protocol::WarningEvent;
 use crate::product::agent::protocol::WebSearchBeginEvent;
 use crate::product::agent::protocol::WebSearchEndEvent;
@@ -23,6 +29,8 @@ use crate::product::exec_cli::exec_events::AgentMessageItem;
 use crate::product::exec_cli::exec_events::CommandExecutionItem;
 use crate::product::exec_cli::exec_events::CommandExecutionStatus;
 use crate::product::exec_cli::exec_events::ErrorItem;
+use crate::product::exec_cli::exec_events::InputSlimmingUsage;
+use crate::product::exec_cli::exec_events::InputSlimmingUsageStats;
 use crate::product::exec_cli::exec_events::ItemCompletedEvent;
 use crate::product::exec_cli::exec_events::ItemStartedEvent;
 use crate::product::exec_cli::exec_events::ItemUpdatedEvent;
@@ -66,6 +74,50 @@ fn event(id: &str, msg: EventMsg) -> Event {
         id: id.to_string(),
         msg,
     }
+}
+
+fn token_count_event(id: &str, usage: TokenUsage) -> Event {
+    event(
+        id,
+        EventMsg::TokenCount(TokenCountEvent {
+            info: Some(TokenUsageInfo {
+                total_token_usage: usage.clone(),
+                last_token_usage: usage,
+                model_context_window: None,
+            }),
+        }),
+    )
+}
+
+fn input_slimming_event(
+    id: &str,
+    scope: InputSlimmingScope,
+    last: InputSlimmingTokenStats,
+    total: InputSlimmingTokenStats,
+) -> Event {
+    event(
+        id,
+        EventMsg::InputSlimming(InputSlimmingEvent { scope, last, total }),
+    )
+}
+
+fn turn_started_event(id: &str) -> Event {
+    event(
+        id,
+        EventMsg::TurnStarted(crate::product::agent::protocol::TurnStartedEvent {
+            model_context_window: Some(32_000),
+            identity_kind: IdentityKind::Nobody,
+        }),
+    )
+}
+
+fn turn_complete_event(id: &str) -> Event {
+    event(
+        id,
+        EventMsg::TurnComplete(crate::product::agent::protocol::TurnCompleteEvent {
+            last_agent_message: Some("done".to_string()),
+        }),
+    )
 }
 
 #[test]
@@ -1121,31 +1173,18 @@ fn task_complete_produces_turn_completed_with_usage() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
 
     // First, feed a TokenCount event with known totals.
-    let usage = crate::product::agent::protocol::TokenUsage {
+    let usage = TokenUsage {
         input_tokens: 1200,
         cached_input_tokens: 200,
         output_tokens: 345,
         reasoning_output_tokens: 0,
         total_tokens: 0,
     };
-    let info = crate::product::agent::protocol::TokenUsageInfo {
-        total_token_usage: usage.clone(),
-        last_token_usage: usage,
-        model_context_window: None,
-    };
-    let token_count_event = event(
-        "e1",
-        EventMsg::TokenCount(crate::product::agent::protocol::TokenCountEvent { info: Some(info) }),
-    );
-    assert!(ep.collect_thread_events(&token_count_event).is_empty());
+    let token_count = token_count_event("e1", usage);
+    assert!(ep.collect_thread_events(&token_count).is_empty());
 
     // Then TurnComplete should produce turn.completed with the captured usage.
-    let complete_event = event(
-        "e2",
-        EventMsg::TurnComplete(crate::product::agent::protocol::TurnCompleteEvent {
-            last_agent_message: Some("done".to_string()),
-        }),
-    );
+    let complete_event = turn_complete_event("e2");
     let out = ep.collect_thread_events(&complete_event);
     assert_eq!(
         out,
@@ -1154,7 +1193,231 @@ fn task_complete_produces_turn_completed_with_usage() {
                 input_tokens: 1200,
                 cached_input_tokens: 200,
                 output_tokens: 345,
+                input_slimming: None,
             },
         })]
+    );
+}
+
+#[test]
+fn task_complete_includes_input_slimming_usage() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+
+    assert!(
+        ep.collect_thread_events(&token_count_event(
+            "e1",
+            TokenUsage {
+                input_tokens: 1200,
+                cached_input_tokens: 200,
+                output_tokens: 345,
+                reasoning_output_tokens: 0,
+                total_tokens: 0,
+            },
+        ))
+        .is_empty()
+    );
+    assert!(
+        ep.collect_thread_events(&input_slimming_event(
+            "e2",
+            InputSlimmingScope::LiveZoneToolOutputs,
+            InputSlimmingTokenStats {
+                tokens_before: 25_000,
+                tokens_after: 6_300,
+                tokens_saved: 18_700,
+                replacements: 2,
+                saved_usd_micros: Some(4_675),
+            },
+            InputSlimmingTokenStats {
+                tokens_before: 81_000,
+                tokens_after: 42_000,
+                tokens_saved: 39_000,
+                replacements: 5,
+                saved_usd_micros: Some(9_750),
+            },
+        ))
+        .is_empty()
+    );
+
+    let out = ep.collect_thread_events(&turn_complete_event("e3"));
+    assert_eq!(
+        out,
+        vec![ThreadEvent::TurnCompleted(TurnCompletedEvent {
+            usage: Usage {
+                input_tokens: 1200,
+                cached_input_tokens: 200,
+                output_tokens: 345,
+                input_slimming: Some(InputSlimmingUsage {
+                    scope: InputSlimmingScope::LiveZoneToolOutputs,
+                    last: InputSlimmingUsageStats {
+                        tokens_before: 25_000,
+                        tokens_after: 6_300,
+                        tokens_saved: 18_700,
+                        replacements: 2,
+                        saved_usd_micros: Some(4_675),
+                    },
+                    total: InputSlimmingUsageStats {
+                        tokens_before: 81_000,
+                        tokens_after: 42_000,
+                        tokens_saved: 39_000,
+                        replacements: 5,
+                        saved_usd_micros: Some(9_750),
+                    },
+                }),
+            },
+        })]
+    );
+}
+
+#[test]
+fn task_complete_omits_input_slimming_when_absent() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+
+    assert!(
+        ep.collect_thread_events(&token_count_event(
+            "e1",
+            TokenUsage {
+                input_tokens: 1200,
+                cached_input_tokens: 200,
+                output_tokens: 345,
+                reasoning_output_tokens: 0,
+                total_tokens: 0,
+            },
+        ))
+        .is_empty()
+    );
+
+    let out = ep.collect_thread_events(&turn_complete_event("e2"));
+    assert_eq!(
+        out,
+        vec![ThreadEvent::TurnCompleted(TurnCompletedEvent {
+            usage: Usage {
+                input_tokens: 1200,
+                cached_input_tokens: 200,
+                output_tokens: 345,
+                input_slimming: None,
+            },
+        })]
+    );
+
+    let json = serde_json::to_value(&out[0]).expect("serialize turn completed event");
+    assert_eq!(json["type"], "turn.completed");
+    assert!(json["usage"].get("input_slimming").is_none());
+}
+
+#[test]
+fn task_started_clears_input_slimming_usage() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+
+    assert_eq!(ep.collect_thread_events(&turn_started_event("s1")).len(), 1);
+    assert!(
+        ep.collect_thread_events(&input_slimming_event(
+            "e1",
+            InputSlimmingScope::HistoricalToolOutputs,
+            InputSlimmingTokenStats {
+                tokens_before: 10_000,
+                tokens_after: 9_000,
+                tokens_saved: 1_000,
+                replacements: 1,
+                saved_usd_micros: None,
+            },
+            InputSlimmingTokenStats {
+                tokens_before: 10_000,
+                tokens_after: 9_000,
+                tokens_saved: 1_000,
+                replacements: 1,
+                saved_usd_micros: None,
+            },
+        ))
+        .is_empty()
+    );
+    let first = ep.collect_thread_events(&turn_complete_event("c1"));
+    assert_eq!(
+        first,
+        vec![ThreadEvent::TurnCompleted(TurnCompletedEvent {
+            usage: Usage {
+                input_tokens: 0,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                input_slimming: Some(InputSlimmingUsage {
+                    scope: InputSlimmingScope::HistoricalToolOutputs,
+                    last: InputSlimmingUsageStats {
+                        tokens_before: 10_000,
+                        tokens_after: 9_000,
+                        tokens_saved: 1_000,
+                        replacements: 1,
+                        saved_usd_micros: None,
+                    },
+                    total: InputSlimmingUsageStats {
+                        tokens_before: 10_000,
+                        tokens_after: 9_000,
+                        tokens_saved: 1_000,
+                        replacements: 1,
+                        saved_usd_micros: None,
+                    },
+                }),
+            },
+        })]
+    );
+
+    assert_eq!(ep.collect_thread_events(&turn_started_event("s2")).len(), 1);
+    let second = ep.collect_thread_events(&turn_complete_event("c2"));
+    assert_eq!(
+        second,
+        vec![ThreadEvent::TurnCompleted(TurnCompletedEvent {
+            usage: Usage {
+                input_tokens: 0,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                input_slimming: None,
+            },
+        })]
+    );
+}
+
+#[test]
+fn task_complete_serializes_input_slimming_usage_without_empty_usd() {
+    let event = ThreadEvent::TurnCompleted(TurnCompletedEvent {
+        usage: Usage {
+            input_tokens: 1200,
+            cached_input_tokens: 200,
+            output_tokens: 345,
+            input_slimming: Some(InputSlimmingUsage {
+                scope: InputSlimmingScope::HistoricalToolOutputs,
+                last: InputSlimmingUsageStats {
+                    tokens_before: 25_000,
+                    tokens_after: 6_300,
+                    tokens_saved: 18_700,
+                    replacements: 2,
+                    saved_usd_micros: None,
+                },
+                total: InputSlimmingUsageStats {
+                    tokens_before: 81_000,
+                    tokens_after: 42_000,
+                    tokens_saved: 39_000,
+                    replacements: 5,
+                    saved_usd_micros: Some(9_750),
+                },
+            }),
+        },
+    });
+
+    let json = serde_json::to_value(event).expect("serialize turn completed event");
+    assert_eq!(json["type"], "turn.completed");
+    assert_eq!(
+        json["usage"]["input_slimming"]["scope"],
+        "historical_tool_outputs"
+    );
+    assert_eq!(
+        json["usage"]["input_slimming"]["last"]["tokens_saved"],
+        18_700
+    );
+    assert!(
+        json["usage"]["input_slimming"]["last"]
+            .get("saved_usd_micros")
+            .is_none()
+    );
+    assert_eq!(
+        json["usage"]["input_slimming"]["total"]["saved_usd_micros"],
+        9_750
     );
 }

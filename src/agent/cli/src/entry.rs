@@ -16,7 +16,6 @@ use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::Shell;
 use clap_complete::generate;
-use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
@@ -328,37 +327,6 @@ struct WindowsCommandRunnerCommand {
     request_file: PathBuf,
 }
 
-fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<String> {
-    let AppExitInfo {
-        token_usage,
-        thread_id: conversation_id,
-        thread_name,
-        ..
-    } = exit_info;
-
-    if token_usage.is_zero() {
-        return Vec::new();
-    }
-
-    let mut lines = vec![format!(
-        "{}",
-        crate::product::agent::protocol::FinalOutput::from(token_usage)
-    )];
-
-    if let Some(resume_cmd) =
-        crate::product::agent::util::resume_command(thread_name.as_deref(), conversation_id)
-    {
-        let command = if color_enabled {
-            resume_cmd.cyan().to_string()
-        } else {
-            resume_cmd
-        };
-        lines.push(format!("To continue this session, run {command}"));
-    }
-
-    lines
-}
-
 /// Handle the app exit and print the results. Optionally run the update action.
 fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
     match exit_info.exit_reason {
@@ -371,7 +339,7 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
 
     let update_action = exit_info.update_action;
     let color_enabled = supports_color::on(Stream::Stdout).is_some();
-    for line in format_exit_messages(exit_info, color_enabled) {
+    for line in crate::product::tui_app::format_exit_messages(&exit_info, color_enabled) {
         println!("{line}");
     }
     if let Some(action) = update_action {
@@ -972,8 +940,6 @@ fn print_completion(cmd: CompletionCommand) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::product::agent::protocol::TokenUsage;
-    use crate::product::protocol::ThreadId;
     use assert_matches::assert_matches;
     use pretty_assertions::assert_eq;
 
@@ -1084,74 +1050,6 @@ mod tests {
         assert_matches!(
             cli.subcommand,
             Some(Subcommand::RemovedResponsesApiProxy(_))
-        );
-    }
-
-    fn sample_exit_info(conversation_id: Option<&str>, thread_name: Option<&str>) -> AppExitInfo {
-        let token_usage = TokenUsage {
-            output_tokens: 2,
-            total_tokens: 2,
-            ..Default::default()
-        };
-        AppExitInfo {
-            token_usage,
-            thread_id: conversation_id
-                .map(ThreadId::from_string)
-                .map(Result::unwrap),
-            thread_name: thread_name.map(str::to_string),
-            update_action: None,
-            exit_reason: ExitReason::UserRequested,
-        }
-    }
-
-    #[test]
-    fn format_exit_messages_skips_zero_usage() {
-        let exit_info = AppExitInfo {
-            token_usage: TokenUsage::default(),
-            thread_id: None,
-            thread_name: None,
-            update_action: None,
-            exit_reason: ExitReason::UserRequested,
-        };
-        let lines = format_exit_messages(exit_info, false);
-        assert!(lines.is_empty());
-    }
-
-    #[test]
-    fn format_exit_messages_includes_resume_hint_without_color() {
-        let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"), None);
-        let lines = format_exit_messages(exit_info, false);
-        assert_eq!(
-            lines,
-            vec![
-                "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run lha resume 123e4567-e89b-12d3-a456-426614174000"
-                    .to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn format_exit_messages_applies_color_when_enabled() {
-        let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"), None);
-        let lines = format_exit_messages(exit_info, true);
-        assert_eq!(lines.len(), 2);
-        assert!(lines[1].contains("\u{1b}[36m"));
-    }
-
-    #[test]
-    fn format_exit_messages_prefers_thread_name() {
-        let exit_info = sample_exit_info(
-            Some("123e4567-e89b-12d3-a456-426614174000"),
-            Some("my-thread"),
-        );
-        let lines = format_exit_messages(exit_info, false);
-        assert_eq!(
-            lines,
-            vec![
-                "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run lha resume my-thread".to_string(),
-            ]
         );
     }
 

@@ -158,16 +158,24 @@ const FINAL_ANSWER_SETTLE_REPAINT_FRAMES: u8 = 2;
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
+    pub input_slimming: Option<InputSlimmingExitSummary>,
     pub thread_id: Option<ThreadId>,
     pub thread_name: Option<String>,
     pub update_action: Option<UpdateAction>,
     pub exit_reason: ExitReason,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InputSlimmingExitSummary {
+    pub tokens_saved: i64,
+    pub saved_usd_micros: Option<i64>,
+}
+
 impl AppExitInfo {
     pub fn fatal(message: impl Into<String>) -> Self {
         Self {
             token_usage: TokenUsage::default(),
+            input_slimming: None,
             thread_id: None,
             thread_name: None,
             update_action: None,
@@ -537,6 +545,7 @@ async fn handle_model_migration_prompt_if_needed(
             ModelMigrationOutcome::Exit => {
                 return Some(AppExitInfo {
                     token_usage: TokenUsage::default(),
+                    input_slimming: None,
                     thread_id: None,
                     thread_name: None,
                     update_action: None,
@@ -2076,6 +2085,7 @@ impl App {
         tui.terminal.clear()?;
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
+            input_slimming: app.chat_widget.input_slimming_exit_summary(),
             thread_id: app.chat_widget.thread_id(),
             thread_name: app.chat_widget.thread_name(),
             update_action: app.pending_update_action,

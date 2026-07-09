@@ -119,6 +119,22 @@ pub(crate) fn format_tokens_compact(value: i64) -> String {
     format!("{formatted}{suffix}")
 }
 
+pub(crate) fn format_usd_micros(micros: i64) -> String {
+    if micros <= 0 {
+        return "$0.00".to_string();
+    }
+    let dollars = micros as f64 / 1_000_000.0;
+    if micros >= 1_000_000 {
+        format!("${dollars:.2}")
+    } else if micros >= 10_000 {
+        format!("${dollars:.3}")
+    } else if micros >= 1_000 {
+        format!("${dollars:.4}")
+    } else {
+        "<$0.001".to_string()
+    }
+}
+
 pub(crate) fn cache_hit_percent(usage: &TokenUsage) -> Option<i64> {
     let input = usage.input_tokens.max(0);
     let cached = usage.cached_input().min(input);

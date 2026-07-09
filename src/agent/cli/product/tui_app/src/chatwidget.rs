@@ -143,6 +143,7 @@ const PLAN_IMPLEMENTATION_NO: &str = "No, stay in planner identity";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 pub(crate) const DRAG_AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(50);
 
+use crate::product::tui_app::InputSlimmingExitSummary;
 use crate::product::tui_app::app_event::AppEvent;
 use crate::product::tui_app::app_event::BuddyConfigEdit;
 use crate::product::tui_app::app_event::ConnectorsSnapshot;
@@ -7084,6 +7085,14 @@ impl ChatWidget {
             .as_ref()
             .map(|ti| ti.total_token_usage.clone())
             .unwrap_or_default()
+    }
+
+    pub(crate) fn input_slimming_exit_summary(&self) -> Option<InputSlimmingExitSummary> {
+        let input_slimming = self.input_slimming.as_ref()?;
+        (input_slimming.total_saved_tokens > 0).then_some(InputSlimmingExitSummary {
+            tokens_saved: input_slimming.total_saved_tokens,
+            saved_usd_micros: input_slimming.total_saved_usd_micros,
+        })
     }
 
     pub(crate) fn thread_id(&self) -> Option<ThreadId> {

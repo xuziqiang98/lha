@@ -1,5 +1,6 @@
 use crate::product::mcp_types::ContentBlock as McpContentBlock;
 use crate::product::protocol::models::WebSearchAction;
+use crate::product::protocol::protocol as agent_protocol;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -65,6 +66,50 @@ pub struct Usage {
     pub cached_input_tokens: i64,
     /// The number of output tokens used during the turn.
     pub output_tokens: i64,
+    /// Approximate request-shaping savings from input slimming.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub input_slimming: Option<InputSlimmingUsage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct InputSlimmingUsage {
+    pub scope: agent_protocol::InputSlimmingScope,
+    pub last: InputSlimmingUsageStats,
+    pub total: InputSlimmingUsageStats,
+}
+
+impl From<agent_protocol::InputSlimmingEvent> for InputSlimmingUsage {
+    fn from(value: agent_protocol::InputSlimmingEvent) -> Self {
+        Self {
+            scope: value.scope,
+            last: value.last.into(),
+            total: value.total.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct InputSlimmingUsageStats {
+    pub tokens_before: i64,
+    pub tokens_after: i64,
+    pub tokens_saved: i64,
+    pub replacements: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub saved_usd_micros: Option<i64>,
+}
+
+impl From<agent_protocol::InputSlimmingTokenStats> for InputSlimmingUsageStats {
+    fn from(value: agent_protocol::InputSlimmingTokenStats) -> Self {
+        Self {
+            tokens_before: value.tokens_before,
+            tokens_after: value.tokens_after,
+            tokens_saved: value.tokens_saved,
+            replacements: value.replacements,
+            saved_usd_micros: value.saved_usd_micros,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]

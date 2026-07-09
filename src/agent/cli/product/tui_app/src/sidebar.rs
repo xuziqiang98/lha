@@ -4,6 +4,7 @@ use crate::product::protocol::protocol::InputSlimmingScope;
 use crate::product::tui_app::buddy;
 use crate::product::tui_app::buddy::state::BuddyState;
 use crate::product::tui_app::status::format_tokens_compact;
+use crate::product::tui_app::status::format_usd_micros;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
@@ -364,22 +365,6 @@ fn push_status(lines: &mut Vec<Line<'static>>, status: Option<&StatusPanelSnapsh
             "  compact ".dim(),
             context.context_compact_count.to_string().into(),
         ]));
-    }
-}
-
-fn format_usd_micros(micros: i64) -> String {
-    if micros <= 0 {
-        return "$0.00".to_string();
-    }
-    let dollars = micros as f64 / 1_000_000.0;
-    if micros >= 1_000_000 {
-        format!("${dollars:.2}")
-    } else if micros >= 10_000 {
-        format!("${dollars:.3}")
-    } else if micros >= 1_000 {
-        format!("${dollars:.4}")
-    } else {
-        "<$0.001".to_string()
     }
 }
 
