@@ -7659,15 +7659,28 @@ fn extract_first_bold(s: &str) -> Option<String> {
 
 fn reasoning_summary_is_status_only(markdown: &str) -> bool {
     let mut saw_status_title = false;
+    let mut pending_title_without_comment = false;
 
-    for line in markdown.lines() {
-        let (had_comment, line) = strip_leading_html_comments(line.trim());
+    for raw_line in markdown.lines() {
+        let line = raw_line.trim();
         if line.is_empty() {
             continue;
         }
-        if !had_comment {
+
+        let (had_leading_comment, line) = strip_leading_html_comments(line);
+        let (had_trailing_comment, line) = strip_trailing_html_comments(line);
+        let line = line.trim();
+        if line.is_empty() {
+            if had_leading_comment || had_trailing_comment {
+                pending_title_without_comment = false;
+                continue;
+            }
+            continue;
+        }
+        if pending_title_without_comment {
             return false;
         }
+
         let Some(title) = line
             .strip_prefix("**")
             .and_then(|rest| rest.strip_suffix("**"))
@@ -7678,9 +7691,10 @@ fn reasoning_summary_is_status_only(markdown: &str) -> bool {
             return false;
         }
         saw_status_title = true;
+        pending_title_without_comment = !had_leading_comment && !had_trailing_comment;
     }
 
-    saw_status_title
+    saw_status_title && !pending_title_without_comment
 }
 
 fn strip_leading_html_comments(mut line: &str) -> (bool, &str) {
@@ -7698,6 +7712,27 @@ fn strip_leading_html_comments(mut line: &str) -> (bool, &str) {
         };
         stripped = true;
         line = &line[end..];
+    }
+}
+
+fn strip_trailing_html_comments(mut line: &str) -> (bool, &str) {
+    let mut stripped = false;
+    loop {
+        line = line.trim_end();
+        if line.is_empty() {
+            return (stripped, "");
+        }
+        if !line.ends_with("-->") {
+            return (stripped, line.trim());
+        }
+        let Some(start) = line.rfind("<!--") else {
+            return (stripped, line.trim());
+        };
+        if !line[start..].trim_end().ends_with("-->") {
+            return (stripped, line.trim());
+        }
+        stripped = true;
+        line = &line[..start];
     }
 }
 

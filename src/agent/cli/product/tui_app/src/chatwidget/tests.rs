@@ -11740,6 +11740,93 @@ async fn reasoning_status_only_summary_updates_status_without_visible_transcript
         !visible_history.contains("<!-- -->"),
         "HTML comment spacer should not enter visible transcript: {visible_history:?}"
     );
+
+    chat.handle_codex_event(Event {
+        id: "status-only-follow-up-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "status-only-follow-up-reasoning-delta".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Preparing to run full cargo test**\n\n<!-- -->\n**Checking git status before tests**\n\n<!-- -->"
+                .into(),
+        }),
+    });
+    assert_eq!(
+        chat.current_status.header,
+        "Preparing to run full cargo test"
+    );
+    chat.handle_codex_event(Event {
+        id: "status-only-follow-up-reasoning-final".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "Preparing to run full cargo test".into(),
+        }),
+    });
+
+    let visible_history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(
+        !visible_history.contains("Preparing to run full cargo test"),
+        "status title should not enter visible transcript: {visible_history:?}"
+    );
+    assert!(
+        !visible_history.contains("Checking git status before tests"),
+        "status title should not enter visible transcript: {visible_history:?}"
+    );
+}
+
+#[test]
+fn reasoning_summary_status_only_accepts_title_followed_by_comment_placeholder() {
+    assert!(reasoning_summary_is_status_only(
+        "**Preparing to run full cargo test**\n\n<!-- -->"
+    ));
+}
+
+#[test]
+fn reasoning_summary_status_only_accepts_multiple_title_comment_blocks() {
+    assert!(reasoning_summary_is_status_only(
+        "**Updating goal to run all features**\n\n<!-- -->\n**Preparing to run full cargo test**\n\n<!-- -->\n**Checking git status before tests**\n\n<!-- -->"
+    ));
+}
+
+#[test]
+fn reasoning_summary_status_only_accepts_leading_comment_title() {
+    assert!(reasoning_summary_is_status_only(
+        "<!-- --> **Checking git status**"
+    ));
+}
+
+#[test]
+fn reasoning_summary_status_only_accepts_trailing_comment_title() {
+    assert!(reasoning_summary_is_status_only(
+        "**Checking git status** <!-- -->"
+    ));
+}
+
+#[test]
+fn reasoning_summary_status_only_rejects_title_with_real_body() {
+    assert!(!reasoning_summary_is_status_only(
+        "**Checking git status**\n\nI need to inspect the worktree before running tests."
+    ));
+}
+
+#[test]
+fn reasoning_summary_status_only_rejects_bulleted_reasoning_body() {
+    assert!(!reasoning_summary_is_status_only(
+        "**Planning fix**\n\n- update parser\n- add tests"
+    ));
+}
+
+#[test]
+fn reasoning_summary_status_only_rejects_plain_reasoning_summary() {
+    assert!(!reasoning_summary_is_status_only(
+        "This is a normal reasoning summary."
+    ));
 }
 
 #[tokio::test]
