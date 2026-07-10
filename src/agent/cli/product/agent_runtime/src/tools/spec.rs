@@ -184,6 +184,21 @@ fn tool_name_is_allowed_by_identity(config: &ToolsConfig, name: &str) -> bool {
     }
 }
 
+fn identity_requires_navigation_tools(identity_kind: IdentityKind) -> bool {
+    matches!(
+        identity_kind,
+        IdentityKind::Explorer | IdentityKind::Reviewer
+    )
+}
+
+fn navigation_tool_is_supported(config: &ToolsConfig, name: &str) -> bool {
+    identity_requires_navigation_tools(config.identity_kind)
+        || config
+            .experimental_supported_tools
+            .iter()
+            .any(|tool| tool == name)
+}
+
 fn maybe_push_spec(builder: &mut ToolRegistryBuilder, config: &ToolsConfig, spec: ToolDescriptor) {
     if tool_is_exposed_for_runtime(config, &spec) {
         builder.push_spec(spec);
@@ -1819,10 +1834,7 @@ pub(crate) fn build_specs(
         }
     }
 
-    if config
-        .experimental_supported_tools
-        .contains(&"grep_files".to_string())
-    {
+    if navigation_tool_is_supported(config, "grep_files") {
         let grep_files_handler = Arc::new(GrepFilesHandler);
         maybe_push_spec_with_parallel_support_and_register_handler(
             &mut builder,
@@ -1834,10 +1846,7 @@ pub(crate) fn build_specs(
         );
     }
 
-    if config
-        .experimental_supported_tools
-        .contains(&"read_file".to_string())
-    {
+    if navigation_tool_is_supported(config, "read_file") {
         let read_file_handler = Arc::new(ReadFileHandler);
         maybe_push_spec_with_parallel_support_and_register_handler(
             &mut builder,
@@ -1849,11 +1858,7 @@ pub(crate) fn build_specs(
         );
     }
 
-    if config
-        .experimental_supported_tools
-        .iter()
-        .any(|tool| tool == "list_dir")
-    {
+    if navigation_tool_is_supported(config, "list_dir") {
         let list_dir_handler = Arc::new(ListDirHandler);
         maybe_push_spec_with_parallel_support_and_register_handler(
             &mut builder,
@@ -2181,7 +2186,9 @@ mod tests {
     #[test]
     fn explorer_only_exposes_read_only_navigation_tools() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("test-gpt-5-codex", &config);
+        let mut model_info =
+            ModelsManager::construct_model_info_offline("test-gpt-5-codex", &config);
+        model_info.experimental_supported_tools.clear();
         let mut features = Features::with_defaults();
         features.enable(Feature::ApplyPatchFreeform);
         features.enable(Feature::AgentJobs);
@@ -2220,7 +2227,9 @@ mod tests {
     #[test]
     fn reviewer_exposes_read_only_navigation_and_inspection_command_tools() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("test-gpt-5-codex", &config);
+        let mut model_info =
+            ModelsManager::construct_model_info_offline("test-gpt-5-codex", &config);
+        model_info.experimental_supported_tools.clear();
         let mut features = Features::with_defaults();
         features.enable(Feature::ApplyPatchFreeform);
         features.enable(Feature::AgentJobs);
@@ -2267,6 +2276,76 @@ mod tests {
         assert!(registry.handler("shell").is_some());
         assert!(registry.handler("local_shell").is_some());
         assert!(registry.handler("shell_command").is_some());
+    }
+
+    #[test]
+    fn ordinary_identities_do_not_force_navigation_tools() {
+        let config = test_config();
+        let mut model_info =
+            ModelsManager::construct_model_info_offline("test-gpt-5-codex", &config);
+        model_info.experimental_supported_tools.clear();
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Identities);
+
+        for identity_kind in [
+            IdentityKind::Nobody,
+            IdentityKind::Planner,
+            IdentityKind::Programmer,
+        ] {
+            let tools_config = ToolsConfig::new(&ToolsConfigParams {
+                model_info: &model_info,
+                declared_tool_contract: false,
+                features: &features,
+                web_search_mode: None,
+                image_generation_tools: false,
+                memory_tools: false,
+                session_source: SessionSource::Cli,
+            })
+            .with_identity_kind(identity_kind);
+            let (tools, registry) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
+            let navigation_tools = tools
+                .iter()
+                .map(|tool| tool.spec.name())
+                .filter(|name| matches!(*name, "grep_files" | "read_file" | "list_dir"))
+                .collect::<Vec<_>>();
+
+            assert_eq!(navigation_tools, Vec::<&str>::new());
+            assert!(registry.handler("grep_files").is_none());
+            assert!(registry.handler("read_file").is_none());
+            assert!(registry.handler("list_dir").is_none());
+        }
+    }
+
+    #[test]
+    fn ordinary_identity_keeps_model_declared_navigation_tools() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("test-gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Identities);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            declared_tool_contract: false,
+            features: &features,
+            web_search_mode: None,
+            image_generation_tools: false,
+            memory_tools: false,
+            session_source: SessionSource::Cli,
+        })
+        .with_identity_kind(IdentityKind::Nobody);
+        let (tools, registry) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
+        let navigation_tools = tools
+            .iter()
+            .map(|tool| tool.spec.name())
+            .filter(|name| matches!(*name, "grep_files" | "read_file" | "list_dir"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            navigation_tools,
+            vec!["grep_files", "read_file", "list_dir"]
+        );
+        assert!(registry.handler("grep_files").is_some());
+        assert!(registry.handler("read_file").is_some());
+        assert!(registry.handler("list_dir").is_some());
     }
 
     #[test]

@@ -35,6 +35,7 @@ use crate::product::agent::protocol::Op;
 use crate::product::agent::protocol::ReviewRequest;
 use crate::product::agent::protocol::ReviewTarget;
 use crate::product::agent::protocol::SandboxPolicy;
+use crate::product::agent::protocol::SessionConfiguredEvent;
 use crate::product::agent::protocol::SessionSource;
 use crate::product::protocol::approvals::ElicitationAction;
 use crate::product::protocol::config_types::Identity;
@@ -528,7 +529,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     // Print the effective configuration and initial request so users can see what LHA
     // is using.
-    event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
+    let summary_event =
+        session_configured_for_summary(&session_configured, selected_identity.as_ref());
+    event_processor.print_config_summary(&config, &prompt_summary, &summary_event);
 
     info!("LHA initialized with event: {session_configured:?}");
 
@@ -808,6 +811,19 @@ fn identity_for_kind_with_inherited_effort(
     }
 }
 
+fn session_configured_for_summary(
+    session_configured: &SessionConfiguredEvent,
+    selected_identity: Option<&Identity>,
+) -> SessionConfiguredEvent {
+    let mut summary_event = session_configured.clone();
+    if let Some(identity) = selected_identity {
+        summary_event.model = identity.model().to_string();
+        summary_event.identity_kind = identity.kind;
+        summary_event.reasoning_effort = identity.reasoning_effort();
+    }
+    summary_event
+}
+
 fn review_identity_override_op(identity: Option<Identity>) -> Option<Op> {
     identity.map(|identity| Op::OverrideTurnContext {
         cwd: None,
@@ -1011,6 +1027,25 @@ mod tests {
 
     fn test_thread_id(s: &str) -> ThreadId {
         ThreadId::from_string(s).expect("valid thread id")
+    }
+
+    fn test_session_configured_event() -> SessionConfiguredEvent {
+        SessionConfiguredEvent {
+            session_id: test_thread_id("00000000-0000-0000-0000-000000000001"),
+            forked_from_id: None,
+            thread_name: None,
+            model: "default-model".to_string(),
+            identity_kind: IdentityKind::Nobody,
+            model_provider_id: "test-provider".to_string(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            cwd: PathBuf::from("/tmp/test-workspace"),
+            reasoning_effort: Some(ReasoningEffort::High),
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            rollout_path: None,
+        }
     }
 
     fn input_slimming_msg() -> EventMsg {
@@ -1382,6 +1417,48 @@ mod tests {
         );
 
         assert_eq!(identity.reasoning_effort(), Some(ReasoningEffort::Medium));
+    }
+
+    #[test]
+    fn session_configured_summary_uses_selected_identity() {
+        let session_configured = test_session_configured_event();
+        let original = serde_json::to_value(&session_configured).expect("serialize original event");
+
+        for (identity_kind, expected_effort) in [
+            (IdentityKind::Explorer, Some(ReasoningEffort::Low)),
+            (IdentityKind::Programmer, None),
+            (IdentityKind::Reviewer, Some(ReasoningEffort::Medium)),
+        ] {
+            let model = format!("{identity_kind:?}-model");
+            let identity = identity_for_kind(identity_kind, model.clone(), None);
+            let summary_event =
+                session_configured_for_summary(&session_configured, Some(&identity));
+
+            assert_eq!(
+                (
+                    summary_event.identity_kind,
+                    summary_event.model,
+                    summary_event.reasoning_effort,
+                ),
+                (identity_kind, model, expected_effort)
+            );
+        }
+
+        assert_eq!(
+            serde_json::to_value(&session_configured).expect("serialize unchanged event"),
+            original
+        );
+    }
+
+    #[test]
+    fn session_configured_summary_without_identity_is_unchanged() {
+        let session_configured = test_session_configured_event();
+        let summary_event = session_configured_for_summary(&session_configured, None);
+
+        assert_eq!(
+            serde_json::to_value(summary_event).expect("serialize summary event"),
+            serde_json::to_value(session_configured).expect("serialize original event")
+        );
     }
 
     #[test]
