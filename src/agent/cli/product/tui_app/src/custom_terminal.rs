@@ -261,7 +261,7 @@ where
         } else {
             None
         };
-        let force_full_repaint = self.force_full_viewport_repaint;
+        let force_full_repaint = self.force_full_viewport_repaint || clear_tail_after_viewport;
         let mut updates = diff_buffers_with_full_repaint(
             self.previous_buffer(),
             self.current_buffer(),
@@ -557,6 +557,15 @@ enum DrawCommand {
     ClearToEnd { x: u16, y: u16, bg: Color },
 }
 
+#[derive(Debug)]
+struct RowDiffInfo {
+    bg: Color,
+    paints_explicit_background: bool,
+    last_nonblank_column: usize,
+    changed: bool,
+    has_physical_repaint_risk: bool,
+}
+
 fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
     diff_buffers_with_full_repaint(a, b, false)
 }
@@ -569,13 +578,20 @@ fn diff_buffers_with_full_repaint(
     let previous_buffer = &a.content;
     let next_buffer = &b.content;
 
-    let mut updates = vec![];
+    let mut row_infos = Vec::with_capacity(a.area.height as usize);
     for y in 0..a.area.height {
         let row_start = y as usize * a.area.width as usize;
         let row_end = row_start + a.area.width as usize;
         let row = &next_buffer[row_start..row_end];
         let previous_row = &previous_buffer[row_start..row_end];
         if row.is_empty() {
+            row_infos.push(RowDiffInfo {
+                bg: Color::Reset,
+                paints_explicit_background: false,
+                last_nonblank_column: 0,
+                changed: false,
+                has_physical_repaint_risk: false,
+            });
             continue;
         }
         let bg = row.last().map(|cell| cell.bg).unwrap_or(Color::Reset);
@@ -583,10 +599,9 @@ fn diff_buffers_with_full_repaint(
         // Scan the row to find the rightmost column that still matters: any non-space glyph,
         // any cell whose bg differs from the row's trailing bg, or any cell with modifiers.
         // Multi-width glyphs extend that region through their full displayed width.
-        // Rows are dirty only when the logical buffer changed or an explicit viewport
-        // invalidation requests a repaint. Wide/CJK/OSC cells affect how we repaint a dirty row,
-        // not whether an unchanged row should be repainted every animation frame; physical screen
-        // divergence should be repaired with an explicit viewport invalidation.
+        // If any row changes during a frame, every visible row with wide/CJK/OSC content is also
+        // repainted. This keeps the physical terminal synchronized even when its screen diverges
+        // from the unchanged logical buffer during an unrelated status or composer update.
         // Default-background dirty rows are cleared from column zero before repainting so stale
         // wide-cell fragments cannot survive inside the text span. Rows with explicit background
         // colors are repainted cell-by-cell because some terminals and multiplexers handle colored
@@ -611,23 +626,46 @@ fn diff_buffers_with_full_repaint(
             .iter()
             .zip(previous_row.iter())
             .any(|(current, previous)| current != previous);
-        let row_is_dirty = force_full_repaint || row_changed;
+        let has_physical_repaint_risk = row
+            .iter()
+            .any(|cell| !cell.skip && symbol_has_physical_repaint_risk(cell.symbol()));
+        row_infos.push(RowDiffInfo {
+            bg,
+            paints_explicit_background,
+            last_nonblank_column,
+            changed: row_changed,
+            has_physical_repaint_risk,
+        });
+    }
+
+    let frame_has_content_updates = force_full_repaint || row_infos.iter().any(|info| info.changed);
+    let mut updates = vec![];
+    for (y, info) in row_infos.into_iter().enumerate() {
+        let row_start = y * a.area.width as usize;
+        let row_end = row_start + a.area.width as usize;
+        let row = &next_buffer[row_start..row_end];
+        if row.is_empty() {
+            continue;
+        }
+        let row_is_dirty = force_full_repaint
+            || info.changed
+            || (frame_has_content_updates && info.has_physical_repaint_risk);
         if !row_is_dirty {
             continue;
         }
 
-        if !paints_explicit_background {
+        if !info.paints_explicit_background {
             let (x, y) = a.pos_of(row_start);
-            updates.push(DrawCommand::ClearToEnd { x, y, bg });
+            updates.push(DrawCommand::ClearToEnd { x, y, bg: info.bg });
         }
 
         // Repaint dirty rows left-to-right instead of sending only sparse changed cells. This
         // repairs rare cases where the real terminal screen has stale cells even though the
         // previous in-memory buffer still matches most of the row.
-        let repaint_end = if paints_explicit_background {
+        let repaint_end = if info.paints_explicit_background {
             row.len().saturating_sub(1)
         } else {
-            last_nonblank_column
+            info.last_nonblank_column
         };
         let mut to_skip = 0usize;
         for column in 0..=repaint_end {
@@ -1506,12 +1544,12 @@ mod tests {
     }
 
     #[test]
-    fn diff_buffers_skips_unchanged_cjk_rows_when_status_animates() {
+    fn diff_buffers_repaints_unchanged_risky_rows_when_other_row_changes() {
         let area = Rect::new(0, 0, 80, 4);
         let mut previous = Buffer::empty(area);
         let mut next = Buffer::empty(area);
 
-        let static_cjk = "这是一个静态中文回答，状态动画不应该让这一行每帧重绘。";
+        let static_cjk = "这是一个静态中文回答，状态动画变化时需要校准这一行。";
         previous.set_string(0, 0, static_cjk, Style::default());
         next.set_string(0, 0, static_cjk, Style::default());
 
@@ -1521,11 +1559,11 @@ mod tests {
         let commands = diff_buffers(&previous, &next);
 
         assert!(
-            commands.iter().all(|command| !matches!(
+            commands.iter().any(|command| matches!(
                 command,
                 DrawCommand::ClearToEnd { y: 0, .. } | DrawCommand::Put { y: 0, .. }
             )),
-            "unchanged CJK row should not repaint during unrelated animation; commands: {commands:?}",
+            "unchanged risky row should repaint during an unrelated content update; commands: {commands:?}",
         );
         assert!(
             commands.iter().any(|command| matches!(
@@ -1533,6 +1571,136 @@ mod tests {
                 DrawCommand::ClearToEnd { y: 3, .. } | DrawCommand::Put { y: 3, .. }
             )),
             "changed status row should still repaint; commands: {commands:?}",
+        );
+    }
+
+    #[test]
+    fn diff_buffers_skips_unchanged_risky_rows_when_frame_is_idle() {
+        let area = Rect::new(0, 0, 80, 2);
+        let mut previous = Buffer::empty(area);
+        let mut next = Buffer::empty(area);
+        let static_cjk = "完全空闲的帧不应该重复输出中文风险行。";
+        previous.set_string(0, 0, static_cjk, Style::default());
+        next.set_string(0, 0, static_cjk, Style::default());
+
+        let commands = diff_buffers(&previous, &next);
+
+        assert!(
+            commands.is_empty(),
+            "idle frame should not repaint unchanged risky rows; commands: {commands:?}"
+        );
+    }
+
+    #[test]
+    fn diff_buffers_keeps_unchanged_ascii_rows_incremental() {
+        let area = Rect::new(0, 0, 80, 4);
+        let mut previous = Buffer::empty(area);
+        let mut next = Buffer::empty(area);
+        let static_ascii = "plain ASCII transcript row remains incremental";
+        previous.set_string(0, 0, static_ascii, Style::default());
+        next.set_string(0, 0, static_ascii, Style::default());
+        previous.set_string(0, 3, "Working /", Style::default());
+        next.set_string(0, 3, "Working -", Style::default());
+
+        let commands = diff_buffers(&previous, &next);
+
+        assert!(
+            commands.iter().all(|command| !matches!(
+                command,
+                DrawCommand::ClearToEnd { y: 0, .. } | DrawCommand::Put { y: 0, .. }
+            )),
+            "unchanged ASCII row should remain incremental; commands: {commands:?}",
+        );
+        assert!(
+            commands.iter().any(|command| matches!(
+                command,
+                DrawCommand::ClearToEnd { y: 3, .. } | DrawCommand::Put { y: 3, .. }
+            )),
+            "changed status row should repaint; commands: {commands:?}",
+        );
+    }
+
+    #[test]
+    fn unrelated_status_update_repairs_session_model_name_order() {
+        let backend = crate::product::tui_app::test_backend::VT100Backend::new(120, 4);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 120, 4));
+        let correct = "方案取舍也清楚了：只给 gpt-5.6-sol 模型卡补工具名是局部修补";
+        let corrupted = "方案取舍也清楚了：只给 g-5.pt6-sol 模型卡补工具名是局部修补";
+
+        terminal
+            .draw(|frame| {
+                frame.buffer.set_string(0, 0, correct, Style::default());
+                frame
+                    .buffer
+                    .set_string(0, 3, "• Working /", Style::default());
+            })
+            .expect("draw correct session row");
+
+        corrupt_backend_row(&mut terminal, 0, corrupted);
+        assert!(
+            terminal
+                .backend()
+                .vt100()
+                .screen()
+                .contents()
+                .contains("g-5.pt6-sol"),
+            "test setup should corrupt the model name"
+        );
+
+        terminal
+            .draw(|frame| {
+                frame.buffer.set_string(0, 0, correct, Style::default());
+                frame
+                    .buffer
+                    .set_string(0, 3, "• Working -", Style::default());
+            })
+            .expect("draw unrelated status update");
+
+        let contents = terminal.backend().vt100().screen().contents();
+        assert!(
+            contents.contains("gpt-5.6-sol"),
+            "unrelated status update should repair the model name: {contents:?}"
+        );
+        assert!(
+            !contents.contains("g-5.pt6-sol"),
+            "terminal kept the stale model-name order: {contents:?}"
+        );
+    }
+
+    #[test]
+    fn diff_buffers_repaints_unchanged_risky_explicit_background_row_to_end() {
+        let area = Rect::new(0, 0, 12, 2);
+        let mut previous = Buffer::empty(area);
+        let mut next = Buffer::empty(area);
+        let row_style = Style::default().bg(Color::Blue);
+        previous.set_string(0, 0, "中文", row_style);
+        next.set_string(0, 0, "中文", row_style);
+        for x in 0..area.width {
+            previous
+                .cell_mut((x, 0))
+                .expect("cell should exist")
+                .set_style(row_style);
+            next.cell_mut((x, 0))
+                .expect("cell should exist")
+                .set_style(row_style);
+        }
+        previous.set_string(0, 1, "status /", Style::default());
+        next.set_string(0, 1, "status -", Style::default());
+
+        let commands = diff_buffers(&previous, &next);
+
+        assert!(
+            commands
+                .iter()
+                .all(|command| !matches!(command, DrawCommand::ClearToEnd { y: 0, .. })),
+            "explicit-background risky row should avoid ClearToEnd; commands: {commands:?}"
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, DrawCommand::Put { x: 11, y: 0, .. })),
+            "explicit-background risky row should repaint through the final cell; commands: {commands:?}"
         );
     }
 

@@ -93,7 +93,6 @@ use crate::product::tui_app::sidebar::SidebarWidget;
 use crate::product::tui_app::style::proposed_plan_style;
 use crate::product::tui_app::test_backend::VT100Backend;
 use crate::product::tui_app::transcript_selection::TranscriptSelectionPoint;
-use crate::product::tui_app::transcript_view::TRANSCRIPT_VIEWPORT_REPAIR_FRAMES;
 use crate::product::tui_app::transcript_view::TranscriptRenderMode;
 use crate::product::tui_app::transcript_view::TranscriptView;
 use crate::product::tui_app::tui::FrameRequester;
@@ -3285,6 +3284,10 @@ fn assert_small_screen_final_answer_order(rendered: &str, context: &str, needle:
 
 const FOLLOW_UP_CJK_ORDER_TEXT: &str = "也就是说同一轮 follow-up 仍然发：";
 const FOLLOW_UP_CJK_STALE_ORDER_TEXT: &str = "也就是说同一 follow轮-up 仍然发：";
+const SESSION_MODEL_NAME_ORDER_TEXT: &str =
+    "方案取舍也清楚了：只给 gpt-5.6-sol 模型卡补工具名是局部修补";
+const SESSION_MODEL_NAME_STALE_ORDER_TEXT: &str =
+    "方案取舍也清楚了：只给 g-5.pt6-sol 模型卡补工具名是局部修补";
 
 fn assert_follow_up_cjk_order(rendered: &str, context: &str) {
     assert!(
@@ -3301,10 +3304,6 @@ fn render_chat_to_vt100_screen(
     chat: &ChatWidget,
     terminal: &mut crate::product::tui_app::custom_terminal::Terminal<VT100Backend>,
 ) -> String {
-    let width = terminal.backend().vt100().screen().size().1;
-    if chat.prepare_transcript_terminal_repaint(width) {
-        terminal.invalidate_viewport();
-    }
     terminal
         .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
         .expect("draw chat widget");
@@ -11418,14 +11417,23 @@ async fn live_tail_completion_repaint_repairs_screenshot_cjk_ascii_divergence() 
 
     let mut saw_committed_answer = false;
     for event in drain_events(&mut rx) {
-        if let Some(cell) = into_insert_history_cell(event) {
+        if let Some((cell, repaint_viewport)) =
+            into_insert_history_cell_with_viewport_repaint(event)
+        {
             let rendered = lines_to_single_string(&cell.display_lines(width));
             if cell.as_any().is::<AgentMessageCell>() {
                 saw_committed_answer = true;
+                assert!(
+                    repaint_viewport,
+                    "screenshot CJK final answer should request viewport repaint"
+                );
                 assert_screenshot_cjk_ascii_order(&rendered, "screenshot CJK/ASCII committed cell");
             }
             let cell: Arc<dyn HistoryCell> = Arc::from(cell);
             chat.insert_transcript_cell(cell);
+            if repaint_viewport {
+                terminal.invalidate_viewport();
+            }
         }
     }
     assert!(
@@ -11529,37 +11537,6 @@ async fn live_tail_completion_repaints_cybergym_fuzzer_cjk_ascii_divergence() {
     assert_cybergym_fuzzer_cjk_ascii_order(&screen, "CyberGym fuzzer repaired VT100 screen");
     let next_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
     assert_cybergym_fuzzer_cjk_ascii_order(&next_screen, "CyberGym fuzzer next VT100 frame");
-}
-
-#[tokio::test]
-async fn transcript_terminal_repaint_signal_is_bounded_for_unchanged_frame() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    let width = 180;
-    chat.last_rendered_width.set(Some(usize::from(width)));
-
-    chat.handle_codex_event(Event {
-        id: "one-shot-turn".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            model_context_window: None,
-            identity_kind: IdentityKind::Nobody,
-        }),
-    });
-    chat.handle_codex_event(Event {
-        id: "one-shot-delta".into(),
-        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-            delta: "request。input slimming 不是直接改写整个 agent 状态\n".to_string(),
-        }),
-    });
-    chat.on_commit_tick();
-
-    assert!(
-        !chat.prepare_transcript_terminal_repaint(width),
-        "new live tail should use normal diff repaint instead of terminal repair"
-    );
-    assert!(
-        !chat.prepare_transcript_terminal_repaint(width),
-        "unchanged live tail should not force terminal repaints"
-    );
 }
 
 #[tokio::test]
@@ -12473,6 +12450,8 @@ async fn follow_up_main_transcript_viewport_repaint_repairs_vt100_order() {
         "test setup should corrupt follow-up VT100 row: {corrupted_screen:?}"
     );
 
+    chat.bottom_pane
+        .set_composer_text("draft one".to_string(), Vec::new(), Vec::new());
     let repaired_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
     assert_follow_up_cjk_order(
         &repaired_screen,
@@ -12481,11 +12460,13 @@ async fn follow_up_main_transcript_viewport_repaint_repairs_vt100_order() {
 }
 
 #[tokio::test]
-async fn viewport_repaint_budget_exhaustion_keeps_unchanged_cjk_rows_incremental() {
+async fn session_model_name_order_is_repaired_by_same_height_composer_update() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     let width = 120;
     let height = 24;
     chat.last_rendered_width.set(Some(usize::from(width)));
+    chat.bottom_pane
+        .set_composer_text("draft one".to_string(), Vec::new(), Vec::new());
     let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
         VT100Backend::new(width, height),
     )
@@ -12493,27 +12474,46 @@ async fn viewport_repaint_budget_exhaustion_keeps_unchanged_cjk_rows_incremental
     terminal.set_viewport_area(Rect::new(0, 0, width, height));
 
     chat.insert_transcript_cell(Arc::new(AgentMessageCell::new_markdown(
-        FOLLOW_UP_CJK_ORDER_TEXT.to_string(),
+        SESSION_MODEL_NAME_ORDER_TEXT.to_string(),
         true,
     )));
 
-    let mut screen = String::new();
-    for _ in 0..TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
-        screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-        assert_follow_up_cjk_order(&screen, "follow-up budget frame");
-    }
-    let row = screen_row_containing(&screen, FOLLOW_UP_CJK_ORDER_TEXT);
-    corrupt_vt100_row(&mut terminal, row, FOLLOW_UP_CJK_STALE_ORDER_TEXT);
+    let _ = render_chat_to_vt100_screen(&chat, &mut terminal);
+    let initial_bottom_pane_height = chat.bottom_pane.desired_height(width);
+    let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    assert_eq!(
+        chat.bottom_pane.desired_height(width),
+        initial_bottom_pane_height,
+        "initial composer layout should settle before corrupting the transcript row"
+    );
+    assert!(
+        screen.contains(SESSION_MODEL_NAME_ORDER_TEXT),
+        "initial screen should contain the correct session model name: {screen:?}"
+    );
+    let row = screen_row_containing(&screen, SESSION_MODEL_NAME_ORDER_TEXT);
+    corrupt_vt100_row(&mut terminal, row, SESSION_MODEL_NAME_STALE_ORDER_TEXT);
     let corrupted_screen = terminal.backend().vt100().screen().contents();
     assert!(
-        corrupted_screen.contains(FOLLOW_UP_CJK_STALE_ORDER_TEXT),
-        "test setup should corrupt exhausted follow-up VT100 row: {corrupted_screen:?}"
+        corrupted_screen.contains(SESSION_MODEL_NAME_STALE_ORDER_TEXT),
+        "test setup should corrupt the session model name: {corrupted_screen:?}"
     );
 
-    let unchanged_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    chat.bottom_pane
+        .set_composer_text("draft two".to_string(), Vec::new(), Vec::new());
+    assert_eq!(
+        chat.bottom_pane.desired_height(width),
+        initial_bottom_pane_height,
+        "composer update must not move the transcript viewport"
+    );
+    let repaired_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    let repaired_row = screen_row_containing(&repaired_screen, SESSION_MODEL_NAME_ORDER_TEXT);
+    assert_eq!(
+        repaired_row, row,
+        "same-height composer update should leave the transcript row in place"
+    );
     assert!(
-        unchanged_screen.contains(FOLLOW_UP_CJK_STALE_ORDER_TEXT),
-        "exhausted budget should not repair unchanged CJK row every frame: {unchanged_screen:?}"
+        !repaired_screen.contains(SESSION_MODEL_NAME_STALE_ORDER_TEXT),
+        "composer update kept the stale session model name order: {repaired_screen:?}"
     );
 }
 
