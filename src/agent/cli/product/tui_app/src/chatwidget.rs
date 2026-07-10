@@ -660,7 +660,11 @@ pub(crate) struct ChatWidget {
     plan_delta_buffer: String,
     // True while a plan item is streaming.
     plan_item_active: bool,
+    // Heading from the latest completed proposed plan, retained across turn boundaries. A later
+    // completed plan replaces it or clears it when that plan has no heading.
     latest_proposed_plan_title: Option<String>,
+    // Full text of the latest completed proposed plan, retained across turn boundaries and
+    // replaced by the next completed plan.
     latest_proposed_plan_text: Option<String>,
     latest_update_plan: Option<UpdatePlanArgs>,
     // Status-indicator elapsed seconds captured at the last emitted final-message separator.
@@ -1093,8 +1097,6 @@ impl ChatWidget {
         self.plan_item_active = false;
         self.saw_plan_item_this_turn = false;
         self.pending_proposed_plan_rendered_this_turn = false;
-        self.latest_proposed_plan_text = None;
-        self.latest_proposed_plan_title = None;
         cleared_plan_stream
     }
 

@@ -3505,6 +3505,51 @@ async fn start_goal_from_proposed_plan_syncs_programmer_identity_and_starts_goal
 }
 
 #[tokio::test]
+async fn programmer_turn_keeps_sidebar_title_from_completed_proposed_plan() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::Identities, true);
+    chat.set_feature_enabled(Feature::Goals, true);
+    let planner_mask =
+        identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+            .expect("expected planner identity");
+    chat.set_identity_mask(planner_mask);
+
+    let plan_text = "# Preserve Sidebar Task\n- implement it";
+    chat.on_task_started();
+    chat.on_plan_item_completed(plan_text.to_string());
+    let expected_task = Some(TaskPanelSnapshot {
+        title: "Preserve Sidebar Task".to_string(),
+    });
+    assert_eq!(chat.sidebar_snapshot().task, expected_task);
+
+    let programmer_mask = identities::programmer_mask(chat.thread_manager.as_ref())
+        .expect("expected programmer identity");
+    chat.start_goal_from_proposed_plan(plan_text.to_string(), programmer_mask);
+
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::OverrideTurnContext {
+            identity: Some(Identity {
+                kind: IdentityKind::Programmer,
+                ..
+            }),
+            ..
+        })
+    );
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ThreadGoalStartFromProposedPlan { plan_text: submitted })
+            if submitted == plan_text
+    );
+
+    chat.on_task_started();
+
+    assert_eq!(chat.sidebar_snapshot().task, expected_task);
+    assert_eq!(chat.latest_proposed_plan_text.as_deref(), Some(plan_text));
+}
+
+#[tokio::test]
 async fn plan_implementation_popup_allows_transcript_page_scroll() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
@@ -4985,6 +5030,56 @@ async fn finalize_turn_clears_pending_proposed_plan_live_tail() {
     assert_eq!(
         plan_cell_count, 0,
         "expected finalize_turn not to insert proposed plan history"
+    );
+}
+
+#[tokio::test]
+async fn finalize_turn_clears_pending_plan_stream_but_keeps_latest_completed_plan() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+    chat.last_rendered_width.set(Some(80));
+
+    let completed_plan = "# Existing Task\n- Step 1\n";
+    chat.on_task_started();
+    chat.on_plan_item_completed(completed_plan.to_string());
+    chat.on_task_started();
+    chat.on_plan_delta("# Pending Replacement\n- Step 1\n".to_string());
+
+    assert!(chat.plan_stream_controller.is_some());
+    assert!(chat.plan_item_active);
+    assert!(
+        chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+            .is_some(),
+        "expected pending proposed plan live tail before finalizing turn"
+    );
+
+    chat.finalize_turn();
+
+    assert!(chat.plan_stream_controller.is_none());
+    assert!(chat.plan_delta_buffer.is_empty());
+    assert!(!chat.plan_item_active);
+    assert!(!chat.saw_plan_item_this_turn);
+    assert!(
+        chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+            .is_none(),
+        "expected no pending proposed plan live tail after finalizing turn"
+    );
+    assert_eq!(
+        (
+            chat.latest_proposed_plan_title.as_deref(),
+            chat.latest_proposed_plan_text.as_deref(),
+            chat.sidebar_snapshot().task,
+        ),
+        (
+            Some("Existing Task"),
+            Some(completed_plan),
+            Some(TaskPanelSnapshot {
+                title: "Existing Task".to_string(),
+            }),
+        )
     );
 }
 
