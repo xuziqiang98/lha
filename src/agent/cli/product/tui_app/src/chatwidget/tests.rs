@@ -8586,12 +8586,12 @@ async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
 
 #[tokio::test]
 async fn model_reasoning_selection_popup_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.6-sol")).await;
 
     chat.config.model_provider_id = "openai".to_string();
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
-    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
+    let preset = get_available_model(&chat, "gpt-5.6-sol");
     chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 80);

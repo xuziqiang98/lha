@@ -38,7 +38,9 @@ fn expected_models() -> Vec<ModelPreset> {
     let response: ModelsResponse = serde_json::from_str(include_str!("../../models.json"))
         .unwrap_or_else(|err| panic!("models.json should parse: {err}"));
     let builtin_presets = all_model_presets().clone();
-    let remote_presets: Vec<ModelPreset> = response.models.into_iter().map(Into::into).collect();
+    let mut remote_models = response.models;
+    remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
+    let remote_presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
     let mut merged = ModelPreset::merge(remote_presets, builtin_presets);
     merged = ModelPreset::filter_by_api_support(merged, false);
     for preset in &mut merged {

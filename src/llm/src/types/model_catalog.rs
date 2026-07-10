@@ -43,6 +43,8 @@ pub enum ReasoningEffort {
     Medium,
     High,
     XHigh,
+    Max,
+    Ultra,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
@@ -518,6 +520,8 @@ fn effort_rank(effort: ReasoningEffort) -> i32 {
         ReasoningEffort::Medium => 3,
         ReasoningEffort::High => 4,
         ReasoningEffort::XHigh => 5,
+        ReasoningEffort::Max => 6,
+        ReasoningEffort::Ultra => 7,
     }
 }
 
@@ -535,6 +539,48 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+
+    #[test]
+    fn max_and_ultra_reasoning_efforts_round_trip() {
+        let efforts = [ReasoningEffort::Max, ReasoningEffort::Ultra];
+
+        assert_eq!(
+            efforts.map(|effort| serde_json::to_value(effort).expect("serialize effort")),
+            [json!("max"), json!("ultra")]
+        );
+        assert_eq!(
+            [
+                serde_json::from_value::<ReasoningEffort>(json!("max")).expect("deserialize max"),
+                serde_json::from_value::<ReasoningEffort>(json!("ultra"))
+                    .expect("deserialize ultra"),
+            ],
+            efforts
+        );
+    }
+
+    #[test]
+    fn reasoning_effort_mapping_orders_max_and_ultra_after_xhigh() {
+        let presets = [
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::XHigh,
+                description: "xhigh".to_string(),
+            },
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::Max,
+                description: "max".to_string(),
+            },
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::Ultra,
+                description: "ultra".to_string(),
+            },
+        ];
+
+        let mapping = reasoning_effort_mapping_from_presets(&presets).expect("effort mapping");
+
+        assert_eq!(mapping[&ReasoningEffort::XHigh], ReasoningEffort::XHigh);
+        assert_eq!(mapping[&ReasoningEffort::Max], ReasoningEffort::Max);
+        assert_eq!(mapping[&ReasoningEffort::Ultra], ReasoningEffort::Ultra);
+    }
 
     #[test]
     fn price_accepts_number_and_string_as_micro_usd_fixed_point() {

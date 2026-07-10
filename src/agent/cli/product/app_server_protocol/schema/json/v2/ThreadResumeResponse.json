@@ -702,7 +702,9 @@
         "low",
         "medium",
         "high",
-        "xhigh"
+        "xhigh",
+        "max",
+        "ultra"
       ]
     },
     "ResourceLink": {

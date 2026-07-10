@@ -164,6 +164,12 @@ these fields:
 - `experimental_beta_feature_keys`: provider beta feature keys; and
 - `sse_fixture_path`: optional fixture path for tests.
 
+`ReasoningEffort` supports `None`, `Minimal`, `Low`, `Medium`, `High`, `XHigh`,
+`Max`, and `Ultra`. LHA preserves `Ultra` in configuration, state, and UI, but
+currently sends it to Responses API providers as `max`. Selecting `Ultra` does
+not enable Codex multi-agent v2; delegated jobs continue to follow LHA's
+existing agent-job behavior.
+
 ### Step 2: provide model metadata
 
 For quickstarts, `ModelInfo::minimal(model)` provides conservative defaults. For

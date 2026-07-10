@@ -874,6 +874,8 @@ impl ModelSelectionModal {
             ReasoningEffort::Medium => "Medium",
             ReasoningEffort::High => "High",
             ReasoningEffort::XHigh => "Extra high",
+            ReasoningEffort::Max => "Max",
+            ReasoningEffort::Ultra => "Ultra",
         }
     }
 
@@ -1109,6 +1111,38 @@ mod tests {
                 effort: Some(ReasoningEffort::High),
             }
         );
+    }
+
+    #[test]
+    fn max_and_ultra_reasoning_efforts_persist() {
+        let efforts = [ReasoningEffort::Max, ReasoningEffort::Ultra];
+
+        for effort in efforts {
+            let mut selection_context = context("gpt-5.6-sol");
+            selection_context.effective_reasoning_effort = Some(effort);
+            let mut modal = ModelSelectionModal::new(
+                vec![preset(
+                    "gpt-5.6-sol",
+                    "GPT-5.6-Sol",
+                    vec![ReasoningEffort::Max, ReasoningEffort::Ultra],
+                )],
+                selection_context,
+            )
+            .expect("modal");
+
+            assert_eq!(
+                modal.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+                ModelSelectionModalAction::None
+            );
+            assert_eq!(
+                modal.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+                ModelSelectionModalAction::PersistModelSelection {
+                    model: "gpt-5.6-sol".to_string(),
+                    provider_id: Some("openai".to_string()),
+                    effort: Some(effort),
+                }
+            );
+        }
     }
 
     #[test]

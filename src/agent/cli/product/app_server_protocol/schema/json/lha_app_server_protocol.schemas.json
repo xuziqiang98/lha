@@ -7221,7 +7221,9 @@
           "low",
           "medium",
           "high",
-          "xhigh"
+          "xhigh",
+          "max",
+          "ultra"
         ]
       },
       "ReasoningSummary": {
@@ -12396,7 +12398,9 @@
         "low",
         "medium",
         "high",
-        "xhigh"
+        "xhigh",
+        "max",
+        "ultra"
       ]
     },
     "ReasoningSummary": {

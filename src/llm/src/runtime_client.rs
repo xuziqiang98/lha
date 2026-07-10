@@ -350,7 +350,11 @@ impl LlmClientSession {
         let default_reasoning_effort = model_info.default_reasoning_level;
         let reasoning = if model_info.supports_reasoning_summaries {
             Some(Reasoning {
-                effort: self.state.effort.or(default_reasoning_effort),
+                effort: self
+                    .state
+                    .effort
+                    .or(default_reasoning_effort)
+                    .map(reasoning_effort_for_request),
                 summary: if self.state.summary == ReasoningSummary::None {
                     None
                 } else {
@@ -694,6 +698,13 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
         tools: tools_json,
         parallel_tool_calls: prompt.parallel_tool_calls,
         output_schema: prompt.output_schema.clone(),
+    }
+}
+
+fn reasoning_effort_for_request(effort: ReasoningEffort) -> ReasoningEffort {
+    match effort {
+        ReasoningEffort::Ultra => ReasoningEffort::Max,
+        effort => effort,
     }
 }
 
@@ -1277,6 +1288,22 @@ mod tests {
     use super::*;
     use crate::types::ReasoningItemContent;
     use serde_json::json;
+
+    #[test]
+    fn ultra_reasoning_uses_max_for_requests() {
+        assert_eq!(
+            [
+                reasoning_effort_for_request(ReasoningEffort::Ultra),
+                reasoning_effort_for_request(ReasoningEffort::Max),
+                reasoning_effort_for_request(ReasoningEffort::XHigh),
+            ],
+            [
+                ReasoningEffort::Max,
+                ReasoningEffort::Max,
+                ReasoningEffort::XHigh,
+            ]
+        );
+    }
 
     #[test]
     fn estimate_chat_input_tokens_counts_semantic_content() {

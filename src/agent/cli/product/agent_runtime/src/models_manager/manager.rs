@@ -985,6 +985,7 @@ mod tests {
     use crate::product::protocol::openai_models::ModelPricingCurrency;
     use crate::product::protocol::openai_models::ModelPricingUnit;
     use crate::product::protocol::openai_models::ModelsResponse;
+    use crate::product::protocol::openai_models::ReasoningEffortPreset;
     use crate::product::protocol::openai_models::UsdPerMillionTokensMicros;
     use crate::test_support::core::responses::mount_models_once;
     use chrono::Utc;
@@ -1663,6 +1664,8 @@ mod tests {
         let file_contents = include_str!("../../models.json");
         let response: ModelsResponse =
             serde_json::from_str(file_contents).expect("bundled models.json should deserialize");
+        let raw_response: serde_json::Value =
+            serde_json::from_str(file_contents).expect("bundled models.json should be valid JSON");
 
         let serialized =
             serde_json::to_string(&response).expect("bundled models.json should serialize");
@@ -1677,6 +1680,207 @@ mod tests {
             !response.models.is_empty(),
             "bundled models.json should contain at least one model"
         );
+        let gpt56_models = response
+            .models
+            .iter()
+            .filter(|model| model.slug.starts_with("gpt-5.6-"))
+            .map(|model| {
+                (
+                    model.slug.clone(),
+                    model.display_name.clone(),
+                    model.description.clone(),
+                    model.default_reasoning_level,
+                    model.supported_reasoning_levels.clone(),
+                    model.context_window,
+                    model.supported_in_api,
+                    model.supports_personality(),
+                    model.pricing.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            gpt56_models,
+            vec![
+                (
+                    "gpt-5.6-sol".to_string(),
+                    "GPT-5.6-Sol".to_string(),
+                    Some("Latest frontier agentic coding model.".to_string()),
+                    Some(ReasoningEffort::Low),
+                    vec![
+                        reasoning_preset(
+                            ReasoningEffort::Low,
+                            "Fast responses with lighter reasoning"
+                        ),
+                        reasoning_preset(
+                            ReasoningEffort::Medium,
+                            "Balances speed and reasoning depth for everyday tasks",
+                        ),
+                        reasoning_preset(
+                            ReasoningEffort::High,
+                            "Greater reasoning depth for complex problems",
+                        ),
+                        reasoning_preset(
+                            ReasoningEffort::XHigh,
+                            "Extra high reasoning depth for complex problems",
+                        ),
+                        reasoning_preset(
+                            ReasoningEffort::Max,
+                            "Maximum reasoning depth for the hardest problems",
+                        ),
+                        reasoning_preset(
+                            ReasoningEffort::Ultra,
+                            "Maximum reasoning depth; delegated jobs continue to follow LHA's existing agent-job behavior",
+                        ),
+                    ],
+                    Some(372_000),
+                    true,
+                    true,
+                    None,
+                ),
+                (
+                    "gpt-5.6-terra".to_string(),
+                    "GPT-5.6-Terra".to_string(),
+                    Some("Balanced agentic coding model for everyday work.".to_string()),
+                    Some(ReasoningEffort::Medium),
+                    vec![
+                        reasoning_preset(
+                            ReasoningEffort::Low,
+                            "Fast responses with lighter reasoning"
+                        ),
+                        reasoning_preset(
+                            ReasoningEffort::Medium,
+                            "Balances speed and reasoning depth for everyday tasks",
+                        ),
+                        reasoning_preset(
+                            ReasoningEffort::High,
+                            "Greater reasoning depth for complex problems",
+                        ),
+                        reasoning_preset(
+                            ReasoningEffort::XHigh,
+                            "Extra high reasoning depth for complex problems",
+                        ),
+                        reasoning_preset(
+                            ReasoningEffort::Max,
+                            "Maximum reasoning depth for the hardest problems",
+                        ),
+                        reasoning_preset(
+                            ReasoningEffort::Ultra,
+                            "Maximum reasoning depth; delegated jobs continue to follow LHA's existing agent-job behavior",
+                        ),
+                    ],
+                    Some(372_000),
+                    true,
+                    true,
+                    None,
+                ),
+                (
+                    "gpt-5.6-luna".to_string(),
+                    "GPT-5.6-Luna".to_string(),
+                    Some("Fast and affordable agentic coding model.".to_string()),
+                    Some(ReasoningEffort::Medium),
+                    vec![
+                        reasoning_preset(
+                            ReasoningEffort::Low,
+                            "Fast responses with lighter reasoning"
+                        ),
+                        reasoning_preset(
+                            ReasoningEffort::Medium,
+                            "Balances speed and reasoning depth for everyday tasks",
+                        ),
+                        reasoning_preset(
+                            ReasoningEffort::High,
+                            "Greater reasoning depth for complex problems",
+                        ),
+                        reasoning_preset(
+                            ReasoningEffort::XHigh,
+                            "Extra high reasoning depth for complex problems",
+                        ),
+                        reasoning_preset(
+                            ReasoningEffort::Max,
+                            "Maximum reasoning depth for the hardest problems",
+                        ),
+                    ],
+                    Some(372_000),
+                    true,
+                    true,
+                    None,
+                ),
+            ]
+        );
+
+        let lha_home = tempdir().expect("temp dir");
+        let auth_manager = Arc::new(AuthManager::new(
+            lha_home.path().to_path_buf(),
+            false,
+            AuthCredentialsStoreMode::File,
+        ));
+        let manager = ModelsManager::new(
+            lha_home.path().to_path_buf(),
+            auth_manager,
+            "openai",
+            RuntimeEndpoint::openai(),
+        );
+        let available = manager.build_available_models(response.models.clone());
+        let visible_models = available
+            .iter()
+            .filter(|model| model.show_in_picker)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            visible_models
+                .iter()
+                .map(|model| model.model.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna",
+                "gpt-5.5",
+                "gpt-5.3-codex",
+                "gpt-5.4",
+                "gpt-5.2-codex",
+                "gpt-5.1-codex-max",
+                "gpt-5.2",
+                "gpt-5.1-codex-mini",
+            ]
+        );
+        assert!(visible_models[0].is_default);
+        assert!(visible_models[1..].iter().all(|model| !model.is_default));
+
+        let raw_models = raw_response["models"]
+            .as_array()
+            .expect("models should be an array");
+        for model in raw_models.iter().take(3) {
+            for unsupported_field in [
+                "tool_mode",
+                "multi_agent_version",
+                "use_responses_lite",
+                "include_skills_usage_instructions",
+                "auto_review_model_override",
+                "comp_hash",
+                "default_service_tier",
+                "service_tiers",
+            ] {
+                assert_eq!(model.get(unsupported_field), None);
+            }
+            let localized_prompt = format!(
+                "{}{}{}",
+                model["base_instructions"].as_str().unwrap_or_default(),
+                model["model_messages"]["instructions_template"]
+                    .as_str()
+                    .unwrap_or_default(),
+                model["model_messages"]["instructions_variables"]
+            );
+            assert!(!localized_prompt.to_ascii_lowercase().contains("codex"));
+        }
+        assert_ne!(
+            raw_models[0]["model_messages"]["instructions_template"],
+            raw_models[1]["model_messages"]["instructions_template"]
+        );
+        assert_eq!(
+            raw_models[1]["model_messages"]["instructions_template"],
+            raw_models[2]["model_messages"]["instructions_template"]
+        );
+
         let gpt55 = response
             .models
             .iter()
@@ -1710,6 +1914,13 @@ mod tests {
                 ],
             })
         );
+    }
+
+    fn reasoning_preset(effort: ReasoningEffort, description: &str) -> ReasoningEffortPreset {
+        ReasoningEffortPreset {
+            effort,
+            description: description.to_string(),
+        }
     }
 
     #[test]
@@ -2277,7 +2488,7 @@ remote_models = false
             .await
             .expect("offline default model should resolve");
 
-        assert_eq!(model, "gpt-5.5");
+        assert_eq!(model, "gpt-5.6-sol");
     }
     #[tokio::test]
     async fn list_model_switcher_models_preserves_providerless_top_level_entry() {
