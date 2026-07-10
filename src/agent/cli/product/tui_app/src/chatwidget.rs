@@ -639,6 +639,8 @@ pub(crate) struct ChatWidget {
     pre_review_token_info: Option<Option<TokenUsageInfo>>,
     // True after the user submits /review and before the review banner is inserted.
     pending_review_start_transition: bool,
+    // Status elapsed time preserved when review progress is hidden before TurnComplete.
+    pending_review_elapsed_secs: Option<u64>,
     // Whether the next streamed assistant content should be preceded by a final message separator.
     //
     // This is set whenever we insert a visible history cell that conceptually belongs to a turn.
@@ -1151,12 +1153,11 @@ impl ChatWidget {
         true
     }
 
-    fn final_message_separator(&self) -> Option<history_cell::FinalMessageSeparator> {
+    fn final_message_separator(
+        &self,
+        elapsed_seconds: Option<u64>,
+    ) -> Option<history_cell::FinalMessageSeparator> {
         let runtime_metrics = self.otel_manager.runtime_metrics_summary()?;
-        let elapsed_seconds = self
-            .bottom_pane
-            .status_widget()
-            .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
         Some(history_cell::FinalMessageSeparator::new(
             elapsed_seconds,
             Some(runtime_metrics),
@@ -1576,6 +1577,10 @@ impl ChatWidget {
         self.clear_unified_exec_processes();
         self.current_status = StatusIndicatorState::working();
         self.retry_status = None;
+        self.pending_review_elapsed_secs = self
+            .bottom_pane
+            .status_widget()
+            .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
         self.bottom_pane.hide_status_indicator();
         self.request_redraw();
     }
@@ -1630,6 +1635,7 @@ impl ChatWidget {
 
     fn on_task_started(&mut self) {
         let defer_review_redraw = self.pending_review_start_transition;
+        self.pending_review_elapsed_secs = None;
         self.agent_turn_running = true;
         self.turn_sleep_inhibitor
             .set_turn_running(/* turn_running */ true);
@@ -1664,10 +1670,16 @@ impl ChatWidget {
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
         // If a stream is currently active, finalize it.
+        let pending_review_elapsed_secs = self.pending_review_elapsed_secs.take();
         let final_separator = if from_replay {
             None
         } else {
-            self.final_message_separator()
+            let elapsed_seconds = self
+                .bottom_pane
+                .status_widget()
+                .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
+                .or(pending_review_elapsed_secs);
+            self.final_message_separator(elapsed_seconds)
         };
         let (_flushed_answer, mut final_separator) =
             self.flush_answer_stream_with_separator_impl(false, final_separator);
@@ -1893,6 +1905,7 @@ impl ChatWidget {
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_cell_as_failed();
         // Reset running state and clear streaming buffers.
+        self.pending_review_elapsed_secs = None;
         self.agent_turn_running = false;
         self.turn_sleep_inhibitor
             .set_turn_running(/* turn_running */ false);
@@ -3043,6 +3056,7 @@ impl ChatWidget {
             is_review_mode: false,
             pre_review_token_info: None,
             pending_review_start_transition: false,
+            pending_review_elapsed_secs: None,
             needs_final_message_separator: false,
             had_work_activity: false,
             saw_plan_update_this_turn: false,
@@ -3223,6 +3237,7 @@ impl ChatWidget {
             is_review_mode: false,
             pre_review_token_info: None,
             pending_review_start_transition: false,
+            pending_review_elapsed_secs: None,
             needs_final_message_separator: false,
             had_work_activity: false,
             saw_plan_update_this_turn: false,

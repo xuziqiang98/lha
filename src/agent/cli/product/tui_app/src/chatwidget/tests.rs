@@ -2709,6 +2709,7 @@ async fn make_chatwidget_manual_inner_with_otel(
         is_review_mode: false,
         pre_review_token_info: None,
         pending_review_start_transition: false,
+        pending_review_elapsed_secs: None,
         needs_final_message_separator: false,
         had_work_activity: false,
         saw_plan_update_this_turn: false,
@@ -2890,6 +2891,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         is_review_mode: false,
         pre_review_token_info: None,
         pending_review_start_transition: false,
+        pending_review_elapsed_secs: None,
         needs_final_message_separator: false,
         had_work_activity: false,
         saw_plan_update_this_turn: false,
@@ -11650,7 +11652,11 @@ async fn review_exit_explanation_requests_viewport_repaint() {
 
 #[tokio::test]
 async fn review_exit_clears_progress_status_and_unified_exec_footer_before_turn_complete() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let cfg = test_config().await;
+    let model = "gpt-5";
+    let otel_manager = test_otel_manager_with_runtime_reader(&cfg, model);
+    let (mut chat, mut rx, _op_rx) =
+        make_chatwidget_manual_inner_with_otel(Some(model), Some(otel_manager.clone())).await;
     chat.handle_codex_event(Event {
         id: "review-turn-start".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
@@ -11658,6 +11664,7 @@ async fn review_exit_clears_progress_status_and_unified_exec_footer_before_turn_
             identity_kind: IdentityKind::Nobody,
         }),
     });
+    record_test_runtime_metrics(&otel_manager);
     chat.handle_codex_event(Event {
         id: "review-start".into(),
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
@@ -11724,6 +11731,7 @@ async fn review_exit_clears_progress_status_and_unified_exec_footer_before_turn_
     });
 
     assert!(chat.bottom_pane.status_widget().is_none());
+    assert!(chat.pending_review_elapsed_secs.is_some());
     assert!(chat.bottom_pane.unified_exec_processes().is_empty());
     assert!(chat.unified_exec_processes.is_empty());
     assert!(chat.last_unified_wait.is_none());
@@ -11751,6 +11759,20 @@ async fn review_exit_clears_progress_status_and_unified_exec_footer_before_turn_
             last_agent_message: None,
         }),
     });
+
+    let completion_history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(
+        completion_history.contains("Worked for"),
+        "review runtime separator should preserve elapsed time: {completion_history:?}"
+    );
+    assert!(
+        completion_history.contains("Inference:"),
+        "review runtime separator should preserve runtime metrics: {completion_history:?}"
+    );
+    assert!(chat.pending_review_elapsed_secs.is_none());
     assert!(!chat.bottom_pane.is_task_running());
 }
 
@@ -11810,11 +11832,22 @@ async fn interrupted_review_exit_clears_progress_ui() {
     });
 
     assert!(chat.bottom_pane.status_widget().is_none());
+    assert!(chat.pending_review_elapsed_secs.is_some());
     assert!(chat.bottom_pane.unified_exec_processes().is_empty());
     assert!(chat.unified_exec_processes.is_empty());
     assert!(chat.reasoning_buffer.is_empty());
     assert!(chat.full_reasoning_buffer.is_empty());
     assert!(chat.bottom_pane.is_task_running());
+
+    chat.handle_codex_event(Event {
+        id: "review-turn-aborted".into(),
+        msg: EventMsg::TurnAborted(crate::product::agent::protocol::TurnAbortedEvent {
+            reason: TurnAbortReason::ReviewEnded,
+        }),
+    });
+
+    assert!(chat.pending_review_elapsed_secs.is_none());
+    assert!(!chat.bottom_pane.is_task_running());
 }
 
 #[tokio::test]
