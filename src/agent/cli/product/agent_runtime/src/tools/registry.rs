@@ -152,7 +152,7 @@ impl ToolRegistry {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConfiguredToolSpec {
     pub spec: ToolDescriptor,
     pub supports_parallel_tool_calls: bool,

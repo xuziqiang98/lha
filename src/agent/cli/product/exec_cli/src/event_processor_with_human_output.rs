@@ -146,6 +146,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             config,
             session_configured_event.model.as_str(),
             session_configured_event.identity_kind,
+            session_configured_event.reasoning_effort,
         );
         entries.push((
             "session id",

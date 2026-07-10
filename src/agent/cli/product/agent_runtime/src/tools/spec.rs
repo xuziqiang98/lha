@@ -1643,6 +1643,23 @@ pub(crate) fn build_specs(
     let goal_handler = Arc::new(GoalHandler);
     let memories_handler = Arc::new(MemoriesHandler);
     let imagegen_handler = Arc::new(ImagegenHandler);
+    let converted_dynamic_tools = dynamic_tools
+        .iter()
+        .filter_map(|tool| match dynamic_tool_to_openai_tool(tool) {
+            Ok(converted_tool) => Some((tool, converted_tool)),
+            Err(e) => {
+                tracing::error!(
+                    "Failed to convert dynamic tool {:?} to OpenAI tool: {e:?}",
+                    tool.name
+                );
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    let dynamic_tool_names = converted_dynamic_tools
+        .iter()
+        .map(|(tool, _)| tool.name.as_str())
+        .collect::<BTreeSet<_>>();
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
@@ -1834,7 +1851,9 @@ pub(crate) fn build_specs(
         }
     }
 
-    if navigation_tool_is_supported(config, "grep_files") {
+    if navigation_tool_is_supported(config, "grep_files")
+        && !dynamic_tool_names.contains("grep_files")
+    {
         let grep_files_handler = Arc::new(GrepFilesHandler);
         maybe_push_spec_with_parallel_support_and_register_handler(
             &mut builder,
@@ -1846,7 +1865,9 @@ pub(crate) fn build_specs(
         );
     }
 
-    if navigation_tool_is_supported(config, "read_file") {
+    if navigation_tool_is_supported(config, "read_file")
+        && !dynamic_tool_names.contains("read_file")
+    {
         let read_file_handler = Arc::new(ReadFileHandler);
         maybe_push_spec_with_parallel_support_and_register_handler(
             &mut builder,
@@ -1858,7 +1879,8 @@ pub(crate) fn build_specs(
         );
     }
 
-    if navigation_tool_is_supported(config, "list_dir") {
+    if navigation_tool_is_supported(config, "list_dir") && !dynamic_tool_names.contains("list_dir")
+    {
         let list_dir_handler = Arc::new(ListDirHandler);
         maybe_push_spec_with_parallel_support_and_register_handler(
             &mut builder,
@@ -1964,26 +1986,14 @@ pub(crate) fn build_specs(
         }
     }
 
-    if !dynamic_tools.is_empty() {
-        for tool in dynamic_tools {
-            match dynamic_tool_to_openai_tool(tool) {
-                Ok(converted_tool) => {
-                    maybe_push_spec_and_register_handler(
-                        &mut builder,
-                        config,
-                        ToolDescriptor::Function(converted_tool),
-                        tool.name.clone(),
-                        dynamic_tool_handler.clone(),
-                    );
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to convert dynamic tool {:?} to OpenAI tool: {e:?}",
-                        tool.name
-                    );
-                }
-            }
-        }
+    for (tool, converted_tool) in converted_dynamic_tools {
+        maybe_push_spec_and_register_handler(
+            &mut builder,
+            config,
+            ToolDescriptor::Function(converted_tool),
+            tool.name.clone(),
+            dynamic_tool_handler.clone(),
+        );
     }
 
     builder
@@ -2276,6 +2286,95 @@ mod tests {
         assert!(registry.handler("shell").is_some());
         assert!(registry.handler("local_shell").is_some());
         assert!(registry.handler("shell_command").is_some());
+    }
+
+    #[test]
+    fn forced_navigation_tools_defer_to_valid_dynamic_tools() {
+        let config = test_config();
+        let mut model_info =
+            ModelsManager::construct_model_info_offline("test-gpt-5-codex", &config);
+        model_info.experimental_supported_tools.clear();
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Identities);
+        let dynamic_tools = ["grep_files", "read_file", "list_dir"]
+            .into_iter()
+            .map(|name| DynamicToolSpec {
+                name: name.to_string(),
+                description: format!("Dynamic {name}"),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "dynamic_argument": { "type": "string" }
+                    },
+                    "required": ["dynamic_argument"],
+                    "additionalProperties": false
+                }),
+            })
+            .collect::<Vec<_>>();
+
+        for identity_kind in [IdentityKind::Explorer, IdentityKind::Reviewer] {
+            let tools_config = ToolsConfig::new(&ToolsConfigParams {
+                model_info: &model_info,
+                declared_tool_contract: false,
+                features: &features,
+                web_search_mode: None,
+                image_generation_tools: false,
+                memory_tools: false,
+                session_source: SessionSource::Cli,
+            })
+            .with_identity_kind(identity_kind);
+            let (tools, registry) =
+                build_specs(&tools_config, Some(HashMap::new()), &dynamic_tools).build();
+
+            assert_contains_tool_names(&tools, &["grep_files", "read_file", "list_dir"]);
+            for dynamic_tool in &dynamic_tools {
+                let expected = ConfiguredToolSpec::new(
+                    ToolDescriptor::Function(
+                        dynamic_tool_to_openai_tool(dynamic_tool)
+                            .expect("dynamic navigation tool should convert"),
+                    ),
+                    false,
+                );
+
+                assert_eq!(find_tool(&tools, &dynamic_tool.name), &expected);
+                assert!(registry.handler(&dynamic_tool.name).is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_dynamic_navigation_tool_keeps_forced_builtin() {
+        let config = test_config();
+        let mut model_info =
+            ModelsManager::construct_model_info_offline("test-gpt-5-codex", &config);
+        model_info.experimental_supported_tools.clear();
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Identities);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            declared_tool_contract: false,
+            features: &features,
+            web_search_mode: None,
+            image_generation_tools: false,
+            memory_tools: false,
+            session_source: SessionSource::Cli,
+        })
+        .with_identity_kind(IdentityKind::Explorer);
+        let dynamic_tools = vec![DynamicToolSpec {
+            name: "read_file".to_string(),
+            description: "Invalid dynamic read_file".to_string(),
+            input_schema: json!({ "type": "null" }),
+        }];
+
+        let (tools, registry) =
+            build_specs(&tools_config, Some(HashMap::new()), &dynamic_tools).build();
+
+        assert_contains_tool_names(&tools, &["grep_files", "read_file", "list_dir"]);
+        assert_eq!(
+            find_tool(&tools, "read_file"),
+            &ConfiguredToolSpec::new(create_read_file_tool(), true)
+        );
+        assert!(registry.handler("read_file").is_some());
     }
 
     #[test]
