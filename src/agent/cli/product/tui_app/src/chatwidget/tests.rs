@@ -11649,6 +11649,175 @@ async fn review_exit_explanation_requests_viewport_repaint() {
 }
 
 #[tokio::test]
+async fn review_exit_clears_progress_status_and_unified_exec_footer_before_turn_complete() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.handle_codex_event(Event {
+        id: "review-turn-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: Some("current changes".to_string()),
+        }),
+    });
+
+    begin_unified_exec_startup(
+        &mut chat,
+        "review-exec",
+        "review-process",
+        "cargo test -p lha",
+    );
+    let process = chat
+        .unified_exec_processes
+        .iter_mut()
+        .find(|process| process.key == "review-process")
+        .expect("review process should be tracked");
+    process.started_at = Instant::now() - UNIFIED_EXEC_VISIBILITY_DELAY - Duration::from_millis(1);
+    chat.prepare_for_draw();
+
+    chat.handle_codex_event(Event {
+        id: "review-reasoning".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Planning evidence reference**\n\n<!-- -->".into(),
+        }),
+    });
+    chat.last_unified_wait = Some(UnifiedExecWaitState::new("cargo test -p lha".to_string()));
+    chat.unified_exec_wait_streak = Some(UnifiedExecWaitStreak::new(
+        "review-process".to_string(),
+        Some("cargo test -p lha".to_string()),
+    ));
+    chat.retry_status = Some(StatusIndicatorState {
+        header: "Retrying review".to_string(),
+        details: None,
+        details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
+    });
+
+    assert_eq!(
+        chat.current_status,
+        StatusIndicatorState {
+            header: "Planning evidence reference".to_string(),
+            details: None,
+            details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
+        }
+    );
+    assert_eq!(
+        chat.bottom_pane.unified_exec_processes(),
+        &["cargo test -p lha".to_string()]
+    );
+    assert_eq!(chat.unified_exec_processes.len(), 1);
+
+    chat.handle_codex_event(Event {
+        id: "review-exit".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: Some(ReviewOutputEvent {
+                findings: Vec::new(),
+                overall_correctness: "patch is correct".to_string(),
+                overall_explanation: "Review output remains visible.".to_string(),
+                overall_confidence_score: 0.9,
+            }),
+        }),
+    });
+
+    assert!(chat.bottom_pane.status_widget().is_none());
+    assert!(chat.bottom_pane.unified_exec_processes().is_empty());
+    assert!(chat.unified_exec_processes.is_empty());
+    assert!(chat.last_unified_wait.is_none());
+    assert!(chat.unified_exec_wait_streak.is_none());
+    assert!(chat.retry_status.is_none());
+    assert_eq!(chat.current_status, StatusIndicatorState::working());
+    assert!(chat.bottom_pane.is_task_running());
+
+    let visible_history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(
+        visible_history.contains("Review output remains visible."),
+        "review output should remain visible: {visible_history:?}"
+    );
+    assert!(
+        visible_history.contains("<< Code review finished >>"),
+        "review finished banner should remain visible: {visible_history:?}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "review-turn-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+    assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
+async fn interrupted_review_exit_clears_progress_ui() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.handle_codex_event(Event {
+        id: "review-turn-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: Some("current changes".to_string()),
+        }),
+    });
+
+    begin_unified_exec_startup(
+        &mut chat,
+        "review-exec",
+        "review-process",
+        "cargo test -p lha",
+    );
+    let process = chat
+        .unified_exec_processes
+        .iter_mut()
+        .find(|process| process.key == "review-process")
+        .expect("review process should be tracked");
+    process.started_at = Instant::now() - UNIFIED_EXEC_VISIBILITY_DELAY - Duration::from_millis(1);
+    chat.prepare_for_draw();
+    chat.handle_codex_event(Event {
+        id: "review-reasoning".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Planning evidence reference**\n\n<!-- -->".into(),
+        }),
+    });
+
+    assert_eq!(
+        chat.current_status,
+        StatusIndicatorState {
+            header: "Planning evidence reference".to_string(),
+            details: None,
+            details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
+        }
+    );
+    assert!(!chat.bottom_pane.unified_exec_processes().is_empty());
+
+    chat.handle_codex_event(Event {
+        id: "review-exit".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: None,
+        }),
+    });
+
+    assert!(chat.bottom_pane.status_widget().is_none());
+    assert!(chat.bottom_pane.unified_exec_processes().is_empty());
+    assert!(chat.unified_exec_processes.is_empty());
+    assert!(chat.reasoning_buffer.is_empty());
+    assert!(chat.full_reasoning_buffer.is_empty());
+    assert!(chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
 async fn review_reasoning_summary_before_review_output_is_not_visible() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let explanation = "No discrete correctness issues were found in the diff. The changes \

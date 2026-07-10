@@ -1567,6 +1567,19 @@ impl ChatWidget {
         self.full_reasoning_buffer.clear();
     }
 
+    fn finish_review_progress_ui(&mut self) {
+        self.clear_reasoning_buffers();
+        self.running_commands.clear();
+        self.suppressed_exec_calls.clear();
+        self.last_unified_wait = None;
+        self.unified_exec_wait_streak = None;
+        self.clear_unified_exec_processes();
+        self.current_status = StatusIndicatorState::working();
+        self.retry_status = None;
+        self.bottom_pane.hide_status_indicator();
+        self.request_redraw();
+    }
+
     fn on_reasoning_section_break(&mut self) {
         // Start a new reasoning block for header extraction and accumulate transcript.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
@@ -4737,7 +4750,7 @@ impl ChatWidget {
             // Final message is rendered as part of the AgentMessage.
         }
 
-        self.clear_reasoning_buffers();
+        self.finish_review_progress_ui();
         self.is_review_mode = false;
         self.restore_pre_review_token_info();
         // Append a finishing banner at the end of this turn.
