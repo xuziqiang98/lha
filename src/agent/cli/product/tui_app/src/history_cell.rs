@@ -847,7 +847,7 @@ impl HistoryCell for UnifiedExecInteractionCell {
             && !command.is_empty()
         {
             header_spans.push(" · ".dim());
-            header_spans.push(command.clone().dim());
+            header_spans.push(truncate_exec_snippet(command).dim());
         }
         let header = Line::from(header_spans);
 
@@ -3191,6 +3191,39 @@ mod tests {
         assert_eq!(
             lines,
             vec!["↳ Interacted with background terminal", "  └ (waited)"],
+        );
+    }
+
+    #[test]
+    fn unified_exec_interaction_cell_truncates_multiline_command() {
+        let cell = new_unified_exec_interaction(
+            Some("set -e\nprintf 'first'\nprintf 'second'".to_string()),
+            String::new(),
+        );
+        let lines = render_transcript(&cell);
+        assert_eq!(
+            lines,
+            vec![
+                "↳ Interacted with background terminal · set -e ...",
+                "  └ (waited)",
+            ],
+        );
+    }
+
+    #[test]
+    fn unified_exec_interaction_cell_truncates_long_single_line_command() {
+        let command = "x".repeat(100);
+        let cell = new_unified_exec_interaction(Some(command), String::new());
+        let lines = render_transcript(&cell);
+        assert_eq!(
+            lines,
+            vec![
+                format!(
+                    "↳ Interacted with background terminal · {}...",
+                    "x".repeat(77)
+                ),
+                "  └ (waited)".to_string(),
+            ],
         );
     }
 
