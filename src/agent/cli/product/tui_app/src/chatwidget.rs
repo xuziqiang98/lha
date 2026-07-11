@@ -685,6 +685,7 @@ pub(crate) struct ChatWidget {
     current_goal: Option<ThreadGoal>,
     current_goal_state_known: bool,
     external_editor_state: ExternalEditorState,
+    git_branch: Option<String>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -3093,6 +3094,7 @@ impl ChatWidget {
             current_goal: None,
             current_goal_state_known: false,
             external_editor_state: ExternalEditorState::Closed,
+            git_branch: None,
         };
 
         widget
@@ -3274,6 +3276,7 @@ impl ChatWidget {
             current_goal: None,
             current_goal_state_known: false,
             external_editor_state: ExternalEditorState::Closed,
+            git_branch: None,
         };
 
         widget
@@ -6613,14 +6616,29 @@ impl ChatWidget {
                 self.model_display_name().to_string(),
                 reasoning_effort,
                 format_directory_display(&self.config.cwd, None),
+                self.git_branch.clone(),
             );
         } else {
             self.bottom_pane.set_footer_info_without_redraw(
                 self.model_display_name().to_string(),
                 reasoning_effort,
                 format_directory_display(&self.config.cwd, None),
+                self.git_branch.clone(),
             );
         }
+    }
+
+    pub(crate) fn set_git_branch(&mut self, git_branch: Option<String>) {
+        if self.git_branch == git_branch {
+            return;
+        }
+        self.git_branch = git_branch;
+        self.update_footer_info();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn git_branch(&self) -> Option<&str> {
+        self.git_branch.as_deref()
     }
 
     /// Update the active identity mask.

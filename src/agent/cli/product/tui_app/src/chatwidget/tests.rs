@@ -2729,6 +2729,7 @@ async fn make_chatwidget_manual_inner_with_otel(
         current_goal: None,
         current_goal_state_known: false,
         external_editor_state: ExternalEditorState::Closed,
+        git_branch: None,
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
@@ -2911,6 +2912,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         current_goal: None,
         current_goal_state_known: false,
         external_editor_state: ExternalEditorState::Closed,
+        git_branch: None,
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)

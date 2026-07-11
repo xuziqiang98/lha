@@ -118,6 +118,16 @@ pub(crate) enum AppEvent {
     /// Result of computing a `/changelog` command.
     ChangelogResult(Result<ChangelogOutput, String>),
 
+    /// Refresh the Git branch displayed for the current working directory.
+    RequestGitBranchRefresh,
+
+    /// Result of an asynchronous Git branch refresh.
+    GitBranchRefreshResult {
+        cwd: PathBuf,
+        generation: u64,
+        branch: Option<String>,
+    },
+
     #[allow(dead_code)]
     /// Open the app link view in the bottom pane.
     OpenAppLink {

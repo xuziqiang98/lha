@@ -70,6 +70,7 @@ pub(crate) struct FooterProps {
     pub(crate) model_name: String,
     pub(crate) reasoning_effort: Option<String>,
     pub(crate) cwd: String,
+    pub(crate) git_branch: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -231,6 +232,7 @@ struct FooterInfoState {
     show_reasoning: bool,
     show_context: bool,
     show_cwd: bool,
+    show_git_branch: bool,
 }
 
 fn mode_indicator_line(
@@ -266,6 +268,13 @@ fn footer_info_line(props: &FooterProps, state: FooterInfoState) -> Line<'static
         spans.push(Span::from(props.cwd.clone()).dim());
     }
 
+    if state.show_git_branch
+        && let Some(git_branch) = &props.git_branch
+    {
+        spans.push(" · ".dim());
+        spans.push(Span::from(git_branch.clone()).dim());
+    }
+
     Line::from(spans)
 }
 
@@ -276,21 +285,31 @@ fn footer_info_variants(props: &FooterProps) -> Vec<(FooterInfoState, Line<'stat
             show_reasoning: true,
             show_context: true,
             show_cwd: true,
+            show_git_branch: true,
+        },
+        FooterInfoState {
+            show_reasoning: true,
+            show_context: true,
+            show_cwd: true,
+            show_git_branch: false,
         },
         FooterInfoState {
             show_reasoning: true,
             show_context: true,
             show_cwd: false,
+            show_git_branch: false,
         },
         FooterInfoState {
             show_reasoning: true,
             show_context: false,
             show_cwd: false,
+            show_git_branch: false,
         },
         FooterInfoState {
             show_reasoning: false,
             show_context: false,
             show_cwd: false,
+            show_git_branch: false,
         },
     ];
 
@@ -467,6 +486,7 @@ fn footer_from_props_lines(
                 show_reasoning: true,
                 show_context: true,
                 show_cwd: true,
+                show_git_branch: true,
             },
         )],
         FooterMode::ShortcutOverlay => {
@@ -484,6 +504,7 @@ fn footer_from_props_lines(
                 show_reasoning: true,
                 show_context: true,
                 show_cwd: true,
+                show_git_branch: true,
             },
         )],
     }
@@ -844,6 +865,7 @@ mod tests {
             model_name: "gpt-5.4".to_string(),
             reasoning_effort: Some("high".to_string()),
             cwd: "~/Workspace/lha".to_string(),
+            git_branch: None,
         }
     }
 
@@ -915,6 +937,13 @@ mod tests {
             .find(|span| span.content.as_ref() == text)
             .map(|span| span.style)
             .unwrap_or_else(|| panic!("missing span: {text}"))
+    }
+
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
     }
 
     #[test]
@@ -1051,9 +1080,10 @@ mod tests {
     }
 
     #[test]
-    fn footer_info_line_dims_model_effort_context_and_cwd() {
+    fn footer_info_line_dims_model_effort_context_cwd_and_git_branch() {
         let props = FooterProps {
             context_window_percent: Some(84),
+            git_branch: Some("feature/footer".to_string()),
             ..test_footer_props(FooterMode::ComposerEmpty)
         };
 
@@ -1063,6 +1093,7 @@ mod tests {
                 show_reasoning: true,
                 show_context: true,
                 show_cwd: true,
+                show_git_branch: true,
             },
         );
 
@@ -1070,11 +1101,69 @@ mod tests {
         let effort_style = span_style(&line, "high");
         let context_style = span_style(&line, "84% left");
         let cwd_style = span_style(&line, "~/Workspace/lha");
+        let git_branch_style = span_style(&line, "feature/footer");
 
         assert!(context_style.add_modifier.contains(Modifier::DIM));
         assert_eq!(model_style, context_style);
         assert_eq!(effort_style, context_style);
         assert_eq!(cwd_style, context_style);
+        assert_eq!(git_branch_style, context_style);
+        assert_eq!(
+            line_text(&line),
+            "gpt-5.4 high · 84% left · ~/Workspace/lha · feature/footer"
+        );
+    }
+
+    #[test]
+    fn footer_info_variants_drop_git_branch_before_cwd() {
+        let props = FooterProps {
+            context_window_percent: Some(84),
+            git_branch: Some("feature/footer".to_string()),
+            ..test_footer_props(FooterMode::ComposerEmpty)
+        };
+        let variants = footer_info_variants(&props);
+        let texts: Vec<String> = variants.iter().map(|(_, line)| line_text(line)).collect();
+
+        assert_eq!(
+            texts,
+            vec![
+                "gpt-5.4 high · 84% left · ~/Workspace/lha · feature/footer",
+                "gpt-5.4 high · 84% left · ~/Workspace/lha",
+                "gpt-5.4 high · 84% left",
+                "gpt-5.4 high",
+                "gpt-5.4",
+            ]
+        );
+
+        let no_branch_line = &variants[1].1;
+        let area = Rect::new(
+            0,
+            0,
+            no_branch_line.width() as u16 + FOOTER_INDENT_COLS as u16,
+            1,
+        );
+        let (summary, right) = single_line_footer_layout(area, &props, None, false);
+        let SummaryLeft::Custom(line) = summary else {
+            panic!("expected custom footer without Git branch");
+        };
+        assert_eq!(line_text(&line), line_text(no_branch_line));
+        assert!(right.is_none());
+    }
+
+    #[test]
+    fn footer_without_git_branch_preserves_existing_text() {
+        let props = FooterProps {
+            context_window_percent: Some(84),
+            git_branch: None,
+            ..test_footer_props(FooterMode::ComposerEmpty)
+        };
+        let variants = footer_info_variants(&props);
+
+        assert_eq!(
+            line_text(&variants[0].1),
+            "gpt-5.4 high · 84% left · ~/Workspace/lha"
+        );
+        assert_eq!(variants.len(), 4);
     }
 
     #[test]

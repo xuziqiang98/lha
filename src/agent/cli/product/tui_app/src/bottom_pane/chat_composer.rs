@@ -306,6 +306,7 @@ pub(crate) struct ChatComposer {
     footer_model_name: String,
     footer_reasoning_effort: Option<String>,
     footer_cwd: String,
+    footer_git_branch: Option<String>,
     skills: Option<Vec<SkillMetadata>>,
     connectors_snapshot: Option<ConnectorsSnapshot>,
     dismissed_mention_popup_token: Option<String>,
@@ -404,6 +405,7 @@ impl ChatComposer {
             footer_model_name: "loading".to_string(),
             footer_reasoning_effort: None,
             footer_cwd: String::new(),
+            footer_git_branch: None,
             skills: None,
             connectors_snapshot: None,
             dismissed_mention_popup_token: None,
@@ -2589,6 +2591,7 @@ impl ChatComposer {
             model_name: self.footer_model_name.clone(),
             reasoning_effort: self.footer_reasoning_effort.clone(),
             cwd: self.footer_cwd.clone(),
+            git_branch: self.footer_git_branch.clone(),
         }
     }
 
@@ -2982,10 +2985,12 @@ impl ChatComposer {
         model_name: String,
         reasoning_effort: Option<String>,
         cwd: String,
+        git_branch: Option<String>,
     ) {
         if self.footer_model_name == model_name
             && self.footer_reasoning_effort == reasoning_effort
             && self.footer_cwd == cwd
+            && self.footer_git_branch == git_branch
         {
             return;
         }
@@ -2993,6 +2998,7 @@ impl ChatComposer {
         self.footer_model_name = model_name;
         self.footer_reasoning_effort = reasoning_effort;
         self.footer_cwd = cwd;
+        self.footer_git_branch = git_branch;
     }
 
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
@@ -3786,6 +3792,7 @@ mod tests {
                 "gpt-5.4".to_string(),
                 Some("high".to_string()),
                 "~/Workspace/lha".to_string(),
+                None,
             );
         }
 

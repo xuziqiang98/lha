@@ -671,6 +671,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn current_branch_name_returns_none_outside_git_repo() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        assert_eq!(current_branch_name(temp_dir.path()).await, None);
+    }
+
+    #[tokio::test]
+    async fn current_branch_name_tracks_switch_and_detached_head() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
+
+        Command::new("git")
+            .args(["switch", "-c", "feature/footer"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to create branch");
+        assert_eq!(
+            current_branch_name(&repo_path).await,
+            Some("feature/footer".to_string())
+        );
+
+        Command::new("git")
+            .args(["checkout", "--detach", "HEAD"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to detach HEAD");
+        assert_eq!(current_branch_name(&repo_path).await, None);
+    }
+
+    #[tokio::test]
     async fn test_recent_commits_orders_and_limits() {
         skip_if_sandbox!();
         use tokio::time::Duration;

@@ -268,8 +268,9 @@ impl BottomPane {
         model_name: String,
         reasoning_effort: Option<String>,
         cwd: String,
+        git_branch: Option<String>,
     ) {
-        self.set_footer_info_without_redraw(model_name, reasoning_effort, cwd);
+        self.set_footer_info_without_redraw(model_name, reasoning_effort, cwd, git_branch);
         self.request_redraw_with_risky_row_repair();
     }
 
@@ -278,9 +279,10 @@ impl BottomPane {
         model_name: String,
         reasoning_effort: Option<String>,
         cwd: String,
+        git_branch: Option<String>,
     ) {
         self.composer
-            .set_footer_info(model_name, reasoning_effort, cwd);
+            .set_footer_info(model_name, reasoning_effort, cwd, git_branch);
     }
 
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {

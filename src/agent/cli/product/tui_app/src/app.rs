@@ -15,6 +15,7 @@ use crate::product::agent::config::types::TuiBuddy;
 use crate::product::agent::config_loader::ConfigLayerStackOrdering;
 use crate::product::agent::features::FEATURES;
 use crate::product::agent::features::Feature;
+use crate::product::agent::git_info::current_branch_name;
 use crate::product::agent::git_info::resolve_root_git_project_for_trust;
 use crate::product::agent::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use crate::product::agent::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
@@ -609,6 +610,7 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
+    git_branch_refresh_generation: u64,
     non_git_changelog_baselines: HashMap<PathBuf, Arc<NonGitBaselineTracker>>,
     provider_config_modal: Option<ProviderConfigModalState>,
     project_trust_modal: Option<ProjectTrustModal>,
@@ -725,6 +727,33 @@ fn buddy_success_message(config: &TuiBuddy) -> String {
 }
 
 impl App {
+    fn request_git_branch_refresh(&mut self) {
+        self.git_branch_refresh_generation = self.git_branch_refresh_generation.wrapping_add(1);
+        let generation = self.git_branch_refresh_generation;
+        let cwd = self.config.cwd.clone();
+        let tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let branch = current_branch_name(&cwd).await;
+            tx.send(AppEvent::GitBranchRefreshResult {
+                cwd,
+                generation,
+                branch,
+            });
+        });
+    }
+
+    fn apply_git_branch_refresh_result(
+        &mut self,
+        cwd: PathBuf,
+        generation: u64,
+        branch: Option<String>,
+    ) {
+        if generation != self.git_branch_refresh_generation || cwd != self.config.cwd {
+            return;
+        }
+        self.chat_widget.set_git_branch(branch);
+    }
+
     async fn ensure_non_git_changelog_baseline(&mut self, cwd: PathBuf) -> Result<(), String> {
         if self.non_git_changelog_baselines.contains_key(&cwd) {
             return Ok(());
@@ -1657,7 +1686,14 @@ impl App {
         Ok(())
     }
 
+    fn maybe_request_git_branch_refresh(&self, event: &Event) {
+        if matches!(&event.msg, EventMsg::ExecCommandEnd(_)) {
+            self.app_event_tx.send(AppEvent::RequestGitBranchRefresh);
+        }
+    }
+
     async fn enqueue_primary_event(&mut self, event: Event) -> Result<()> {
+        self.maybe_request_git_branch_refresh(&event);
         if let Some(thread_id) = self.primary_thread_id {
             return self.enqueue_thread_event(thread_id, event).await;
         }
@@ -1693,6 +1729,7 @@ impl App {
         self.active_thread_rx = None;
         self.primary_thread_id = None;
         self.pending_primary_events.clear();
+        self.request_git_branch_refresh();
     }
 
     fn current_thread_id(&self) -> Option<ThreadId> {
@@ -1965,6 +2002,7 @@ impl App {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            git_branch_refresh_generation: 0,
             non_git_changelog_baselines: HashMap::new(),
             provider_config_modal,
             project_trust_modal,
@@ -2002,6 +2040,7 @@ impl App {
                 "failed to prewarm changelog baseline"
             );
         }
+        app.request_git_branch_refresh();
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -2979,6 +3018,7 @@ impl App {
                 self.enqueue_primary_event(event).await?;
             }
             AppEvent::ThreadEventReceived { thread_id, event } => {
+                self.maybe_request_git_branch_refresh(&event);
                 self.enqueue_thread_event(thread_id, event).await?;
             }
             AppEvent::Exit(mode) => {
@@ -3016,6 +3056,16 @@ impl App {
             AppEvent::ChangelogResult(result) => {
                 self.insert_changelog_result(result);
                 tui.frame_requester().schedule_frame();
+            }
+            AppEvent::RequestGitBranchRefresh => {
+                self.request_git_branch_refresh();
+            }
+            AppEvent::GitBranchRefreshResult {
+                cwd,
+                generation,
+                branch,
+            } => {
+                self.apply_git_branch_refresh_result(cwd, generation, branch);
             }
             AppEvent::OpenAppLink {
                 title,
@@ -5584,6 +5634,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn git_branch_refresh_ignores_stale_generation_and_cwd() {
+        let mut app = make_test_app().await;
+        let current_cwd = app.config.cwd.clone();
+        app.git_branch_refresh_generation = 3;
+
+        app.apply_git_branch_refresh_result(
+            current_cwd.clone(),
+            2,
+            Some("stale-generation".to_string()),
+        );
+        assert_eq!(app.chat_widget.git_branch(), None);
+
+        app.apply_git_branch_refresh_result(
+            current_cwd.join("other"),
+            3,
+            Some("stale-cwd".to_string()),
+        );
+        assert_eq!(app.chat_widget.git_branch(), None);
+
+        app.apply_git_branch_refresh_result(current_cwd, 3, Some("current".to_string()));
+        assert_eq!(app.chat_widget.git_branch(), Some("current"));
+    }
+
+    #[tokio::test]
+    async fn exec_command_end_requests_git_branch_refresh_before_session_configuration() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let event = Event {
+            id: "exec-end".to_string(),
+            msg: EventMsg::ExecCommandEnd(crate::product::agent::protocol::ExecCommandEndEvent {
+                call_id: "call-1".to_string(),
+                process_id: None,
+                turn_id: "turn-1".to_string(),
+                command: vec![
+                    "git".to_string(),
+                    "switch".to_string(),
+                    "feature/footer".to_string(),
+                ],
+                cwd: app.config.cwd.clone(),
+                parsed_cmd: Vec::new(),
+                source: crate::product::agent::protocol::ExecCommandSource::Agent,
+                interaction_input: None,
+                stdout: String::new(),
+                stderr: String::new(),
+                aggregated_output: String::new(),
+                exit_code: 0,
+                duration: Duration::ZERO,
+                formatted_output: String::new(),
+            }),
+        };
+
+        app.enqueue_primary_event(event)
+            .await
+            .expect("enqueue exec end");
+
+        assert!(matches!(
+            app_event_rx.recv().await,
+            Some(AppEvent::RequestGitBranchRefresh)
+        ));
+    }
+
+    #[tokio::test]
     async fn request_changelog_uses_session_baseline_outside_git() {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let temp_dir = tempdir().expect("tempdir");
@@ -5843,6 +5954,7 @@ mod tests {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            git_branch_refresh_generation: 0,
             non_git_changelog_baselines: HashMap::new(),
             provider_config_modal: None,
             project_trust_modal: None,
@@ -5915,6 +6027,7 @@ mod tests {
                 primary_thread_id: None,
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
+                git_branch_refresh_generation: 0,
                 non_git_changelog_baselines: HashMap::new(),
                 provider_config_modal: None,
                 project_trust_modal: None,
@@ -6152,6 +6265,7 @@ show_raw_agent_reasoning = true
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            git_branch_refresh_generation: 0,
             non_git_changelog_baselines: HashMap::new(),
             provider_config_modal: None,
             project_trust_modal: None,
