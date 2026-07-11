@@ -93,6 +93,7 @@ use crate::product::tui_app::sidebar::SidebarWidget;
 use crate::product::tui_app::style::proposed_plan_style;
 use crate::product::tui_app::test_backend::VT100Backend;
 use crate::product::tui_app::transcript_selection::TranscriptSelectionPoint;
+use crate::product::tui_app::transcript_view::TRANSCRIPT_VIEWPORT_REPAIR_FRAMES;
 use crate::product::tui_app::transcript_view::TranscriptRenderMode;
 use crate::product::tui_app::transcript_view::TranscriptView;
 use crate::product::tui_app::tui::FrameRequester;
@@ -3288,6 +3289,15 @@ const SESSION_MODEL_NAME_ORDER_TEXT: &str =
     "方案取舍也清楚了：只给 gpt-5.6-sol 模型卡补工具名是局部修补";
 const SESSION_MODEL_NAME_STALE_ORDER_TEXT: &str =
     "方案取舍也清楚了：只给 g-5.pt6-sol 模型卡补工具名是局部修补";
+const CURRENT_SESSION_PLAN_TEXT: &str = concat!(
+    "不能简单在两种实现之间来回切换。更合理的修复是：\n\n",
+    "- 纯 fg/bg/modifier 动画继续只更新动画行。\n",
+    "- composer 文本、状态语义文本或布局发生真实变化时，触发一次风险行修复。\n",
+    "- 保留三帧预算，用于 Ctrl+T 打开、风险内容插入和宽度变化等一次性转换。\n",
+    "- 同时保留两个回归测试：\n",
+    "  - 样式动画不能持续重画 CJK 行。\n",
+    "  - 预算耗尽后，后续语义更新仍能修复 gpt-5.6-sol。\n",
+);
 
 fn assert_follow_up_cjk_order(rendered: &str, context: &str) {
     assert!(
@@ -3300,10 +3310,44 @@ fn assert_follow_up_cjk_order(rendered: &str, context: &str) {
     );
 }
 
+fn assert_current_session_plan_order(rendered: &str, context: &str) {
+    let compact: String = rendered.chars().filter(|ch| !ch.is_whitespace()).collect();
+    for expected in [
+        "不能简单在两种实现之间来回切换。更合理的修复是：",
+        "-composer文本、状态语义文本或布局发生真实变化时，触发一次风险行修复。",
+        "-同时保留两个回归测试：",
+        "-样式动画不能持续重画CJK行。",
+        "-预算耗尽后，后续语义更新仍能修复gpt-5.6-sol。",
+    ] {
+        assert!(
+            compact.contains(expected),
+            "{context} missing correct session plan text {expected:?}: {rendered:?}"
+        );
+    }
+    for stale in [
+        "来回切换更合理。",
+        "发生真实时，变化触发",
+        "同时保留两个回归：测试-",
+        "g-5.pt6-sol",
+    ] {
+        assert!(
+            !compact.contains(stale),
+            "{context} retained stale session plan text {stale:?}: {rendered:?}"
+        );
+    }
+}
+
 fn render_chat_to_vt100_screen(
     chat: &ChatWidget,
     terminal: &mut crate::product::tui_app::custom_terminal::Terminal<VT100Backend>,
 ) -> String {
+    let width = terminal.backend().vt100().screen().size().1;
+    if chat.prepare_transcript_terminal_repaint(width) {
+        terminal.invalidate_viewport();
+    }
+    if chat.frame_requester().take_risky_row_repair_request() {
+        terminal.request_visible_risky_row_repaint();
+    }
     terminal
         .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
         .expect("draw chat widget");
@@ -11540,6 +11584,37 @@ async fn live_tail_completion_repaints_cybergym_fuzzer_cjk_ascii_divergence() {
 }
 
 #[tokio::test]
+async fn transcript_terminal_repaint_signal_is_bounded_for_unchanged_frame() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let width = 180;
+    chat.last_rendered_width.set(Some(usize::from(width)));
+
+    chat.handle_codex_event(Event {
+        id: "one-shot-turn".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "one-shot-delta".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "request。input slimming 不是直接改写整个 agent 状态\n".to_string(),
+        }),
+    });
+    chat.on_commit_tick();
+
+    assert!(
+        !chat.prepare_transcript_terminal_repaint(width),
+        "new live tail should use normal diff repaint instead of terminal repair"
+    );
+    assert!(
+        !chat.prepare_transcript_terminal_repaint(width),
+        "unchanged live tail should not force terminal repaints"
+    );
+}
+
+#[tokio::test]
 async fn non_streamed_agent_message_turn_complete_separator_requests_viewport_repaint() {
     let cfg = test_config().await;
     let model = "gpt-5";
@@ -11969,6 +12044,74 @@ async fn review_reasoning_delta_without_final_is_discarded_on_exit() {
     assert!(
         visible_history.contains("Visible ordinary reasoning."),
         "ordinary reasoning summary should remain visible: {visible_history:?}"
+    );
+}
+
+#[tokio::test]
+async fn hidden_reasoning_deltas_do_not_request_risky_row_repair() {
+    let (frame_requester, mut frame_rx) = FrameRequester::test_with_receiver();
+    let (mut chat, _rx, _op_rx) =
+        make_chatwidget_manual_with_frame_requester(None, frame_requester.clone()).await;
+    while frame_rx.try_recv().is_ok() {}
+    let _ = frame_requester.take_risky_row_repair_request();
+    chat.unified_exec_wait_streak = Some(UnifiedExecWaitStreak::new(
+        "hidden-process".to_string(),
+        Some("sleep 5".to_string()),
+    ));
+
+    for (index, delta) in ["hidden reasoning one", " hidden reasoning two"]
+        .into_iter()
+        .enumerate()
+    {
+        chat.handle_codex_event(Event {
+            id: format!("hidden-reasoning-{index}"),
+            msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+                delta: delta.to_string(),
+            }),
+        });
+
+        assert!(
+            frame_rx.try_recv().is_ok(),
+            "hidden reasoning should still request an ordinary frame"
+        );
+        assert!(
+            !frame_requester.take_risky_row_repair_request(),
+            "hidden reasoning delta requested a risky-row repair"
+        );
+    }
+}
+
+#[tokio::test]
+async fn repeated_reasoning_header_requests_only_one_risky_row_repair() {
+    let (frame_requester, mut frame_rx) = FrameRequester::test_with_receiver();
+    let (mut chat, _rx, _op_rx) =
+        make_chatwidget_manual_with_frame_requester(None, frame_requester.clone()).await;
+    chat.bottom_pane.ensure_status_indicator();
+    while frame_rx.try_recv().is_ok() {}
+    let _ = frame_requester.take_risky_row_repair_request();
+
+    chat.handle_codex_event(Event {
+        id: "reasoning-header-first".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Inspecting code**".into(),
+        }),
+    });
+    assert!(frame_requester.take_risky_row_repair_request());
+    while frame_rx.try_recv().is_ok() {}
+
+    chat.handle_codex_event(Event {
+        id: "reasoning-header-same".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: " while reading more files".into(),
+        }),
+    });
+    assert!(
+        frame_rx.try_recv().is_ok(),
+        "same reasoning header should still request an ordinary frame"
+    );
+    assert!(
+        !frame_requester.take_risky_row_repair_request(),
+        "unchanged reasoning header requested another risky-row repair"
     );
 }
 
@@ -12450,8 +12593,6 @@ async fn follow_up_main_transcript_viewport_repaint_repairs_vt100_order() {
         "test setup should corrupt follow-up VT100 row: {corrupted_screen:?}"
     );
 
-    chat.bottom_pane
-        .set_composer_text("draft one".to_string(), Vec::new(), Vec::new());
     let repaired_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
     assert_follow_up_cjk_order(
         &repaired_screen,
@@ -12460,8 +12601,46 @@ async fn follow_up_main_transcript_viewport_repaint_repairs_vt100_order() {
 }
 
 #[tokio::test]
-async fn session_model_name_order_is_repaired_by_same_height_composer_update() {
+async fn viewport_repaint_budget_exhaustion_keeps_unchanged_cjk_rows_incremental() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let width = 120;
+    let height = 24;
+    chat.last_rendered_width.set(Some(usize::from(width)));
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
+        VT100Backend::new(width, height),
+    )
+    .expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+    chat.insert_transcript_cell(Arc::new(AgentMessageCell::new_markdown(
+        FOLLOW_UP_CJK_ORDER_TEXT.to_string(),
+        true,
+    )));
+
+    let mut screen = String::new();
+    for _ in 0..TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
+        screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+        assert_follow_up_cjk_order(&screen, "follow-up budget frame");
+    }
+    let row = screen_row_containing(&screen, FOLLOW_UP_CJK_ORDER_TEXT);
+    corrupt_vt100_row(&mut terminal, row, FOLLOW_UP_CJK_STALE_ORDER_TEXT);
+    let corrupted_screen = terminal.backend().vt100().screen().contents();
+    assert!(
+        corrupted_screen.contains(FOLLOW_UP_CJK_STALE_ORDER_TEXT),
+        "test setup should corrupt exhausted follow-up VT100 row: {corrupted_screen:?}"
+    );
+
+    let unchanged_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    assert!(
+        unchanged_screen.contains(FOLLOW_UP_CJK_STALE_ORDER_TEXT),
+        "exhausted budget should not repair unchanged CJK row every frame: {unchanged_screen:?}"
+    );
+}
+
+#[tokio::test]
+async fn session_model_name_order_is_repaired_by_same_height_composer_update() {
+    let (mut chat, _rx, _op_rx) =
+        make_chatwidget_manual_with_frame_requester(None, FrameRequester::test_dummy()).await;
     let width = 120;
     let height = 24;
     chat.last_rendered_width.set(Some(usize::from(width)));
@@ -12478,24 +12657,18 @@ async fn session_model_name_order_is_repaired_by_same_height_composer_update() {
         true,
     )));
 
-    let _ = render_chat_to_vt100_screen(&chat, &mut terminal);
+    let mut screen = String::new();
+    for _ in 0..TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
+        screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    }
     let initial_bottom_pane_height = chat.bottom_pane.desired_height(width);
-    let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    assert_eq!(
-        chat.bottom_pane.desired_height(width),
-        initial_bottom_pane_height,
-        "initial composer layout should settle before corrupting the transcript row"
-    );
-    assert!(
-        screen.contains(SESSION_MODEL_NAME_ORDER_TEXT),
-        "initial screen should contain the correct session model name: {screen:?}"
-    );
     let row = screen_row_containing(&screen, SESSION_MODEL_NAME_ORDER_TEXT);
     corrupt_vt100_row(&mut terminal, row, SESSION_MODEL_NAME_STALE_ORDER_TEXT);
-    let corrupted_screen = terminal.backend().vt100().screen().contents();
+
+    let idle_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
     assert!(
-        corrupted_screen.contains(SESSION_MODEL_NAME_STALE_ORDER_TEXT),
-        "test setup should corrupt the session model name: {corrupted_screen:?}"
+        idle_screen.contains(SESSION_MODEL_NAME_STALE_ORDER_TEXT),
+        "idle frame should keep the exhausted viewport incremental: {idle_screen:?}"
     );
 
     chat.bottom_pane
@@ -12513,8 +12686,235 @@ async fn session_model_name_order_is_repaired_by_same_height_composer_update() {
     );
     assert!(
         !repaired_screen.contains(SESSION_MODEL_NAME_STALE_ORDER_TEXT),
-        "composer update kept the stale session model name order: {repaired_screen:?}"
+        "composer semantic update kept stale model-name order: {repaired_screen:?}"
     );
+}
+
+#[tokio::test]
+async fn semantic_status_update_repairs_model_name_after_repaint_budget_exhaustion() {
+    let (mut chat, _rx, _op_rx) =
+        make_chatwidget_manual_with_frame_requester(None, FrameRequester::test_dummy()).await;
+    let width = 120;
+    let height = 24;
+    chat.last_rendered_width.set(Some(usize::from(width)));
+    chat.bottom_pane.ensure_status_indicator();
+    chat.set_status_header("Working".to_string());
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
+        VT100Backend::new(width, height),
+    )
+    .expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+    chat.insert_transcript_cell(Arc::new(AgentMessageCell::new_markdown(
+        SESSION_MODEL_NAME_ORDER_TEXT.to_string(),
+        true,
+    )));
+
+    let mut screen = String::new();
+    for _ in 0..TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
+        screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    }
+    let initial_bottom_pane_height = chat.bottom_pane.desired_height(width);
+    let row = screen_row_containing(&screen, SESSION_MODEL_NAME_ORDER_TEXT);
+    corrupt_vt100_row(&mut terminal, row, SESSION_MODEL_NAME_STALE_ORDER_TEXT);
+
+    chat.set_status_header("Running tests".to_string());
+    assert_eq!(
+        chat.bottom_pane.desired_height(width),
+        initial_bottom_pane_height,
+        "one-line status update should keep the transcript row in place"
+    );
+    let repaired_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    assert_eq!(
+        screen_row_containing(&repaired_screen, SESSION_MODEL_NAME_ORDER_TEXT),
+        row,
+        "status update should not move the repaired transcript row"
+    );
+    assert!(
+        !repaired_screen.contains(SESSION_MODEL_NAME_STALE_ORDER_TEXT),
+        "status semantic update kept stale model-name order: {repaired_screen:?}"
+    );
+}
+
+#[tokio::test]
+async fn hidden_reasoning_deltas_do_not_repaint_stale_cjk_rows() {
+    let (mut chat, _rx, _op_rx) =
+        make_chatwidget_manual_with_frame_requester(None, FrameRequester::test_dummy()).await;
+    let width = 120;
+    let height = 24;
+    chat.last_rendered_width.set(Some(usize::from(width)));
+    chat.bottom_pane.ensure_status_indicator();
+    chat.set_status_header("Working".to_string());
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
+        VT100Backend::new(width, height),
+    )
+    .expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+    chat.insert_transcript_cell(Arc::new(AgentMessageCell::new_markdown(
+        SESSION_MODEL_NAME_ORDER_TEXT.to_string(),
+        true,
+    )));
+
+    let mut screen = String::new();
+    for _ in 0..TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
+        screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    }
+    let row = screen_row_containing(&screen, SESSION_MODEL_NAME_ORDER_TEXT);
+    corrupt_vt100_row(&mut terminal, row, SESSION_MODEL_NAME_STALE_ORDER_TEXT);
+    chat.unified_exec_wait_streak = Some(UnifiedExecWaitStreak::new(
+        "hidden-process".to_string(),
+        Some("sleep 5".to_string()),
+    ));
+
+    for (index, delta) in ["hidden reasoning one", " hidden reasoning two"]
+        .into_iter()
+        .enumerate()
+    {
+        chat.handle_codex_event(Event {
+            id: format!("hidden-physical-reasoning-{index}"),
+            msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+                delta: delta.to_string(),
+            }),
+        });
+        let hidden_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+        assert!(
+            hidden_screen.contains(SESSION_MODEL_NAME_STALE_ORDER_TEXT),
+            "hidden reasoning delta repainted a stale risky row: {hidden_screen:?}"
+        );
+    }
+
+    chat.set_status_header("Running tests".to_string());
+    let repaired_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    assert!(
+        repaired_screen.contains(SESSION_MODEL_NAME_ORDER_TEXT),
+        "semantic status update did not restore the model name: {repaired_screen:?}"
+    );
+    assert!(
+        !repaired_screen.contains(SESSION_MODEL_NAME_STALE_ORDER_TEXT),
+        "semantic status update kept the stale model name: {repaired_screen:?}"
+    );
+}
+
+#[tokio::test]
+async fn current_session_plan_order_is_repaired_by_later_streaming_update() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let width = 100;
+    let height = 36;
+    chat.last_rendered_width.set(Some(usize::from(width)));
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
+        VT100Backend::new(width, height),
+    )
+    .expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+    chat.handle_codex_event(Event {
+        id: "current-session-plan-turn".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+
+    let initial_deltas = [
+        "不能简单在两种实现之间来回切换。更合理",
+        "的修复是：\n\n- 纯 fg/bg/modifier 动画继续只更新动画行。\n",
+        "- composer 文本、状态语义文本或布局发生真实",
+        "变化时，触发一次风险行修复。\n",
+        "- 保留三帧预算，用于 Ctrl+T 打开、风险内容插入和宽度变化等一次性转换。\n",
+    ];
+    let later_deltas = [
+        "- 同时保留两个回归",
+        "测试：\n  - 样式动画不能持续重画 CJK 行。\n",
+        "  - 预算耗尽后，后续语义更新仍能修复 gpt-5.6-sol。\n",
+    ];
+    let streamed_source = initial_deltas
+        .iter()
+        .chain(later_deltas.iter())
+        .copied()
+        .collect::<String>();
+    assert_eq!(streamed_source, CURRENT_SESSION_PLAN_TEXT);
+
+    for delta in initial_deltas {
+        chat.handle_codex_event(Event {
+            id: "current-session-plan-delta".into(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: delta.to_string(),
+            }),
+        });
+        for _ in 0..16 {
+            chat.on_commit_tick();
+        }
+        let _ = render_chat_to_vt100_screen(&chat, &mut terminal);
+    }
+
+    let partial_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    let first_row = screen_row_containing(
+        &partial_screen,
+        "不能简单在两种实现之间来回切换。更合理的修复是：",
+    );
+    corrupt_vt100_row(
+        &mut terminal,
+        first_row,
+        "不能简单在两种实现之间来回切换更合理。",
+    );
+    assert!(
+        terminal
+            .backend()
+            .vt100()
+            .screen()
+            .contents()
+            .contains("来回切换更合理。"),
+        "test setup should corrupt the current session plan row"
+    );
+
+    for (index, delta) in later_deltas.into_iter().enumerate() {
+        chat.handle_codex_event(Event {
+            id: "current-session-plan-later-delta".into(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: delta.to_string(),
+            }),
+        });
+        for _ in 0..16 {
+            chat.on_commit_tick();
+        }
+        let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+        if index == 0 {
+            assert!(
+                screen.contains("来回切换更合理。"),
+                "an incomplete buffered chunk should not trigger risky-row repair: {screen:?}"
+            );
+        } else {
+            assert!(
+                !screen.contains("来回切换更合理。"),
+                "visible streaming semantic update should repair the stale first row: {screen:?}"
+            );
+        }
+    }
+
+    let live_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    assert_current_session_plan_order(&live_screen, "current session live plan");
+
+    chat.handle_codex_event(Event {
+        id: "current-session-plan-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+    for event in drain_events(&mut rx) {
+        if let Some((cell, repaint_viewport)) =
+            into_insert_history_cell_with_viewport_repaint(event)
+        {
+            let cell: Arc<dyn HistoryCell> = Arc::from(cell);
+            chat.insert_transcript_cell(cell);
+            if repaint_viewport {
+                terminal.invalidate_viewport();
+            }
+        }
+    }
+
+    let completed_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    assert_current_session_plan_order(&completed_screen, "current session completed plan");
 }
 
 #[tokio::test]

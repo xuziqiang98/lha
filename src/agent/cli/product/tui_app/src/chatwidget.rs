@@ -1059,6 +1059,7 @@ impl ChatWidget {
 
     fn bump_plan_stream_revision(&mut self) {
         self.plan_stream_revision = self.plan_stream_revision.wrapping_add(1);
+        self.request_redraw_with_risky_row_repair();
     }
 
     fn plan_stream_has_visible_tail(&self) -> bool {
@@ -1310,9 +1311,9 @@ impl ChatWidget {
         &mut self,
         event: crate::product::agent::protocol::ThreadNameUpdatedEvent,
     ) {
-        if self.thread_id == Some(event.thread_id) {
+        if self.thread_id == Some(event.thread_id) && self.thread_name != event.thread_name {
             self.thread_name = event.thread_name;
-            self.request_redraw();
+            self.request_redraw_with_risky_row_repair();
         }
     }
 
@@ -1515,7 +1516,7 @@ impl ChatWidget {
         self.latest_proposed_plan_title = extract_first_markdown_heading(&plan_text);
         self.latest_proposed_plan_text =
             (!plan_text.trim().is_empty()).then_some(plan_text.clone());
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     fn on_agent_reasoning_delta(&mut self, delta: String) {
@@ -1604,32 +1605,33 @@ impl ChatWidget {
         } = event;
         let name = normalize_agent_job_name(name);
         let next_display_order = self.cli_agent_jobs.len() + 1;
-        if let Some(entry) = self.cli_agent_jobs.get_mut(&job_id) {
-            entry.agent_type = agent_type;
-            if name.is_some() {
-                entry.name = name;
+        let next_entry = if let Some(entry) = self.cli_agent_jobs.get(&job_id) {
+            CliAgentJobEntry {
+                agent_type,
+                name: name.or_else(|| entry.name.clone()),
+                status,
+                message,
+                display_order: entry.display_order,
             }
-            entry.status = status;
-            entry.message = message;
         } else {
-            self.cli_agent_jobs.insert(
-                job_id,
-                CliAgentJobEntry {
-                    agent_type,
-                    name,
-                    status,
-                    message,
-                    display_order: next_display_order,
-                },
-            );
+            CliAgentJobEntry {
+                agent_type,
+                name,
+                status,
+                message,
+                display_order: next_display_order,
+            }
+        };
+        if self.cli_agent_jobs.get(&job_id) != Some(&next_entry) {
+            self.cli_agent_jobs.insert(job_id, next_entry);
+            self.request_redraw_with_risky_row_repair();
         }
-        self.request_redraw();
     }
 
     fn clear_cli_agent_jobs(&mut self) {
         if !self.cli_agent_jobs.is_empty() {
             self.cli_agent_jobs.clear();
-            self.request_redraw();
+            self.request_redraw_with_risky_row_repair();
         }
     }
 
@@ -1820,8 +1822,12 @@ impl ChatWidget {
         match info {
             Some(info) => self.apply_token_info(info),
             None => {
+                if self.token_info.is_none() {
+                    return;
+                }
                 self.bottom_pane.set_context_window(None, None);
                 self.token_info = None;
+                self.request_redraw_with_risky_row_repair();
             }
         }
     }
@@ -1835,6 +1841,7 @@ impl ChatWidget {
             return;
         }
 
+        let previous = self.input_slimming.clone();
         if has_context_update {
             self.input_slimming = Some(InputSlimmingPanelSnapshot {
                 scope: event.scope,
@@ -1860,14 +1867,20 @@ impl ChatWidget {
             snapshot.last_saved_usd_micros = event.last.saved_usd_micros;
             snapshot.total_saved_usd_micros = event.total.saved_usd_micros;
         }
-        self.request_redraw();
+        if self.input_slimming != previous {
+            self.request_redraw_with_risky_row_repair();
+        }
     }
 
     fn apply_token_info(&mut self, info: TokenUsageInfo) {
+        if self.token_info.as_ref() == Some(&info) {
+            return;
+        }
         let percent = self.context_remaining_percent(&info);
         let used_tokens = self.context_used_tokens(&info, percent.is_some());
         self.bottom_pane.set_context_window(percent, used_tokens);
         self.token_info = Some(info);
+        self.request_redraw_with_risky_row_repair();
     }
 
     fn context_remaining_percent(&self, info: &TokenUsageInfo) -> Option<i64> {
@@ -2471,13 +2484,17 @@ impl ChatWidget {
 
     fn on_turn_diff(&mut self, unified_diff: String) {
         debug!("TurnDiffEvent: {unified_diff}");
+        let mut changed = false;
         for path in paths_from_unified_diff(&unified_diff) {
             if self.changed_files.iter().any(|existing| existing == &path) {
                 continue;
             }
             self.changed_files.push_back(path);
+            changed = true;
         }
-        self.request_redraw();
+        if changed {
+            self.request_redraw_with_risky_row_repair();
+        }
     }
 
     fn on_deprecation_notice(&mut self, event: DeprecationNoticeEvent) {
@@ -4814,10 +4831,15 @@ impl ChatWidget {
         self.frame_requester.schedule_frame();
     }
 
+    fn request_redraw_with_risky_row_repair(&self) {
+        self.frame_requester.schedule_frame_with_risky_row_repair();
+    }
+
     fn bump_active_cell_revision(&mut self) {
         // Wrapping avoids overflow; wraparound would require 2^64 bumps and at
         // worst causes a one-time cache-key collision.
         self.active_cell_revision = self.active_cell_revision.wrapping_add(1);
+        self.request_redraw_with_risky_row_repair();
     }
 
     fn notify(&mut self, notification: Notification) {
@@ -6648,8 +6670,8 @@ impl ChatWidget {
         self.sync_identity_to_runtime(self.effective_identity());
     }
 
-    pub(crate) fn request_redraw_for_ui(&mut self) {
-        self.request_redraw();
+    pub(crate) fn request_redraw_for_ui_change(&self) {
+        self.request_redraw_with_risky_row_repair();
     }
 
     pub(crate) fn frame_requester(&self) -> FrameRequester {
@@ -7232,16 +7254,17 @@ impl ChatWidget {
     }
 
     pub(crate) fn clear_token_usage(&mut self) {
-        self.token_info = None;
+        self.set_token_info(None);
     }
 
     pub(crate) fn insert_transcript_cell(&mut self, cell: Arc<dyn HistoryCell>) {
         self.transcript.borrow_mut().insert_cell(cell);
+        self.request_redraw_with_risky_row_repair();
     }
 
     pub(crate) fn replace_transcript_cells(&mut self, cells: Vec<Arc<dyn HistoryCell>>) {
         self.transcript = RefCell::new(TranscriptView::new(cells, TranscriptRenderMode::Display));
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     #[cfg(test)]
@@ -7263,6 +7286,24 @@ impl ChatWidget {
                 self.transcript_live_tail_for_mode(tail_width, TranscriptRenderMode::Display)
             },
         );
+    }
+
+    pub(crate) fn prepare_transcript_terminal_repaint(&self, area_width: u16) -> bool {
+        let sidebar_width = crate::product::tui_app::sidebar::sidebar_width(area_width);
+        let main_width = sidebar_width.map_or(area_width, |sidebar_width| {
+            area_width.saturating_sub(sidebar_width)
+        });
+        let mut transcript = self.transcript.borrow_mut();
+        let main_width = main_width.max(1);
+        transcript.prepare_terminal_repaint_for_width(main_width);
+        transcript.sync_live_tail(main_width, self.transcript_live_tail_key(), |tail_width| {
+            self.transcript_live_tail_for_mode(tail_width, TranscriptRenderMode::Display)
+        });
+        let needs_repaint = transcript.take_terminal_repaint_request();
+        if transcript.has_pending_terminal_repaint() {
+            self.frame_requester.schedule_frame();
+        }
+        needs_repaint
     }
 
     fn handle_transcript_scroll_key(&mut self, key_event: KeyEvent) -> bool {

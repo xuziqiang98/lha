@@ -37,6 +37,7 @@ use crate::product::tui_app::app::App;
 use crate::product::tui_app::history_cell::SessionInfoCell;
 use crate::product::tui_app::history_cell::UserHistoryCell;
 use crate::product::tui_app::pager_overlay::Overlay;
+use crate::product::tui_app::pager_overlay::prepare_transcript_overlay_terminal_repaint;
 use crate::product::tui_app::tui;
 use crate::product::tui_app::tui::TuiEvent;
 use color_eyre::eyre::Result;
@@ -356,6 +357,10 @@ impl App {
                     crate::product::tui_app::transcript_view::TranscriptRenderMode::Transcript,
                 )
             });
+            let frame_requester = tui.frame_requester();
+            if prepare_transcript_overlay_terminal_repaint(t, overlay_width, &frame_requester) {
+                tui.terminal.invalidate_viewport();
+            }
             tui.draw(u16::MAX, |frame| {
                 if t.advance_drag_autoscroll(frame.area()) {
                     schedule_drag_frame = true;

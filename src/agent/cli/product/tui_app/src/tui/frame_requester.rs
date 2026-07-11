@@ -12,6 +12,9 @@
 //! [“Actors with Tokio”](https://ryhl.io/blog/actors-with-tokio/), with a
 //! dedicated scheduler task and lightweight request handles.
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -30,6 +33,7 @@ use super::frame_rate_limiter::FrameRateLimiter;
 #[derive(Clone, Debug)]
 pub struct FrameRequester {
     frame_schedule_tx: mpsc::UnboundedSender<Instant>,
+    risky_row_repair_requested: Arc<AtomicBool>,
 }
 
 impl FrameRequester {
@@ -42,6 +46,7 @@ impl FrameRequester {
         tokio::spawn(scheduler.run());
         Self {
             frame_schedule_tx: tx,
+            risky_row_repair_requested: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -50,9 +55,21 @@ impl FrameRequester {
         let _ = self.frame_schedule_tx.send(Instant::now());
     }
 
+    /// Schedule an immediate frame that should also repair visible terminal-risk rows once.
+    pub(crate) fn schedule_frame_with_risky_row_repair(&self) {
+        self.risky_row_repair_requested
+            .store(true, Ordering::Release);
+        self.schedule_frame();
+    }
+
     /// Schedule a frame draw to occur after the specified duration.
     pub fn schedule_frame_in(&self, dur: Duration) {
         let _ = self.frame_schedule_tx.send(Instant::now() + dur);
+    }
+
+    pub(crate) fn take_risky_row_repair_request(&self) -> bool {
+        self.risky_row_repair_requested
+            .swap(false, Ordering::AcqRel)
     }
 }
 
@@ -63,6 +80,7 @@ impl FrameRequester {
         let (tx, _rx) = mpsc::unbounded_channel();
         FrameRequester {
             frame_schedule_tx: tx,
+            risky_row_repair_requested: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -72,6 +90,7 @@ impl FrameRequester {
         (
             FrameRequester {
                 frame_schedule_tx: tx,
+                risky_row_repair_requested: Arc::new(AtomicBool::new(false)),
             },
             rx,
         )
@@ -143,6 +162,30 @@ mod tests {
     use super::*;
     use tokio::time;
     use tokio_util::time::FutureExt;
+
+    #[test]
+    fn risky_row_repair_request_is_shared_and_consumed_once() {
+        let (requester, mut frame_rx) = FrameRequester::test_with_receiver();
+        let clone = requester.clone();
+
+        clone.schedule_frame_with_risky_row_repair();
+
+        assert!(frame_rx.try_recv().is_ok());
+        assert!(requester.take_risky_row_repair_request());
+        assert!(!clone.take_risky_row_repair_request());
+    }
+
+    #[test]
+    fn ordinary_and_delayed_frames_do_not_request_risky_row_repair() {
+        let (requester, mut frame_rx) = FrameRequester::test_with_receiver();
+
+        requester.schedule_frame();
+        requester.schedule_frame_in(Duration::from_millis(32));
+
+        assert!(frame_rx.try_recv().is_ok());
+        assert!(frame_rx.try_recv().is_ok());
+        assert!(!requester.take_risky_row_repair_request());
+    }
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn test_schedule_frame_immediate_triggers_once() {

@@ -483,6 +483,10 @@ impl Tui {
         height: u16,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
     ) -> Result<()> {
+        if self.frame_requester.take_risky_row_repair_request() {
+            self.terminal.request_visible_risky_row_repaint();
+        }
+
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
         // in the synchronized update.
         #[cfg(unix)]

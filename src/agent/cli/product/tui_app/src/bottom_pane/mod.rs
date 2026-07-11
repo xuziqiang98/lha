@@ -209,7 +209,7 @@ impl BottomPane {
 
     pub fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.set_skills_without_redraw(skills);
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     pub(crate) fn set_skills_without_redraw(&mut self, skills: Option<Vec<SkillMetadata>>) {
@@ -218,7 +218,7 @@ impl BottomPane {
 
     pub fn set_connectors_snapshot(&mut self, snapshot: Option<ConnectorsSnapshot>) {
         self.set_connectors_snapshot_without_redraw(snapshot);
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     pub(crate) fn set_connectors_snapshot_without_redraw(
@@ -238,7 +238,7 @@ impl BottomPane {
 
     pub fn set_identities_enabled(&mut self, enabled: bool) {
         self.composer.set_identities_enabled(enabled);
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     pub fn set_connectors_enabled(&mut self, enabled: bool) {
@@ -248,12 +248,12 @@ impl BottomPane {
     #[cfg(target_os = "windows")]
     pub fn set_windows_degraded_sandbox_active(&mut self, enabled: bool) {
         self.composer.set_windows_degraded_sandbox_active(enabled);
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     pub fn set_identity_indicator(&mut self, indicator: Option<IdentityIndicator>) {
         self.composer.set_identity_indicator(indicator);
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     pub(crate) fn set_identity_indicator_without_redraw(
@@ -270,7 +270,7 @@ impl BottomPane {
         cwd: String,
     ) {
         self.set_footer_info_without_redraw(model_name, reasoning_effort, cwd);
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     pub(crate) fn set_footer_info_without_redraw(
@@ -285,7 +285,7 @@ impl BottomPane {
 
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
         self.set_personality_command_enabled_without_redraw(enabled);
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     pub(crate) fn set_personality_command_enabled_without_redraw(&mut self, enabled: bool) {
@@ -321,7 +321,7 @@ impl BottomPane {
 
     fn push_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.view_stack.push(view);
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     /// Forward a key event to the active view or the composer.
@@ -362,7 +362,7 @@ impl BottomPane {
             } else if view_in_paste_burst {
                 self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
             }
-            self.request_redraw();
+            self.request_redraw_with_risky_row_repair();
             InputResult::None
         } else {
             // If a task is running and a status line is visible, allow Esc to
@@ -380,7 +380,7 @@ impl BottomPane {
             }
             let (input_result, needs_redraw) = self.composer.handle_key_event(key_event);
             if needs_redraw {
-                self.request_redraw();
+                self.request_redraw_with_risky_row_repair();
             }
             if self.composer.is_in_paste_burst() {
                 self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
@@ -406,7 +406,7 @@ impl BottomPane {
                     self.on_active_view_complete();
                 }
                 self.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')));
-                self.request_redraw();
+                self.request_redraw_with_risky_row_repair();
             }
             event
         } else if self.composer_is_empty() {
@@ -415,7 +415,7 @@ impl BottomPane {
             self.view_stack.pop();
             self.clear_composer_for_ctrl_c();
             self.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')));
-            self.request_redraw();
+            self.request_redraw_with_risky_row_repair();
             CancellationEvent::Handled
         }
     }
@@ -427,19 +427,19 @@ impl BottomPane {
                 self.on_active_view_complete();
             }
             if needs_redraw {
-                self.request_redraw();
+                self.request_redraw_with_risky_row_repair();
             }
         } else {
             let needs_redraw = self.composer.handle_paste(pasted);
             if needs_redraw {
-                self.request_redraw();
+                self.request_redraw_with_risky_row_repair();
             }
         }
     }
 
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.composer.insert_str(text);
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     /// Replace the composer text with `text`.
@@ -451,7 +451,7 @@ impl BottomPane {
     ) {
         self.composer
             .set_text_content(text, text_elements, local_image_paths);
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     #[allow(dead_code)]
@@ -461,12 +461,12 @@ impl BottomPane {
         placeholder: Option<String>,
     ) {
         self.composer.set_input_enabled(enabled, placeholder);
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     pub(crate) fn clear_composer_for_ctrl_c(&mut self) {
         self.composer.clear_for_ctrl_c();
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     /// Get the current composer text (for tests and programmatic checks).
@@ -493,12 +493,12 @@ impl BottomPane {
 
     pub(crate) fn apply_external_edit(&mut self, text: String) {
         self.composer.apply_external_edit(text);
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.composer.set_footer_hint_override(items);
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     /// Update the status indicator header (defaults to "Working") and details below it.
@@ -512,9 +512,11 @@ impl BottomPane {
         details_max_lines: usize,
     ) {
         if let Some(status) = self.status.as_mut() {
-            status.update_header(header);
-            status.update_details(details, capitalization, details_max_lines);
-            self.request_redraw();
+            let header_changed = status.update_header(header);
+            let details_changed = status.update_details(details, capitalization, details_max_lines);
+            if header_changed || details_changed {
+                self.request_redraw_with_risky_row_repair();
+            }
         }
     }
 
@@ -545,7 +547,7 @@ impl BottomPane {
                 frame_requester.schedule_frame();
             });
         }
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     /// Clear the "press again to quit" hint immediately.
@@ -556,7 +558,7 @@ impl BottomPane {
     pub(crate) fn clear_quit_shortcut_hint_with_redraw(&mut self, request_redraw: bool) {
         self.composer.clear_quit_shortcut_hint(self.has_input_focus);
         if request_redraw {
-            self.request_redraw();
+            self.request_redraw_with_risky_row_repair();
         }
     }
 
@@ -573,14 +575,14 @@ impl BottomPane {
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
         self.esc_backtrack_hint = true;
         self.composer.set_esc_backtrack_hint(true);
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     pub(crate) fn clear_esc_backtrack_hint(&mut self) {
         if self.esc_backtrack_hint {
             self.esc_backtrack_hint = false;
             self.composer.set_esc_backtrack_hint(false);
-            self.request_redraw();
+            self.request_redraw_with_risky_row_repair();
         }
     }
 
@@ -609,7 +611,7 @@ impl BottomPane {
                 }
                 self.sync_status_inline_message();
                 if request_redraw {
-                    self.request_redraw();
+                    self.request_redraw_with_risky_row_repair();
                 }
             }
         } else {
@@ -625,7 +627,7 @@ impl BottomPane {
 
     pub(crate) fn hide_status_indicator_with_redraw(&mut self, request_redraw: bool) {
         if self.status.take().is_some() && request_redraw {
-            self.request_redraw();
+            self.request_redraw_with_risky_row_repair();
         }
     }
 
@@ -637,7 +639,7 @@ impl BottomPane {
                 self.animations_enabled,
             ));
             self.sync_status_inline_message();
-            self.request_redraw();
+            self.request_redraw_with_risky_row_repair();
         }
     }
 
@@ -651,9 +653,9 @@ impl BottomPane {
         request_redraw: bool,
     ) {
         if let Some(status) = self.status.as_mut() {
-            status.set_interrupt_hint_visible(visible);
-            if request_redraw {
-                self.request_redraw();
+            let changed = status.set_interrupt_hint_visible(visible);
+            if request_redraw && changed {
+                self.request_redraw_with_risky_row_repair();
             }
         }
     }
@@ -668,7 +670,7 @@ impl BottomPane {
         self.context_window_used_tokens = used_tokens;
         self.composer
             .set_context_window(percent, self.context_window_used_tokens);
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     /// Show a generic list selection view with the provided items.
@@ -679,27 +681,32 @@ impl BottomPane {
 
     /// Update the queued messages preview shown above the composer.
     pub(crate) fn set_queued_user_messages(&mut self, queued: Vec<String>) {
+        if self.queued_user_messages.messages == queued {
+            return;
+        }
         self.queued_user_messages.messages = queued;
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     pub(crate) fn set_unified_exec_processes(&mut self, processes: Vec<String>) {
         if self.unified_exec_footer.set_processes(processes) {
             self.sync_status_inline_message();
-            self.request_redraw();
+            self.request_redraw_with_risky_row_repair();
         }
     }
 
-    fn sync_status_inline_message(&mut self) {
+    fn sync_status_inline_message(&mut self) -> bool {
         if let Some(status) = self.status.as_mut() {
-            status.update_inline_message(self.unified_exec_footer.summary_text());
+            status.update_inline_message(self.unified_exec_footer.summary_text())
+        } else {
+            false
         }
     }
 
     /// Update custom prompts available for the slash popup.
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
         self.composer.set_custom_prompts(prompts);
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {
@@ -745,7 +752,7 @@ impl BottomPane {
     pub(crate) fn dismiss_active_view(&mut self) {
         if self.view_stack.pop().is_some() {
             self.on_active_view_complete();
-            self.request_redraw();
+            self.request_redraw_with_risky_row_repair();
         }
     }
 
@@ -755,7 +762,7 @@ impl BottomPane {
             match view.try_consume_approval_request(request) {
                 Some(request) => request,
                 None => {
-                    self.request_redraw();
+                    self.request_redraw_with_risky_row_repair();
                     return;
                 }
             }
@@ -775,7 +782,7 @@ impl BottomPane {
             match view.try_consume_user_input_request(request) {
                 Some(request) => request,
                 None => {
-                    self.request_redraw();
+                    self.request_redraw_with_risky_row_repair();
                     return;
                 }
             }
@@ -820,13 +827,17 @@ impl BottomPane {
         self.frame_requester.schedule_frame();
     }
 
+    fn request_redraw_with_risky_row_repair(&self) {
+        self.frame_requester.schedule_frame_with_risky_row_repair();
+    }
+
     pub(crate) fn request_redraw_in(&self, dur: Duration) {
         self.frame_requester.schedule_frame_in(dur);
     }
 
     pub(crate) fn set_buddy_config(&mut self, config: TuiBuddy) {
         self.composer.set_buddy_config(config);
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     pub(crate) fn buddy_is_hatched(&self) -> bool {
@@ -847,7 +858,7 @@ impl BottomPane {
 
     pub(crate) fn set_buddy_identity_kind(&mut self, identity_kind: IdentityKind) {
         self.composer.set_buddy_identity_kind(identity_kind);
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     pub(crate) fn set_buddy_identity_kind_without_redraw(&mut self, identity_kind: IdentityKind) {
@@ -856,13 +867,13 @@ impl BottomPane {
 
     pub(crate) fn pet_buddy(&mut self) {
         self.composer.pet_buddy();
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
         self.request_redraw_in(Duration::from_millis(2500));
     }
 
     pub(crate) fn set_buddy_reaction(&mut self, text: String) {
         self.composer.set_buddy_reaction(text);
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
         self.request_redraw_in(Duration::from_secs(10));
     }
 
@@ -903,19 +914,19 @@ impl BottomPane {
             .on_history_entry_response(log_id, offset, entry);
 
         if updated {
-            self.request_redraw();
+            self.request_redraw_with_risky_row_repair();
         }
     }
 
     pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.composer.on_file_search_result(query, matches);
-        self.request_redraw();
+        self.request_redraw_with_risky_row_repair();
     }
 
     pub(crate) fn attach_image(&mut self, path: PathBuf) {
         if self.view_stack.is_empty() {
             self.composer.attach_image(path);
-            self.request_redraw();
+            self.request_redraw_with_risky_row_repair();
         }
     }
 
@@ -1249,6 +1260,53 @@ mod tests {
             rendered.contains("background terminal running · /ps to view"),
             "expected unified exec hint visible: {rendered}"
         );
+    }
+
+    #[test]
+    fn identical_status_update_does_not_request_risky_row_repair() {
+        let (frame_requester, mut frame_rx) = FrameRequester::test_with_receiver();
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: frame_requester.clone(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask LHA to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        while frame_rx.try_recv().is_ok() {}
+        assert!(frame_requester.take_risky_row_repair_request());
+
+        pane.update_status(
+            "Running tests".to_string(),
+            Some("  first detail".to_string()),
+            StatusDetailsCapitalization::CapitalizeFirst,
+            2,
+        );
+        assert!(frame_requester.take_risky_row_repair_request());
+        while frame_rx.try_recv().is_ok() {}
+
+        pane.update_status(
+            "Running tests".to_string(),
+            Some("First detail".to_string()),
+            StatusDetailsCapitalization::Preserve,
+            2,
+        );
+        assert!(!frame_requester.take_risky_row_repair_request());
+        assert!(frame_rx.try_recv().is_err());
+
+        pane.update_status(
+            "Running tests".to_string(),
+            Some("First detail".to_string()),
+            StatusDetailsCapitalization::Preserve,
+            3,
+        );
+        assert!(frame_requester.take_risky_row_repair_request());
     }
 
     #[test]

@@ -97,8 +97,10 @@ impl StatusIndicatorWidget {
     }
 
     /// Update the animated header label (left of the brackets).
-    pub(crate) fn update_header(&mut self, header: String) {
+    pub(crate) fn update_header(&mut self, header: String) -> bool {
+        let changed = self.header != header;
         self.header = header;
+        changed
     }
 
     /// Update the details text shown below the header.
@@ -107,9 +109,9 @@ impl StatusIndicatorWidget {
         details: Option<String>,
         capitalization: StatusDetailsCapitalization,
         max_lines: usize,
-    ) {
-        self.details_max_lines = max_lines.max(1);
-        self.details = details
+    ) -> bool {
+        let details_max_lines = max_lines.max(1);
+        let details = details
             .filter(|details| !details.is_empty())
             .map(|details| {
                 let trimmed = details.trim_start();
@@ -118,12 +120,19 @@ impl StatusIndicatorWidget {
                     StatusDetailsCapitalization::Preserve => trimmed.to_string(),
                 }
             });
+        let changed = self.details != details || self.details_max_lines != details_max_lines;
+        self.details_max_lines = details_max_lines;
+        self.details = details;
+        changed
     }
 
-    pub(crate) fn update_inline_message(&mut self, message: Option<String>) {
-        self.inline_message = message
+    pub(crate) fn update_inline_message(&mut self, message: Option<String>) -> bool {
+        let inline_message = message
             .map(|message| message.trim().to_string())
             .filter(|message| !message.is_empty());
+        let changed = self.inline_message != inline_message;
+        self.inline_message = inline_message;
+        changed
     }
 
     #[cfg(test)]
@@ -136,8 +145,10 @@ impl StatusIndicatorWidget {
         self.details.as_deref()
     }
 
-    pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
+    pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) -> bool {
+        let changed = self.show_interrupt_hint != visible;
         self.show_interrupt_hint = visible;
+        changed
     }
 
     #[cfg(test)]
