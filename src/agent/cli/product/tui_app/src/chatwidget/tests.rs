@@ -76,9 +76,11 @@ use crate::product::protocol::plan_tool::PlanItemArg;
 use crate::product::protocol::plan_tool::StepStatus;
 use crate::product::protocol::plan_tool::UpdatePlanArgs;
 use crate::product::protocol::protocol::CodexErrorInfo;
+use crate::product::protocol::request_user_input::RequestUserInputAnswer;
 use crate::product::protocol::request_user_input::RequestUserInputEvent;
 use crate::product::protocol::request_user_input::RequestUserInputQuestion;
 use crate::product::protocol::request_user_input::RequestUserInputQuestionOption;
+use crate::product::protocol::request_user_input::RequestUserInputResponse;
 use crate::product::protocol::user_input::TextElement;
 use crate::product::protocol::user_input::UserInput;
 use crate::product::tui_app::app_event::AppEvent;
@@ -90,6 +92,7 @@ use crate::product::tui_app::history_cell::FEEDBACK_COMMIT_MESSAGE_WORD_ORDER_TE
 use crate::product::tui_app::history_cell::PlainHistoryCell;
 use crate::product::tui_app::history_cell::UserHistoryCell;
 use crate::product::tui_app::sidebar::SidebarWidget;
+use crate::product::tui_app::status_indicator_widget::StatusDetailsCapitalization;
 use crate::product::tui_app::style::proposed_plan_style;
 use crate::product::tui_app::test_backend::VT100Backend;
 use crate::product::tui_app::transcript_selection::TranscriptSelectionPoint;
@@ -116,6 +119,7 @@ use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use pretty_assertions::assert_eq;
 #[cfg(target_os = "windows")]
 use serial_test::serial;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::PathBuf;
@@ -8977,6 +8981,77 @@ async fn request_user_input_shows_immediately_during_active_answer_stream() {
         popup.contains("Option 1"),
         "expected request_user_input options, got {popup:?}"
     );
+}
+
+#[tokio::test]
+async fn request_user_input_response_restores_suspended_status_before_follow_up_stream() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_task_started();
+    chat.set_status(
+        "Waiting for background terminal".to_string(),
+        Some("cargo test -p lha".to_string()),
+        StatusDetailsCapitalization::Preserve,
+        1,
+    );
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let elapsed_before_stream = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible before streaming")
+        .elapsed_seconds();
+    assert!(elapsed_before_stream >= 1);
+
+    chat.on_agent_message_delta("partial answer\n".to_string());
+    chat.on_commit_tick();
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_widget().is_none());
+    let _ = drain_events(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "request-user-input".into(),
+        msg: EventMsg::RequestUserInput(request_user_input_event()),
+    });
+    let _ = drain_events(&mut rx);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char('1')));
+
+    assert!(chat.bottom_pane.is_task_running());
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should return after answering request_user_input");
+    assert_eq!(status.header(), "Waiting for background terminal");
+    assert_eq!(status.details(), Some("cargo test -p lha"));
+    assert!(status.elapsed_seconds() >= elapsed_before_stream);
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Waiting for background terminal"),
+        "expected restored status after answer, got {popup:?}"
+    );
+
+    let event = rx.try_recv().expect("expected user-input answer");
+    let AppEvent::CodexOp(Op::UserInputAnswer { id, response }) = event else {
+        panic!("expected UserInputAnswer");
+    };
+    assert_eq!(id, "turn-1");
+    assert_eq!(
+        response,
+        RequestUserInputResponse {
+            answers: HashMap::from([(
+                "q1".to_string(),
+                RequestUserInputAnswer {
+                    answers: vec!["Option 1".to_string()],
+                },
+            )]),
+        }
+    );
+
+    chat.on_agent_message_delta("follow-up answer\n".to_string());
+    chat.on_commit_tick();
+
+    assert!(chat.bottom_pane.status_widget().is_none());
 }
 
 #[tokio::test]

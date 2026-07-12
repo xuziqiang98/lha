@@ -2560,7 +2560,7 @@ impl ChatWidget {
             let (advanced, is_idle) = controller.on_commit_tick();
             let visible_lines = controller.visible_rendered_lines();
             if advanced {
-                self.bottom_pane.hide_status_indicator();
+                self.bottom_pane.suspend_status_indicator();
                 self.set_answer_stream_visible_lines(visible_lines);
             }
             all_idle &= is_idle;
@@ -2569,7 +2569,7 @@ impl ChatWidget {
             has_controller = true;
             let (advanced, is_idle) = controller.on_commit_tick();
             if advanced {
-                self.bottom_pane.hide_status_indicator();
+                self.bottom_pane.suspend_status_indicator();
                 self.bump_plan_stream_revision();
                 self.request_redraw();
             }

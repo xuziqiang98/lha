@@ -146,6 +146,8 @@ pub(crate) struct BottomPane {
 
     /// Inline status indicator shown above the composer while a task is running.
     status: Option<StatusIndicatorWidget>,
+    /// Status indicator temporarily suppressed while streamed content is visible.
+    suspended_status: Option<StatusIndicatorWidget>,
     /// Unified exec session summary shown above the composer.
     unified_exec_footer: UnifiedExecFooter,
     /// Queued user messages to show above the composer while a turn is running.
@@ -198,6 +200,7 @@ impl BottomPane {
             disable_paste_burst,
             is_task_running: false,
             status: None,
+            suspended_status: None,
             unified_exec_footer: UnifiedExecFooter::new(),
             queued_user_messages: QueuedUserMessages::new(),
             esc_backtrack_hint: false,
@@ -296,6 +299,14 @@ impl BottomPane {
 
     pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
         self.status.as_ref()
+    }
+
+    fn visible_or_suspended_status_mut(&mut self) -> Option<&mut StatusIndicatorWidget> {
+        if let Some(status) = self.status.as_mut() {
+            Some(status)
+        } else {
+            self.suspended_status.as_mut()
+        }
     }
 
     #[cfg(test)]
@@ -505,7 +516,7 @@ impl BottomPane {
 
     /// Update the status indicator header (defaults to "Working") and details below it.
     ///
-    /// Passing `None` clears any existing details. No-ops if the status indicator is not active.
+    /// Passing `None` clears any existing details. No-ops if the status indicator is absent.
     pub(crate) fn update_status(
         &mut self,
         header: String,
@@ -513,10 +524,11 @@ impl BottomPane {
         capitalization: StatusDetailsCapitalization,
         details_max_lines: usize,
     ) {
-        if let Some(status) = self.status.as_mut() {
+        let status_is_visible = self.status.is_some();
+        if let Some(status) = self.visible_or_suspended_status_mut() {
             let header_changed = status.update_header(header);
             let details_changed = status.update_details(details, capitalization, details_max_lines);
-            if header_changed || details_changed {
+            if status_is_visible && (header_changed || details_changed) {
                 self.request_redraw_with_risky_row_repair();
             }
         }
@@ -622,24 +634,37 @@ impl BottomPane {
         }
     }
 
-    /// Hide the status indicator while leaving task-running state untouched.
+    /// Permanently discard the status indicator while leaving task-running state untouched.
     pub(crate) fn hide_status_indicator(&mut self) {
         self.hide_status_indicator_with_redraw(true);
     }
 
     pub(crate) fn hide_status_indicator_with_redraw(&mut self, request_redraw: bool) {
-        if self.status.take().is_some() && request_redraw {
+        let was_visible = self.status.take().is_some();
+        self.suspended_status = None;
+        if was_visible && request_redraw {
+            self.request_redraw_with_risky_row_repair();
+        }
+    }
+
+    /// Temporarily hide the status indicator while retaining its current state.
+    pub(crate) fn suspend_status_indicator(&mut self) {
+        if let Some(status) = self.status.take() {
+            debug_assert!(self.suspended_status.is_none());
+            self.suspended_status = Some(status);
             self.request_redraw_with_risky_row_repair();
         }
     }
 
     pub(crate) fn ensure_status_indicator(&mut self) {
         if self.status.is_none() {
-            self.status = Some(StatusIndicatorWidget::new(
-                self.app_event_tx.clone(),
-                self.frame_requester.clone(),
-                self.animations_enabled,
-            ));
+            self.status = Some(self.suspended_status.take().unwrap_or_else(|| {
+                StatusIndicatorWidget::new(
+                    self.app_event_tx.clone(),
+                    self.frame_requester.clone(),
+                    self.animations_enabled,
+                )
+            }));
             self.sync_status_inline_message();
             self.request_redraw_with_risky_row_repair();
         }
@@ -654,9 +679,10 @@ impl BottomPane {
         visible: bool,
         request_redraw: bool,
     ) {
-        if let Some(status) = self.status.as_mut() {
+        let status_is_visible = self.status.is_some();
+        if let Some(status) = self.visible_or_suspended_status_mut() {
             let changed = status.set_interrupt_hint_visible(visible);
-            if request_redraw && changed {
+            if request_redraw && status_is_visible && changed {
                 self.request_redraw_with_risky_row_repair();
             }
         }
@@ -698,8 +724,9 @@ impl BottomPane {
     }
 
     fn sync_status_inline_message(&mut self) -> bool {
-        if let Some(status) = self.status.as_mut() {
-            status.update_inline_message(self.unified_exec_footer.summary_text())
+        let inline_message = self.unified_exec_footer.summary_text();
+        if let Some(status) = self.visible_or_suspended_status_mut() {
+            status.update_inline_message(inline_message)
         } else {
             false
         }
@@ -810,16 +837,19 @@ impl BottomPane {
     fn on_active_view_complete(&mut self) {
         self.resume_status_timer_after_modal();
         self.set_composer_input_enabled(true, None);
+        if self.is_task_running {
+            self.ensure_status_indicator();
+        }
     }
 
     fn pause_status_timer_for_modal(&mut self) {
-        if let Some(status) = self.status.as_mut() {
+        if let Some(status) = self.visible_or_suspended_status_mut() {
             status.pause_timer();
         }
     }
 
     fn resume_status_timer_after_modal(&mut self) {
-        if let Some(status) = self.status.as_mut() {
+        if let Some(status) = self.visible_or_suspended_status_mut() {
             status.resume_timer();
         }
     }
@@ -1396,6 +1426,47 @@ mod tests {
             "queued_messages_visible_when_status_hidden_snapshot",
             render_snapshot(&pane, area)
         );
+    }
+
+    #[test]
+    fn task_completion_discards_suspended_status() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask LHA to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        pane.update_status(
+            "Waiting for background terminal".to_string(),
+            Some("cargo test -p lha".to_string()),
+            StatusDetailsCapitalization::Preserve,
+            1,
+        );
+        pane.suspend_status_indicator();
+
+        assert!(pane.status.is_none());
+        assert!(pane.suspended_status.is_some());
+
+        pane.set_task_running(false);
+
+        assert!(pane.status.is_none());
+        assert!(pane.suspended_status.is_none());
+
+        pane.set_task_running(true);
+
+        let status = pane
+            .status_widget()
+            .expect("new task should create a fresh status indicator");
+        assert_eq!(status.header(), "Working");
+        assert_eq!(status.details(), None);
     }
 
     #[test]
