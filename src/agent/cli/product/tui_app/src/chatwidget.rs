@@ -513,6 +513,32 @@ struct ReasoningItemStreamState {
     last_raw_content_index: Option<i64>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReasoningContentSource {
+    Summary,
+    Raw,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ReasoningBufferEntry {
+    Content {
+        item_id: Option<String>,
+        source: ReasoningContentSource,
+        markdown: String,
+    },
+    SectionBreak {
+        item_id: Option<String>,
+    },
+}
+
+impl ReasoningBufferEntry {
+    fn item_id(&self) -> Option<&str> {
+        match self {
+            Self::Content { item_id, .. } | Self::SectionBreak { item_id } => item_id.as_deref(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum LegacyReasoningCompletion {
     Summary(String),
@@ -610,10 +636,9 @@ pub(crate) struct ChatWidget {
     connectors_cache: ConnectorsCacheState,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
-    // Accumulates the current reasoning section for title and body presentation.
-    reasoning_buffer: String,
-    // Accumulates all reasoning sections before they are finalized into history.
-    full_reasoning_buffer: String,
+    // Accumulates reasoning sections with their source so raw content is never interpreted as a
+    // summary title.
+    reasoning_buffer: Vec<ReasoningBufferEntry>,
     // Structured deltas arrive before their completed reasoning item. Keep the per-item text so
     // completion can fill only a missing suffix instead of replaying the entire item.
     reasoning_item_states: HashMap<String, ReasoningItemStreamState>,
@@ -953,9 +978,129 @@ impl ChatWidget {
             .set_task_running_with_redraw(self.task_running_state(), request_redraw);
     }
 
+    fn current_reasoning_entries(&self) -> &[ReasoningBufferEntry] {
+        let current_section_start = self
+            .reasoning_buffer
+            .iter()
+            .rposition(|entry| matches!(entry, ReasoningBufferEntry::SectionBreak { .. }))
+            .map_or(0, |index| index + 1);
+        &self.reasoning_buffer[current_section_start..]
+    }
+
+    fn reasoning_buffer_has_content(&self) -> bool {
+        self.reasoning_buffer.iter().any(|entry| {
+            matches!(
+                entry,
+                ReasoningBufferEntry::Content { markdown, .. } if !markdown.is_empty()
+            )
+        })
+    }
+
+    fn current_reasoning_content(&self, source: ReasoningContentSource) -> &str {
+        self.current_reasoning_entries()
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                ReasoningBufferEntry::Content {
+                    source: entry_source,
+                    markdown,
+                    ..
+                } if *entry_source == source => Some(markdown.as_str()),
+                ReasoningBufferEntry::Content { .. }
+                | ReasoningBufferEntry::SectionBreak { .. } => None,
+            })
+            .unwrap_or_default()
+    }
+
+    fn append_reasoning_delta(
+        &mut self,
+        item_id: Option<&str>,
+        source: ReasoningContentSource,
+        delta: String,
+    ) {
+        let item_id = item_id.map(str::to_owned);
+        if let Some(ReasoningBufferEntry::Content {
+            item_id: last_item_id,
+            source: last_source,
+            markdown,
+        }) = self.reasoning_buffer.last_mut()
+            && *last_source == source
+            && last_item_id.as_deref() == item_id.as_deref()
+        {
+            markdown.push_str(&delta);
+            return;
+        }
+
+        self.reasoning_buffer.push(ReasoningBufferEntry::Content {
+            item_id,
+            source,
+            markdown: delta,
+        });
+    }
+
+    fn append_reasoning_section_break(&mut self, item_id: Option<&str>) {
+        self.reasoning_buffer
+            .push(ReasoningBufferEntry::SectionBreak {
+                item_id: item_id.map(str::to_owned),
+            });
+    }
+
+    fn replace_reasoning_item_entries(
+        &mut self,
+        item_id: &str,
+        entries: Vec<ReasoningBufferEntry>,
+    ) {
+        let mut replacement = Some(entries);
+        let mut updated = Vec::with_capacity(self.reasoning_buffer.len());
+
+        for entry in self.reasoning_buffer.drain(..) {
+            if entry.item_id() == Some(item_id) {
+                if let Some(entries) = replacement.take() {
+                    updated.extend(entries);
+                }
+            } else {
+                updated.push(entry);
+            }
+        }
+
+        if let Some(entries) = replacement {
+            if !updated.is_empty() && !entries.is_empty() {
+                updated.push(ReasoningBufferEntry::SectionBreak {
+                    item_id: Some(item_id.to_string()),
+                });
+            }
+            updated.extend(entries);
+        }
+
+        self.reasoning_buffer = updated;
+    }
+
+    fn update_reasoning_status_header_from_presentation(
+        &mut self,
+        presentation: ReasoningPresentation,
+    ) {
+        if self.unified_exec_wait_streak.is_some() {
+            return;
+        }
+
+        if let Some(header) = presentation.latest_status_title {
+            self.set_status_header(header);
+        }
+    }
+
+    fn update_reasoning_status_header(&mut self) {
+        let presentation = reasoning_buffer_presentation(self.current_reasoning_entries());
+        self.update_reasoning_status_header_from_presentation(presentation);
+    }
+
+    fn update_reasoning_status_header_from_buffer(&mut self) {
+        let presentation = reasoning_buffer_presentation(&self.reasoning_buffer);
+        self.update_reasoning_status_header_from_presentation(presentation);
+    }
+
     fn restore_reasoning_status_header(&mut self) {
         if let Some(header) =
-            split_reasoning_presentation(&self.reasoning_buffer).latest_status_title
+            reasoning_buffer_presentation(self.current_reasoning_entries()).latest_status_title
         {
             self.set_status_header(header);
         } else if self.bottom_pane.is_task_running() {
@@ -1552,20 +1697,17 @@ impl ChatWidget {
         self.request_redraw_with_risky_row_repair();
     }
 
-    fn on_agent_reasoning_delta(&mut self, delta: String) {
+    fn on_agent_reasoning_delta(
+        &mut self,
+        item_id: Option<&str>,
+        source: ReasoningContentSource,
+        delta: String,
+    ) {
         // Reasoning titles are live status; the remaining Markdown is finalized into history.
-        self.reasoning_buffer.push_str(&delta);
+        self.append_reasoning_delta(item_id, source, delta);
 
-        if self.unified_exec_wait_streak.is_some() {
-            // Unified exec waiting should take precedence over reasoning-derived status headers.
-            self.request_redraw();
-            return;
-        }
-
-        if let Some(header) =
-            split_reasoning_presentation(&self.reasoning_buffer).latest_status_title
-        {
-            self.set_status_header(header);
+        if source == ReasoningContentSource::Summary {
+            self.update_reasoning_status_header();
         }
         self.request_redraw();
     }
@@ -1578,13 +1720,13 @@ impl ChatWidget {
             ..
         } = event;
         self.reasoning_item_states
-            .entry(item_id)
+            .entry(item_id.clone())
             .or_default()
             .summary_deltas
             .entry(summary_index)
             .or_default()
             .push_str(&delta);
-        self.on_agent_reasoning_delta(delta);
+        self.on_agent_reasoning_delta(Some(&item_id), ReasoningContentSource::Summary, delta);
     }
 
     fn on_reasoning_raw_content_delta(&mut self, event: ReasoningRawContentDeltaEvent) {
@@ -1598,8 +1740,12 @@ impl ChatWidget {
             content_index,
             ..
         } = event;
+        let has_reasoning_content = self.reasoning_buffer_has_content();
         let should_start_new_section = {
-            let state = self.reasoning_item_states.entry(item_id).or_default();
+            let state = self
+                .reasoning_item_states
+                .entry(item_id.clone())
+                .or_default();
             let new_raw_part = state
                 .last_raw_content_index
                 .is_some_and(|index| index != content_index);
@@ -1611,12 +1757,12 @@ impl ChatWidget {
                 .push_str(&delta);
             let should_start = !state.raw_section_started || new_raw_part;
             state.raw_section_started = true;
-            should_start && !self.reasoning_buffer.is_empty()
+            should_start && has_reasoning_content
         };
         if should_start_new_section {
-            self.on_reasoning_section_break();
+            self.append_reasoning_section_break(Some(&item_id));
         }
-        self.on_agent_reasoning_delta(delta);
+        self.on_agent_reasoning_delta(Some(&item_id), ReasoningContentSource::Raw, delta);
     }
 
     fn on_reasoning_item_completed(
@@ -1630,11 +1776,14 @@ impl ChatWidget {
             return;
         }
 
-        let mut state = self
+        let state = self
             .reasoning_item_states
             .remove(&item.id)
             .unwrap_or_default();
-        self.append_live_reasoning_item_completion(&item, &mut state);
+        let entries =
+            canonical_reasoning_item_entries(&item, &state, self.config.show_raw_agent_reasoning);
+        self.replace_reasoning_item_entries(&item.id, entries);
+        self.update_reasoning_status_header_from_buffer();
         self.on_agent_reasoning_final();
         if let Some(event_id) = event_id {
             self.register_live_legacy_reasoning_completion(event_id, &item);
@@ -1642,66 +1791,13 @@ impl ChatWidget {
     }
 
     fn replay_reasoning_item(&mut self, item: ReasoningItem) {
-        let mut parts = item.summary_text;
-        if self.config.show_raw_agent_reasoning {
-            parts.extend(item.raw_content);
-        }
-
-        for (index, part) in parts.into_iter().enumerate() {
-            if index > 0 {
-                self.on_reasoning_section_break();
-            }
-            self.on_agent_reasoning_delta(part);
-        }
-        if !self.reasoning_buffer.is_empty() || !self.full_reasoning_buffer.is_empty() {
+        let state = ReasoningItemStreamState::default();
+        let entries =
+            canonical_reasoning_item_entries(&item, &state, self.config.show_raw_agent_reasoning);
+        self.replace_reasoning_item_entries(&item.id, entries);
+        self.update_reasoning_status_header_from_buffer();
+        if self.reasoning_buffer_has_content() {
             self.on_agent_reasoning_final();
-        }
-    }
-
-    fn append_live_reasoning_item_completion(
-        &mut self,
-        item: &ReasoningItem,
-        state: &mut ReasoningItemStreamState,
-    ) {
-        for (index, summary) in item.summary_text.iter().enumerate() {
-            let received = state
-                .summary_deltas
-                .get(&(index as i64))
-                .map(String::as_str)
-                .unwrap_or_default();
-            let missing = missing_reasoning_suffix(received, summary);
-            if !missing.is_empty() {
-                if received.is_empty() && index > 0 && !self.reasoning_buffer.is_empty() {
-                    self.on_reasoning_section_break();
-                }
-                self.on_agent_reasoning_delta(missing.to_string());
-            }
-        }
-
-        if !self.config.show_raw_agent_reasoning || item.raw_content.is_empty() {
-            return;
-        }
-
-        if !state.raw_section_started {
-            state.raw_section_started = true;
-            if !self.reasoning_buffer.is_empty() {
-                self.on_reasoning_section_break();
-            }
-        }
-
-        for (index, raw) in item.raw_content.iter().enumerate() {
-            let received = state
-                .raw_deltas
-                .get(&(index as i64))
-                .map(String::as_str)
-                .unwrap_or_default();
-            let missing = missing_reasoning_suffix(received, raw);
-            if !missing.is_empty() {
-                if received.is_empty() && index > 0 && !self.reasoning_buffer.is_empty() {
-                    self.on_reasoning_section_break();
-                }
-                self.on_agent_reasoning_delta(missing.to_string());
-            }
         }
     }
 
@@ -1755,7 +1851,7 @@ impl ChatWidget {
 
     fn on_legacy_reasoning_delta(&mut self, delta: String) {
         self.last_legacy_reasoning_finalized = None;
-        self.on_agent_reasoning_delta(delta);
+        self.on_agent_reasoning_delta(None, ReasoningContentSource::Summary, delta);
     }
 
     fn on_legacy_reasoning_final(&mut self, event_id: Option<&str>, text: String) {
@@ -1767,7 +1863,7 @@ impl ChatWidget {
         }
 
         self.last_legacy_reasoning_finalized = None;
-        self.append_reasoning_completion(&text);
+        self.append_reasoning_completion(ReasoningContentSource::Summary, &text);
         self.finalize_legacy_reasoning();
     }
 
@@ -1776,7 +1872,7 @@ impl ChatWidget {
             return;
         }
         self.last_legacy_reasoning_finalized = None;
-        self.on_agent_reasoning_delta(delta);
+        self.on_agent_reasoning_delta(None, ReasoningContentSource::Raw, delta);
     }
 
     fn on_legacy_raw_reasoning_final(&mut self, event_id: Option<&str>, text: String) {
@@ -1794,34 +1890,35 @@ impl ChatWidget {
         }
 
         self.last_legacy_reasoning_finalized = None;
-        self.append_reasoning_completion(&text);
+        self.append_reasoning_completion(ReasoningContentSource::Raw, &text);
         self.finalize_legacy_reasoning();
     }
 
-    fn append_reasoning_completion(&mut self, text: &str) {
-        let presentation = split_reasoning_presentation(&self.reasoning_buffer);
-        if presentation.transcript_markdown.is_empty()
-            && presentation.latest_status_title.as_deref() == Some(text.trim())
-        {
-            return;
+    fn append_reasoning_completion(&mut self, source: ReasoningContentSource, text: &str) {
+        let received = self.current_reasoning_content(source).to_string();
+        if source == ReasoningContentSource::Summary {
+            let presentation = split_reasoning_presentation(&received);
+            if presentation.transcript_markdown.is_empty()
+                && presentation.latest_status_title.as_deref() == Some(text.trim())
+            {
+                return;
+            }
         }
 
-        let missing = missing_reasoning_suffix(&self.reasoning_buffer, text);
+        let missing = missing_reasoning_suffix(&received, text);
         if !missing.is_empty() {
-            self.on_agent_reasoning_delta(missing.to_string());
+            self.on_agent_reasoning_delta(None, source, missing.to_string());
         }
     }
 
     fn finalize_legacy_reasoning(&mut self) {
-        let mut finalized = self.full_reasoning_buffer.clone();
-        finalized.push_str(&self.reasoning_buffer);
+        let finalized = reasoning_buffer_markdown(&self.reasoning_buffer);
         self.on_agent_reasoning_final();
         self.last_legacy_reasoning_finalized = (!finalized.is_empty()).then_some(finalized);
     }
 
     fn on_agent_reasoning_final(&mut self) {
-        self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
-        let presentation = split_reasoning_presentation(&self.full_reasoning_buffer);
+        let presentation = reasoning_buffer_presentation(&self.reasoning_buffer);
         if !presentation.transcript_markdown.is_empty() {
             let cell = if self.should_hide_reasoning_summary_from_display() {
                 history_cell::new_reasoning_summary_content_transcript_only(
@@ -1833,7 +1930,6 @@ impl ChatWidget {
             self.add_boxed_history(cell);
         }
         self.reasoning_buffer.clear();
-        self.full_reasoning_buffer.clear();
         self.request_redraw();
     }
 
@@ -1843,7 +1939,6 @@ impl ChatWidget {
 
     fn clear_reasoning_buffers(&mut self) {
         self.reasoning_buffer.clear();
-        self.full_reasoning_buffer.clear();
         self.reasoning_item_states.clear();
         self.pending_live_legacy_reasoning.clear();
         self.last_legacy_reasoning_finalized = None;
@@ -1868,9 +1963,7 @@ impl ChatWidget {
 
     fn on_reasoning_section_break(&mut self) {
         // Start a new reasoning block for header extraction and accumulate transcript.
-        self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
-        self.full_reasoning_buffer.push_str("\n\n");
-        self.reasoning_buffer.clear();
+        self.append_reasoning_section_break(None);
     }
 
     fn on_agent_job_status(&mut self, event: AgentJobStatusEvent) {
@@ -3329,8 +3422,7 @@ impl ChatWidget {
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             interrupts: InterruptManager::new(),
-            reasoning_buffer: String::new(),
-            full_reasoning_buffer: String::new(),
+            reasoning_buffer: Vec::new(),
             reasoning_item_states: HashMap::new(),
             pending_live_legacy_reasoning: HashMap::new(),
             last_legacy_reasoning_finalized: None,
@@ -3514,8 +3606,7 @@ impl ChatWidget {
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             interrupts: InterruptManager::new(),
-            reasoning_buffer: String::new(),
-            full_reasoning_buffer: String::new(),
+            reasoning_buffer: Vec::new(),
             reasoning_item_states: HashMap::new(),
             pending_live_legacy_reasoning: HashMap::new(),
             last_legacy_reasoning_finalized: None,
@@ -8002,6 +8093,12 @@ struct ReasoningPresentation {
 }
 
 fn split_reasoning_presentation(markdown: &str) -> ReasoningPresentation {
+    let mut presentation = split_reasoning_presentation_untrimmed(markdown);
+    presentation.transcript_markdown = presentation.transcript_markdown.trim().to_string();
+    presentation
+}
+
+fn split_reasoning_presentation_untrimmed(markdown: &str) -> ReasoningPresentation {
     let mut latest_status_title = None;
     let mut transcript_lines: Vec<String> = Vec::new();
 
@@ -8029,8 +8126,129 @@ fn split_reasoning_presentation(markdown: &str) -> ReasoningPresentation {
 
     ReasoningPresentation {
         latest_status_title,
-        transcript_markdown: transcript_lines.join("\n").trim().to_string(),
+        transcript_markdown: transcript_lines.join("\n"),
     }
+}
+
+fn reasoning_buffer_presentation(entries: &[ReasoningBufferEntry]) -> ReasoningPresentation {
+    let mut latest_status_title = None;
+    let mut transcript_markdown = String::new();
+
+    for entry in entries {
+        match entry {
+            ReasoningBufferEntry::Content {
+                source: ReasoningContentSource::Summary,
+                markdown,
+                ..
+            } => {
+                let presentation = split_reasoning_presentation_untrimmed(markdown);
+                if let Some(title) = presentation.latest_status_title {
+                    latest_status_title = Some(title);
+                }
+                transcript_markdown.push_str(&presentation.transcript_markdown);
+            }
+            ReasoningBufferEntry::Content {
+                source: ReasoningContentSource::Raw,
+                markdown,
+                ..
+            } => transcript_markdown.push_str(markdown),
+            ReasoningBufferEntry::SectionBreak { .. } => transcript_markdown.push_str("\n\n"),
+        }
+    }
+
+    ReasoningPresentation {
+        latest_status_title,
+        transcript_markdown: transcript_markdown.trim().to_string(),
+    }
+}
+
+fn reasoning_buffer_markdown(entries: &[ReasoningBufferEntry]) -> String {
+    let mut markdown = String::new();
+    for entry in entries {
+        match entry {
+            ReasoningBufferEntry::Content {
+                markdown: entry_markdown,
+                ..
+            } => markdown.push_str(entry_markdown),
+            ReasoningBufferEntry::SectionBreak { .. } => markdown.push_str("\n\n"),
+        }
+    }
+    markdown
+}
+
+fn canonical_reasoning_item_entries(
+    item: &ReasoningItem,
+    state: &ReasoningItemStreamState,
+    show_raw_agent_reasoning: bool,
+) -> Vec<ReasoningBufferEntry> {
+    let mut entries = Vec::new();
+    append_reconciled_reasoning_entries(
+        &mut entries,
+        &item.id,
+        ReasoningContentSource::Summary,
+        &item.summary_text,
+        &state.summary_deltas,
+    );
+    if show_raw_agent_reasoning {
+        append_reconciled_reasoning_entries(
+            &mut entries,
+            &item.id,
+            ReasoningContentSource::Raw,
+            &item.raw_content,
+            &state.raw_deltas,
+        );
+    }
+    entries
+}
+
+fn append_reconciled_reasoning_entries(
+    entries: &mut Vec<ReasoningBufferEntry>,
+    item_id: &str,
+    source: ReasoningContentSource,
+    completed_parts: &[String],
+    received_deltas: &BTreeMap<i64, String>,
+) {
+    for markdown in reconciled_reasoning_parts(completed_parts, received_deltas) {
+        if !entries.is_empty() {
+            entries.push(ReasoningBufferEntry::SectionBreak {
+                item_id: Some(item_id.to_string()),
+            });
+        }
+        entries.push(ReasoningBufferEntry::Content {
+            item_id: Some(item_id.to_string()),
+            source,
+            markdown,
+        });
+    }
+}
+
+fn reconciled_reasoning_parts(
+    completed_parts: &[String],
+    received_deltas: &BTreeMap<i64, String>,
+) -> Vec<String> {
+    let received_len = received_deltas
+        .last_key_value()
+        .and_then(|(index, _)| usize::try_from(*index).ok())
+        .and_then(|index| index.checked_add(1))
+        .unwrap_or_default();
+    let parts_len = completed_parts.len().max(received_len);
+
+    (0..parts_len)
+        .filter_map(|index| {
+            let received = i64::try_from(index)
+                .ok()
+                .and_then(|index| received_deltas.get(&index))
+                .map(String::as_str)
+                .unwrap_or_default();
+            let completed = completed_parts
+                .get(index)
+                .map(String::as_str)
+                .unwrap_or_default();
+            let mut markdown = received.to_string();
+            markdown.push_str(missing_reasoning_suffix(received, completed));
+            (!markdown.is_empty()).then_some(markdown)
+        })
+        .collect()
 }
 
 fn standalone_reasoning_title(line: &str) -> Option<String> {

@@ -2696,8 +2696,7 @@ async fn make_chatwidget_manual_inner_with_otel(
         mcp_startup_status: None,
         connectors_cache: ConnectorsCacheState::default(),
         interrupts: InterruptManager::new(),
-        reasoning_buffer: String::new(),
-        full_reasoning_buffer: String::new(),
+        reasoning_buffer: Vec::new(),
         reasoning_item_states: HashMap::new(),
         pending_live_legacy_reasoning: HashMap::new(),
         last_legacy_reasoning_finalized: None,
@@ -2882,8 +2881,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         mcp_startup_status: None,
         connectors_cache: ConnectorsCacheState::default(),
         interrupts: InterruptManager::new(),
-        reasoning_buffer: String::new(),
-        full_reasoning_buffer: String::new(),
+        reasoning_buffer: Vec::new(),
         reasoning_item_states: HashMap::new(),
         pending_live_legacy_reasoning: HashMap::new(),
         last_legacy_reasoning_finalized: None,
@@ -11306,6 +11304,127 @@ async fn structured_reasoning_shows_raw_once_when_enabled() {
 }
 
 #[tokio::test]
+async fn structured_reasoning_reconciles_completion_only_summary_before_raw_delta() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.show_raw_agent_reasoning = true;
+    let thread_id = ThreadId::new();
+    let item_id = "reasoning-raw-before-summary";
+    let summary = "**Checking tests**\n\nSummary body.";
+    let raw = "raw detail";
+
+    chat.on_task_started();
+    chat.handle_codex_event(Event {
+        id: item_id.into(),
+        msg: EventMsg::ReasoningRawContentDelta(ReasoningRawContentDeltaEvent {
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-1".into(),
+            item_id: item_id.into(),
+            delta: raw.into(),
+            content_index: 0,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: item_id.into(),
+        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id,
+            turn_id: "turn-1".into(),
+            item: TurnItem::Reasoning(ReasoningItem {
+                id: item_id.into(),
+                summary_text: vec![summary.into()],
+                raw_content: vec![raw.into()],
+            }),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: item_id.into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: summary.into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: item_id.into(),
+        msg: EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text: raw.into() }),
+    });
+
+    assert_eq!(chat.current_status.header, "Checking tests");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    let summary_index = rendered
+        .find("Summary body.")
+        .expect("summary body should be rendered");
+    let raw_index = rendered
+        .find(raw)
+        .expect("raw reasoning should be rendered");
+
+    assert_eq!(cells.len(), 1);
+    assert_eq!(rendered.matches("Summary body.").count(), 1);
+    assert_eq!(rendered.matches(raw).count(), 1);
+    assert!(summary_index < raw_index);
+    assert!(!rendered.contains("Checking tests"));
+}
+
+#[tokio::test]
+async fn structured_reasoning_keeps_standalone_bold_raw_content() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.show_raw_agent_reasoning = true;
+    let thread_id = ThreadId::new();
+    let item_id = "reasoning-bold-raw";
+    let raw = "**Raw detail**";
+
+    chat.on_task_started();
+    chat.handle_codex_event(Event {
+        id: item_id.into(),
+        msg: EventMsg::ReasoningRawContentDelta(ReasoningRawContentDeltaEvent {
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-1".into(),
+            item_id: item_id.into(),
+            delta: raw.into(),
+            content_index: 0,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: item_id.into(),
+        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id,
+            turn_id: "turn-1".into(),
+            item: TurnItem::Reasoning(ReasoningItem {
+                id: item_id.into(),
+                summary_text: Vec::new(),
+                raw_content: vec![raw.into()],
+            }),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: item_id.into(),
+        msg: EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text: raw.into() }),
+    });
+
+    assert_eq!(chat.current_status.header, "Working");
+
+    let mut display = String::new();
+    let mut transcript = String::new();
+    let mut history_cells = 0;
+    for event in drain_events(&mut rx) {
+        if let Some(cell) = into_insert_history_cell(event) {
+            history_cells += 1;
+            display.push_str(&lines_to_single_string(&cell.display_lines(120)));
+            transcript.push_str(&lines_to_single_string(&cell.transcript_lines(120)));
+        }
+    }
+
+    assert_eq!(history_cells, 1);
+    assert!(display.contains("Raw detail"), "display: {display:?}");
+    assert!(
+        transcript.contains("Raw detail"),
+        "transcript: {transcript:?}"
+    );
+}
+
+#[tokio::test]
 async fn legacy_reasoning_completion_renders_payload_without_repeating_raw_delta() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config.show_raw_agent_reasoning = true;
@@ -11336,6 +11455,38 @@ async fn legacy_reasoning_completion_renders_payload_without_repeating_raw_delta
     assert_eq!(rendered.matches("legacy summary").count(), 1);
     assert_eq!(rendered.matches("raw detail").count(), 1);
     assert!(!rendered.contains("raw detailraw detail"));
+}
+
+#[tokio::test]
+async fn legacy_raw_reasoning_keeps_standalone_bold_content() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.show_raw_agent_reasoning = true;
+    let raw = "**Raw detail**";
+
+    chat.handle_codex_event(Event {
+        id: "legacy-bold-raw".into(),
+        msg: EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
+            delta: "**Raw detail".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "legacy-bold-raw".into(),
+        msg: EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text: raw.into() }),
+    });
+    chat.handle_codex_event(Event {
+        id: "legacy-bold-raw".into(),
+        msg: EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text: raw.into() }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+
+    assert_eq!(chat.current_status.header, "Working");
+    assert_eq!(cells.len(), 1);
+    assert_eq!(rendered.matches("Raw detail").count(), 1);
 }
 
 #[tokio::test]
@@ -11379,6 +11530,51 @@ async fn replayed_raw_reasoning_respects_current_visibility_setting() {
         .collect::<String>();
     assert_eq!(visible.matches(summary).count(), 1);
     assert_eq!(visible.matches(raw).count(), 1);
+}
+
+#[tokio::test]
+async fn replayed_structured_raw_reasoning_keeps_standalone_bold_content_when_enabled() {
+    let thread_id = ThreadId::new();
+    let raw = "**replayed raw**";
+
+    let (mut hidden_chat, mut hidden_rx, _op_rx) = make_chatwidget_manual(None).await;
+    hidden_chat.handle_codex_event_replay(Event {
+        id: "replayed-bold-raw".into(),
+        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id,
+            turn_id: "turn-1".into(),
+            item: TurnItem::Reasoning(ReasoningItem {
+                id: "replayed-bold-raw".into(),
+                summary_text: Vec::new(),
+                raw_content: vec![raw.into()],
+            }),
+        }),
+    });
+    let hidden = drain_insert_history(&mut hidden_rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(!hidden.contains("replayed raw"));
+
+    let (mut visible_chat, mut visible_rx, _op_rx) = make_chatwidget_manual(None).await;
+    visible_chat.config.show_raw_agent_reasoning = true;
+    visible_chat.handle_codex_event_replay(Event {
+        id: "replayed-bold-raw".into(),
+        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id,
+            turn_id: "turn-1".into(),
+            item: TurnItem::Reasoning(ReasoningItem {
+                id: "replayed-bold-raw".into(),
+                summary_text: Vec::new(),
+                raw_content: vec![raw.into()],
+            }),
+        }),
+    });
+    let visible = drain_insert_history(&mut visible_rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_eq!(visible.matches("replayed raw").count(), 1);
 }
 
 #[tokio::test]
@@ -12361,7 +12557,6 @@ async fn interrupted_review_exit_clears_progress_ui() {
     assert!(chat.bottom_pane.unified_exec_processes().is_empty());
     assert!(chat.unified_exec_processes.is_empty());
     assert!(chat.reasoning_buffer.is_empty());
-    assert!(chat.full_reasoning_buffer.is_empty());
     assert!(chat.bottom_pane.is_task_running());
 
     chat.handle_codex_event(Event {
