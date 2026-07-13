@@ -1618,7 +1618,8 @@ async fn plan_mode_handles_missing_plan_close_tag() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
+async fn reasoning_content_delta_has_item_metadata_without_legacy_delta_echo() -> anyhow::Result<()>
+{
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1644,35 +1645,41 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
         })
         .await?;
 
-    let reasoning_item = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::ItemStarted(ItemStartedEvent {
-            item: TurnItem::Reasoning(item),
-            ..
-        }) => Some(item.clone()),
-        _ => None,
-    })
-    .await;
+    let mut reasoning_item = None;
+    let mut delta_event = None;
+    let mut legacy_delta_seen = false;
+    let mut legacy_completion = None;
+    loop {
+        match wait_for_event(&codex, |_| true).await {
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::Reasoning(item),
+                ..
+            }) => reasoning_item = Some(item),
+            EventMsg::ReasoningContentDelta(event) => delta_event = Some(event),
+            EventMsg::AgentReasoningDelta(_) => legacy_delta_seen = true,
+            EventMsg::AgentReasoning(event) => legacy_completion = Some(event),
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
 
-    let delta_event = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::ReasoningContentDelta(event) => Some(event.clone()),
-        _ => None,
-    })
-    .await;
-    let legacy_delta = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::AgentReasoningDelta(event) => Some(event.clone()),
-        _ => None,
-    })
-    .await;
-
+    let reasoning_item = reasoning_item.expect("expected reasoning item");
+    let delta_event = delta_event.expect("expected structured reasoning delta");
+    let legacy_completion = legacy_completion.expect("expected legacy reasoning completion");
     assert_eq!(delta_event.item_id, reasoning_item.id);
     assert_eq!(delta_event.delta, "step one");
-    assert_eq!(legacy_delta.delta, "step one");
+    assert_eq!(legacy_completion.text, "step one");
+    assert!(
+        !legacy_delta_seen,
+        "structured reasoning delta emitted legacy echo"
+    );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reasoning_raw_content_delta_respects_flag() -> anyhow::Result<()> {
+async fn reasoning_raw_content_delta_has_no_legacy_echo_and_keeps_enabled_completion()
+-> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1703,29 +1710,83 @@ async fn reasoning_raw_content_delta_respects_flag() -> anyhow::Result<()> {
         })
         .await?;
 
-    let reasoning_item = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::ItemStarted(ItemStartedEvent {
-            item: TurnItem::Reasoning(item),
-            ..
-        }) => Some(item.clone()),
-        _ => None,
-    })
-    .await;
+    let mut reasoning_item = None;
+    let mut delta_event = None;
+    let mut legacy_delta_seen = false;
+    let mut legacy_completion = None;
+    loop {
+        match wait_for_event(&codex, |_| true).await {
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::Reasoning(item),
+                ..
+            }) => reasoning_item = Some(item),
+            EventMsg::ReasoningRawContentDelta(event) => delta_event = Some(event),
+            EventMsg::AgentReasoningRawContentDelta(_) => legacy_delta_seen = true,
+            EventMsg::AgentReasoningRawContent(event) => legacy_completion = Some(event),
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
 
-    let delta_event = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::ReasoningRawContentDelta(event) => Some(event.clone()),
-        _ => None,
-    })
-    .await;
-    let legacy_delta = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::AgentReasoningRawContentDelta(event) => Some(event.clone()),
-        _ => None,
-    })
-    .await;
-
+    let reasoning_item = reasoning_item.expect("expected reasoning item");
+    let delta_event = delta_event.expect("expected structured raw reasoning delta");
+    let legacy_completion = legacy_completion.expect("expected legacy raw reasoning completion");
     assert_eq!(delta_event.item_id, reasoning_item.id);
     assert_eq!(delta_event.delta, "raw detail");
-    assert_eq!(legacy_delta.delta, "raw detail");
+    assert_eq!(legacy_completion.text, "raw detail");
+    assert!(
+        !legacy_delta_seen,
+        "structured raw reasoning delta emitted legacy echo"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reasoning_raw_completion_is_hidden_when_disabled() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let TestCodex { codex, .. } = test_codex().build(&server).await?;
+
+    let stream = sse(vec![
+        ev_response_created("resp-1"),
+        ev_reasoning_item_added("reasoning-raw", &[""]),
+        ev_reasoning_text_delta("raw detail"),
+        ev_reasoning_item("reasoning-raw", &["complete"], &["raw detail"]),
+        ev_completed("resp-1"),
+    ]);
+    mount_sse_once(&server, stream).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hide raw reasoning".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let mut structured_delta_seen = false;
+    let mut legacy_completion_seen = false;
+    loop {
+        match wait_for_event(&codex, |_| true).await {
+            EventMsg::ReasoningRawContentDelta(_) => structured_delta_seen = true,
+            EventMsg::AgentReasoningRawContent(_) => legacy_completion_seen = true,
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert!(
+        structured_delta_seen,
+        "expected structured raw reasoning delta"
+    );
+    assert!(
+        !legacy_completion_seen,
+        "raw reasoning completion ignored disabled visibility setting"
+    );
 
     Ok(())
 }

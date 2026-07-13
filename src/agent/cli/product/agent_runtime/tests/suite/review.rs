@@ -67,6 +67,21 @@ impl Drop for EnvVarGuard {
 
 #[cfg(unix)]
 fn write_fake_reviewer_exec(dir: &TempDir, review_output: &ReviewOutputEvent) -> PathBuf {
+    let raw_events = [crate::product::protocol::protocol::Event {
+        id: "fake-reviewer-reasoning".to_string(),
+        msg: EventMsg::AgentReasoning(crate::product::protocol::protocol::AgentReasoningEvent {
+            text: "checking review target".to_string(),
+        }),
+    }];
+    write_fake_reviewer_exec_with_raw_events(dir, review_output, &raw_events)
+}
+
+#[cfg(unix)]
+fn write_fake_reviewer_exec_with_raw_events(
+    dir: &TempDir,
+    review_output: &ReviewOutputEvent,
+    raw_events: &[crate::product::protocol::protocol::Event],
+) -> PathBuf {
     use std::os::unix::fs::PermissionsExt as _;
 
     let script = dir.path().join("lha-exec-fake");
@@ -74,6 +89,18 @@ fn write_fake_reviewer_exec(dir: &TempDir, review_output: &ReviewOutputEvent) ->
     let env_log = dir.path().join("env.log");
     let review_json = serde_json::to_string(review_output)
         .unwrap_or_else(|err| panic!("review output json: {err}"));
+    let raw_events = raw_events
+        .iter()
+        .map(|event| {
+            serde_json::to_string(event)
+                .unwrap_or_else(|err| panic!("serialize fake reviewer event: {err}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let args_log = args_log.display();
+    let env_log = env_log.display();
+    let escaped_review_json = review_json.replace('\'', "'\\''");
+    let escaped_raw_events = raw_events.replace('\'', "'\\''");
     let body = format!(
         r#"#!/bin/sh
 out=""
@@ -98,13 +125,10 @@ while [ "$#" -gt 0 ]; do
   fi
 done
 if [ "$raw_events" = "1" ]; then
-  printf "%s\n" '{{"id":"fake-reviewer-reasoning","msg":{{"type":"agent_reasoning","text":"checking review target"}}}}'
+  printf '%s\n' '{escaped_raw_events}'
 fi
-printf '%s' '{review_json}' > "$out"
+printf '%s' '{escaped_review_json}' > "$out"
 "#,
-        args_log = args_log.display(),
-        env_log = env_log.display(),
-        review_json = review_json.replace('\'', "'\\''"),
     );
     std::fs::write(&script, body).unwrap_or_else(|err| panic!("write fake reviewer exec: {err}"));
     let mut permissions = std::fs::metadata(&script)
@@ -371,6 +395,132 @@ async fn review_op_uses_cli_backed_reviewer_job() {
     assert!(
         child_env.contains("REASONING_EFFORT=\"high\""),
         "expected inherited reasoning effort: {child_env:?}"
+    );
+
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    let _lha_home_guard = lha_home;
+}
+
+#[cfg(unix)]
+#[serial_test::serial(review_exec_env)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_op_forwards_canonical_reasoning_once_when_child_echoes_legacy_events() {
+    let expected = ReviewOutputEvent {
+        overall_correctness: "patch is correct".to_string(),
+        overall_explanation: "The fake reviewer completed successfully.".to_string(),
+        overall_confidence_score: 0.8,
+        ..Default::default()
+    };
+    let fake_exec_dir = TempDir::new().expect("fake exec tempdir");
+    let thread_id = crate::product::protocol::ThreadId::new();
+    let raw_events = [
+        crate::product::protocol::protocol::Event {
+            id: "fake-reviewer-reasoning".to_string(),
+            msg: EventMsg::ReasoningContentDelta(
+                crate::product::protocol::protocol::ReasoningContentDeltaEvent {
+                    thread_id: thread_id.to_string(),
+                    turn_id: "fake-reviewer-turn".to_string(),
+                    item_id: "fake-reviewer-reasoning".to_string(),
+                    delta: "checking review target".to_string(),
+                    summary_index: 0,
+                },
+            ),
+        },
+        crate::product::protocol::protocol::Event {
+            id: "fake-reviewer-reasoning".to_string(),
+            msg: EventMsg::ItemCompleted(crate::product::protocol::protocol::ItemCompletedEvent {
+                thread_id,
+                turn_id: "fake-reviewer-turn".to_string(),
+                item: crate::product::protocol::items::TurnItem::Reasoning(
+                    crate::product::protocol::items::ReasoningItem {
+                        id: "fake-reviewer-reasoning".to_string(),
+                        summary_text: vec!["checking review target".to_string()],
+                        raw_content: Vec::new(),
+                    },
+                ),
+            }),
+        },
+        crate::product::protocol::protocol::Event {
+            id: "fake-reviewer-reasoning".to_string(),
+            msg: EventMsg::AgentReasoning(
+                crate::product::protocol::protocol::AgentReasoningEvent {
+                    text: "checking review target".to_string(),
+                },
+            ),
+        },
+    ];
+    let fake_exec =
+        write_fake_reviewer_exec_with_raw_events(&fake_exec_dir, &expected, &raw_events);
+    let _exec_guard = EnvVarGuard::set("LHA_AGENT_EXEC_BIN", fake_exec.as_os_str());
+
+    let server = MockServer::start().await;
+    let lha_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, lha_home.clone(), |_| {}).await;
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "Use canonical fake reviewer events".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    let mut saw_entered = false;
+    let mut summary_delta_count = 0;
+    let mut reasoning_item_count = 0;
+    let mut legacy_summary_count = 0;
+    let review = loop {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), codex.next_event())
+            .await
+            .expect("timeout waiting for review event")
+            .expect("event stream should stay open");
+        match event.msg {
+            EventMsg::EnteredReviewMode(_) => saw_entered = true,
+            EventMsg::ReasoningContentDelta(delta) => {
+                assert_eq!("checking review target", delta.delta);
+                summary_delta_count += 1;
+            }
+            EventMsg::ItemCompleted(crate::product::protocol::protocol::ItemCompletedEvent {
+                item: crate::product::protocol::items::TurnItem::Reasoning(item),
+                ..
+            }) => {
+                assert_eq!(
+                    (
+                        "fake-reviewer-reasoning".to_string(),
+                        vec!["checking review target".to_string()],
+                        Vec::<String>::new(),
+                    ),
+                    (item.id, item.summary_text, item.raw_content)
+                );
+                reasoning_item_count += 1;
+            }
+            EventMsg::AgentReasoning(reasoning) => {
+                assert_eq!("checking review target", reasoning.text);
+                legacy_summary_count += 1;
+            }
+            EventMsg::ExitedReviewMode(ev) => {
+                assert!(
+                    saw_entered,
+                    "ExitedReviewMode must not arrive before EnteredReviewMode"
+                );
+                break ev
+                    .review_output
+                    .expect("expected ExitedReviewMode with Some(review_output)");
+            }
+            _ => {}
+        }
+    };
+
+    assert_eq!(expected, review);
+    assert_eq!(1, summary_delta_count);
+    assert_eq!(1, reasoning_item_count);
+    assert_eq!(
+        1, legacy_summary_count,
+        "the child legacy echo must not be forwarded in addition to the parent's compatibility event"
     );
 
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

@@ -1043,9 +1043,7 @@ pub struct ReasoningContentDeltaEvent {
 
 impl HasLegacyEvent for ReasoningContentDeltaEvent {
     fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
-        vec![EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: self.delta.clone(),
-        })]
+        Vec::new()
     }
 }
 
@@ -1095,11 +1093,7 @@ pub struct AgentJobStatusEvent {
 
 impl HasLegacyEvent for ReasoningRawContentDeltaEvent {
     fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
-        vec![EventMsg::AgentReasoningRawContentDelta(
-            AgentReasoningRawContentDeltaEvent {
-                delta: self.delta.clone(),
-            },
-        )]
+        Vec::new()
     }
 }
 
@@ -2615,6 +2609,34 @@ mod tests {
         };
 
         assert!(event.as_legacy_events(false).is_empty());
+    }
+
+    #[test]
+    fn reasoning_content_delta_emits_no_legacy_echo() {
+        let event = EventMsg::ReasoningContentDelta(ReasoningContentDeltaEvent {
+            thread_id: "thread-1".into(),
+            turn_id: "turn-1".into(),
+            item_id: "reasoning-1".into(),
+            delta: "summary".into(),
+            summary_index: 0,
+        });
+
+        assert!(matches!(event, EventMsg::ReasoningContentDelta(_)));
+        assert!(event.as_legacy_events(false).is_empty());
+    }
+
+    #[test]
+    fn reasoning_raw_content_delta_emits_no_legacy_echo() {
+        let event = EventMsg::ReasoningRawContentDelta(ReasoningRawContentDeltaEvent {
+            thread_id: "thread-1".into(),
+            turn_id: "turn-1".into(),
+            item_id: "reasoning-1".into(),
+            delta: "raw detail".into(),
+            content_index: 0,
+        });
+
+        assert!(matches!(event, EventMsg::ReasoningRawContentDelta(_)));
+        assert!(event.as_legacy_events(true).is_empty());
     }
 
     #[test]

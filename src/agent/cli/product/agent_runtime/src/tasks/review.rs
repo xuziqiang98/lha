@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::product::protocol::items::TurnItem;
 use crate::product::protocol::models::ContentItem;
 use crate::product::protocol::models::TranscriptItem;
 use crate::product::protocol::protocol::EventMsg;
@@ -29,6 +30,26 @@ pub(crate) struct ReviewTask;
 impl ReviewTask {
     pub(crate) fn new() -> Self {
         Self
+    }
+}
+
+#[derive(Default)]
+struct ReviewProgressForwarder {
+    saw_canonical_reasoning: bool,
+}
+
+impl ReviewProgressForwarder {
+    fn should_forward(&mut self, msg: &EventMsg) -> bool {
+        if is_canonical_reasoning_progress_event(msg) {
+            self.saw_canonical_reasoning = true;
+            return true;
+        }
+
+        if self.saw_canonical_reasoning && is_legacy_reasoning_progress_event(msg) {
+            return false;
+        }
+
+        is_forwardable_review_progress_event(msg)
     }
 }
 
@@ -124,12 +145,13 @@ async fn run_review_job(
         .session
         .send_event(ctx.as_ref(), job.status_event())
         .await;
+    let mut progress_forwarder = ReviewProgressForwarder::default();
     let mut progress_closed = false;
     loop {
         tokio::select! {
             maybe_msg = progress_rx.recv(), if !progress_closed => {
                 if let Some(msg) = maybe_msg {
-                    forward_review_progress_event(&session, &ctx, msg).await;
+                    forward_review_progress_event(&session, &ctx, &mut progress_forwarder, msg).await;
                 } else {
                     progress_closed = true;
                 }
@@ -144,11 +166,23 @@ async fn run_review_job(
                 }
                 match snapshot.status {
                     AgentJobStatus::Completed { result, .. } => {
-                        drain_review_progress_events(&session, &ctx, &mut progress_rx).await;
+                        drain_review_progress_events(
+                            &session,
+                            &ctx,
+                            &mut progress_forwarder,
+                            &mut progress_rx,
+                        )
+                        .await;
                         return Some(parse_review_output_event(&result));
                     }
                     AgentJobStatus::Failed { message, .. } => {
-                        drain_review_progress_events(&session, &ctx, &mut progress_rx).await;
+                        drain_review_progress_events(
+                            &session,
+                            &ctx,
+                            &mut progress_forwarder,
+                            &mut progress_rx,
+                        )
+                        .await;
                         let message = message.trim();
                         let message = if message.is_empty() {
                             "Review failed without error output.".to_string()
@@ -189,27 +223,57 @@ async fn run_review_job(
 async fn drain_review_progress_events(
     session: &Arc<SessionTaskContext>,
     ctx: &Arc<TurnContext>,
+    forwarder: &mut ReviewProgressForwarder,
     progress_rx: &mut mpsc::UnboundedReceiver<EventMsg>,
 ) {
     while let Ok(msg) = progress_rx.try_recv() {
-        forward_review_progress_event(session, ctx, msg).await;
+        forward_review_progress_event(session, ctx, forwarder, msg).await;
     }
 }
 
 async fn forward_review_progress_event(
     session: &Arc<SessionTaskContext>,
     ctx: &Arc<TurnContext>,
+    forwarder: &mut ReviewProgressForwarder,
     msg: EventMsg,
 ) {
-    if should_forward_review_progress_event(&msg) {
+    if forwarder.should_forward(&msg) {
         session.session.send_event(ctx.as_ref(), msg).await;
     }
 }
 
-fn should_forward_review_progress_event(msg: &EventMsg) -> bool {
+fn is_canonical_reasoning_progress_event(msg: &EventMsg) -> bool {
+    matches!(
+        msg,
+        EventMsg::ReasoningContentDelta(_)
+            | EventMsg::ReasoningRawContentDelta(_)
+            | EventMsg::ItemCompleted(crate::product::protocol::protocol::ItemCompletedEvent {
+                item: TurnItem::Reasoning(_),
+                ..
+            })
+    )
+}
+
+fn is_legacy_reasoning_progress_event(msg: &EventMsg) -> bool {
     matches!(
         msg,
         EventMsg::AgentReasoningDelta(_)
+            | EventMsg::AgentReasoning(_)
+            | EventMsg::AgentReasoningRawContentDelta(_)
+            | EventMsg::AgentReasoningRawContent(_)
+    )
+}
+
+fn is_forwardable_review_progress_event(msg: &EventMsg) -> bool {
+    matches!(
+        msg,
+        EventMsg::ReasoningContentDelta(_)
+            | EventMsg::ReasoningRawContentDelta(_)
+            | EventMsg::ItemCompleted(crate::product::protocol::protocol::ItemCompletedEvent {
+                item: TurnItem::Reasoning(_),
+                ..
+            })
+            | EventMsg::AgentReasoningDelta(_)
             | EventMsg::AgentReasoning(_)
             | EventMsg::AgentReasoningSectionBreak(_)
             | EventMsg::AgentReasoningRawContentDelta(_)
@@ -354,5 +418,65 @@ mod tests {
                 ..Default::default()
             }
         );
+    }
+
+    #[test]
+    fn review_progress_forwarder_prefers_canonical_reasoning() {
+        let mut forwarder = ReviewProgressForwarder::default();
+        let thread_id = crate::product::protocol::ThreadId::new();
+        let events = [
+            EventMsg::ReasoningContentDelta(
+                crate::product::protocol::protocol::ReasoningContentDeltaEvent {
+                    thread_id: thread_id.to_string(),
+                    turn_id: "turn-1".into(),
+                    item_id: "reasoning-1".into(),
+                    delta: "summary".into(),
+                    summary_index: 0,
+                },
+            ),
+            EventMsg::ReasoningRawContentDelta(
+                crate::product::protocol::protocol::ReasoningRawContentDeltaEvent {
+                    thread_id: thread_id.to_string(),
+                    turn_id: "turn-1".into(),
+                    item_id: "reasoning-1".into(),
+                    delta: "raw detail".into(),
+                    content_index: 0,
+                },
+            ),
+            EventMsg::ItemCompleted(crate::product::protocol::protocol::ItemCompletedEvent {
+                thread_id,
+                turn_id: "turn-1".into(),
+                item: TurnItem::Reasoning(crate::product::protocol::items::ReasoningItem {
+                    id: "reasoning-1".into(),
+                    summary_text: vec!["summary".into()],
+                    raw_content: vec!["raw detail".into()],
+                }),
+            }),
+            EventMsg::AgentReasoning(crate::product::protocol::protocol::AgentReasoningEvent {
+                text: "summary".into(),
+            }),
+            EventMsg::AgentReasoningRawContent(
+                crate::product::protocol::protocol::AgentReasoningRawContentEvent {
+                    text: "raw detail".into(),
+                },
+            ),
+        ];
+
+        let forwarded = events
+            .iter()
+            .map(|event| forwarder.should_forward(event))
+            .collect::<Vec<_>>();
+        assert_eq!(forwarded, vec![true, true, true, false, false]);
+    }
+
+    #[test]
+    fn review_progress_forwarder_keeps_legacy_only_reasoning() {
+        let mut forwarder = ReviewProgressForwarder::default();
+        let legacy =
+            EventMsg::AgentReasoning(crate::product::protocol::protocol::AgentReasoningEvent {
+                text: "summary".into(),
+            });
+
+        assert!(forwarder.should_forward(&legacy));
     }
 }

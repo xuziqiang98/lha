@@ -232,6 +232,64 @@ async fn resume_includes_initial_messages_from_reasoning_events() -> Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_excludes_raw_reasoning_when_disabled() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let initial = builder.build(&server).await?;
+    let codex = Arc::clone(&initial.codex);
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    let initial_sse = sse(vec![
+        ev_response_created("resp-initial"),
+        ev_reasoning_item("reason-1", &["Summarized step"], &["raw detail"]),
+        ev_assistant_message("msg-1", "Completed reasoning turn"),
+        ev_completed("resp-initial"),
+    ]);
+    mount_sse_once(&server, initial_sse).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "Record hidden raw reasoning".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let resumed = builder.resume(&server, home, rollout_path).await?;
+    let initial_messages = resumed
+        .session_configured
+        .initial_messages
+        .expect("expected initial messages to be present for resumed session");
+    match initial_messages.as_slice() {
+        [
+            EventMsg::UserMessage(first_user),
+            EventMsg::TokenCount(_),
+            EventMsg::AgentReasoning(reasoning),
+            EventMsg::AgentMessage(assistant_message),
+            EventMsg::TokenCount(_),
+        ] => {
+            assert_eq!(first_user.message, "Record hidden raw reasoning");
+            assert_eq!(reasoning.text, "Summarized step");
+            assert_eq!(assistant_message.message, "Completed reasoning turn");
+        }
+        other => panic!("unexpected initial messages after resume: {other:#?}"),
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

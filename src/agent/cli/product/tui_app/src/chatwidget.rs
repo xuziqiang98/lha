@@ -21,6 +21,7 @@
 //! independently (`agent_turn_running` and `mcp_startup_status`) and synchronized via
 //! `update_task_running_state`.
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -67,6 +68,8 @@ use crate::product::agent::protocol::McpToolCallBeginEvent;
 use crate::product::agent::protocol::McpToolCallEndEvent;
 use crate::product::agent::protocol::Op;
 use crate::product::agent::protocol::PatchApplyBeginEvent;
+use crate::product::agent::protocol::ReasoningContentDeltaEvent;
+use crate::product::agent::protocol::ReasoningRawContentDeltaEvent;
 use crate::product::agent::protocol::ReviewRequest;
 use crate::product::agent::protocol::ReviewTarget;
 use crate::product::agent::protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -104,6 +107,8 @@ use crate::product::protocol::config_types::Personality;
 use crate::product::protocol::config_types::Settings;
 #[cfg(target_os = "windows")]
 use crate::product::protocol::config_types::WindowsSandboxLevel;
+use crate::product::protocol::items::ReasoningItem;
+use crate::product::protocol::items::TurnItem;
 use crate::product::protocol::models::local_image_label_text;
 use crate::product::protocol::parse_command::ParsedCommand;
 use crate::product::protocol::request_user_input::RequestUserInputEvent;
@@ -500,6 +505,20 @@ struct CliAgentJobEntry {
     display_order: usize,
 }
 
+#[derive(Default)]
+struct ReasoningItemStreamState {
+    summary_deltas: BTreeMap<i64, String>,
+    raw_deltas: BTreeMap<i64, String>,
+    raw_section_started: bool,
+    last_raw_content_index: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum LegacyReasoningCompletion {
+    Summary(String),
+    Raw(String),
+}
+
 /// Maintains the per-session UI state and interaction state machines for the chat screen.
 ///
 /// `ChatWidget` owns the state derived from the protocol event stream (history cells, streaming
@@ -595,6 +614,16 @@ pub(crate) struct ChatWidget {
     reasoning_buffer: String,
     // Accumulates all reasoning sections before they are finalized into history.
     full_reasoning_buffer: String,
+    // Structured deltas arrive before their completed reasoning item. Keep the per-item text so
+    // completion can fill only a missing suffix instead of replaying the entire item.
+    reasoning_item_states: HashMap<String, ReasoningItemStreamState>,
+    // Live legacy completion events follow the structured ItemCompleted event with the same outer
+    // id. Track the exact expected sequence so those compatibility echoes stay out of the TUI.
+    pending_live_legacy_reasoning: HashMap<String, VecDeque<LegacyReasoningCompletion>>,
+    // Legacy-only streams can send a complete raw item after a summary completion that already
+    // contained the same raw text. Retain the last source until the next legacy delta to avoid a
+    // duplicate cell in that old event shape.
+    last_legacy_reasoning_finalized: Option<String>,
     // Full status snapshot shown in the status indicator.
     current_status: StatusIndicatorState,
     // Previous status snapshot to restore after a transient stream retry.
@@ -1256,6 +1285,7 @@ impl ChatWidget {
         self.counted_context_compaction_item_ids.clear();
         self.pending_live_legacy_context_compactions.clear();
         self.pending_replay_legacy_context_compactions = 0;
+        self.clear_reasoning_buffers();
         self.current_rollout_path = event.rollout_path.clone();
         self.current_goal = None;
         self.current_goal_state_known = false;
@@ -1540,6 +1570,255 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    fn on_reasoning_content_delta(&mut self, event: ReasoningContentDeltaEvent) {
+        let ReasoningContentDeltaEvent {
+            item_id,
+            delta,
+            summary_index,
+            ..
+        } = event;
+        self.reasoning_item_states
+            .entry(item_id)
+            .or_default()
+            .summary_deltas
+            .entry(summary_index)
+            .or_default()
+            .push_str(&delta);
+        self.on_agent_reasoning_delta(delta);
+    }
+
+    fn on_reasoning_raw_content_delta(&mut self, event: ReasoningRawContentDeltaEvent) {
+        if !self.config.show_raw_agent_reasoning {
+            return;
+        }
+
+        let ReasoningRawContentDeltaEvent {
+            item_id,
+            delta,
+            content_index,
+            ..
+        } = event;
+        let should_start_new_section = {
+            let state = self.reasoning_item_states.entry(item_id).or_default();
+            let new_raw_part = state
+                .last_raw_content_index
+                .is_some_and(|index| index != content_index);
+            state.last_raw_content_index = Some(content_index);
+            state
+                .raw_deltas
+                .entry(content_index)
+                .or_default()
+                .push_str(&delta);
+            let should_start = !state.raw_section_started || new_raw_part;
+            state.raw_section_started = true;
+            should_start && !self.reasoning_buffer.is_empty()
+        };
+        if should_start_new_section {
+            self.on_reasoning_section_break();
+        }
+        self.on_agent_reasoning_delta(delta);
+    }
+
+    fn on_reasoning_item_completed(
+        &mut self,
+        event_id: Option<&str>,
+        item: ReasoningItem,
+        from_replay: bool,
+    ) {
+        if from_replay {
+            self.replay_reasoning_item(item);
+            return;
+        }
+
+        let mut state = self
+            .reasoning_item_states
+            .remove(&item.id)
+            .unwrap_or_default();
+        self.append_live_reasoning_item_completion(&item, &mut state);
+        self.on_agent_reasoning_final();
+        if let Some(event_id) = event_id {
+            self.register_live_legacy_reasoning_completion(event_id, &item);
+        }
+    }
+
+    fn replay_reasoning_item(&mut self, item: ReasoningItem) {
+        let mut parts = item.summary_text;
+        if self.config.show_raw_agent_reasoning {
+            parts.extend(item.raw_content);
+        }
+
+        for (index, part) in parts.into_iter().enumerate() {
+            if index > 0 {
+                self.on_reasoning_section_break();
+            }
+            self.on_agent_reasoning_delta(part);
+        }
+        if !self.reasoning_buffer.is_empty() || !self.full_reasoning_buffer.is_empty() {
+            self.on_agent_reasoning_final();
+        }
+    }
+
+    fn append_live_reasoning_item_completion(
+        &mut self,
+        item: &ReasoningItem,
+        state: &mut ReasoningItemStreamState,
+    ) {
+        for (index, summary) in item.summary_text.iter().enumerate() {
+            let received = state
+                .summary_deltas
+                .get(&(index as i64))
+                .map(String::as_str)
+                .unwrap_or_default();
+            let missing = missing_reasoning_suffix(received, summary);
+            if !missing.is_empty() {
+                if received.is_empty() && index > 0 && !self.reasoning_buffer.is_empty() {
+                    self.on_reasoning_section_break();
+                }
+                self.on_agent_reasoning_delta(missing.to_string());
+            }
+        }
+
+        if !self.config.show_raw_agent_reasoning || item.raw_content.is_empty() {
+            return;
+        }
+
+        if !state.raw_section_started {
+            state.raw_section_started = true;
+            if !self.reasoning_buffer.is_empty() {
+                self.on_reasoning_section_break();
+            }
+        }
+
+        for (index, raw) in item.raw_content.iter().enumerate() {
+            let received = state
+                .raw_deltas
+                .get(&(index as i64))
+                .map(String::as_str)
+                .unwrap_or_default();
+            let missing = missing_reasoning_suffix(received, raw);
+            if !missing.is_empty() {
+                if received.is_empty() && index > 0 && !self.reasoning_buffer.is_empty() {
+                    self.on_reasoning_section_break();
+                }
+                self.on_agent_reasoning_delta(missing.to_string());
+            }
+        }
+    }
+
+    fn register_live_legacy_reasoning_completion(&mut self, event_id: &str, item: &ReasoningItem) {
+        let pending = self
+            .pending_live_legacy_reasoning
+            .entry(event_id.to_string())
+            .or_default();
+        pending.extend(
+            item.summary_text
+                .iter()
+                .cloned()
+                .map(LegacyReasoningCompletion::Summary),
+        );
+        if self.config.show_raw_agent_reasoning {
+            pending.extend(
+                item.raw_content
+                    .iter()
+                    .cloned()
+                    .map(LegacyReasoningCompletion::Raw),
+            );
+        }
+    }
+
+    fn consume_live_legacy_reasoning_completion(
+        &mut self,
+        event_id: Option<&str>,
+        completion: LegacyReasoningCompletion,
+    ) -> bool {
+        let Some(event_id) = event_id else {
+            return false;
+        };
+
+        let mut remove_entry = false;
+        let consumed = if let Some(pending) = self.pending_live_legacy_reasoning.get_mut(event_id) {
+            if pending.front() == Some(&completion) {
+                pending.pop_front();
+                remove_entry = pending.is_empty();
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if remove_entry {
+            self.pending_live_legacy_reasoning.remove(event_id);
+        }
+        consumed
+    }
+
+    fn on_legacy_reasoning_delta(&mut self, delta: String) {
+        self.last_legacy_reasoning_finalized = None;
+        self.on_agent_reasoning_delta(delta);
+    }
+
+    fn on_legacy_reasoning_final(&mut self, event_id: Option<&str>, text: String) {
+        if self.consume_live_legacy_reasoning_completion(
+            event_id,
+            LegacyReasoningCompletion::Summary(text.clone()),
+        ) {
+            return;
+        }
+
+        self.last_legacy_reasoning_finalized = None;
+        self.append_reasoning_completion(&text);
+        self.finalize_legacy_reasoning();
+    }
+
+    fn on_legacy_raw_reasoning_delta(&mut self, delta: String) {
+        if !self.config.show_raw_agent_reasoning {
+            return;
+        }
+        self.last_legacy_reasoning_finalized = None;
+        self.on_agent_reasoning_delta(delta);
+    }
+
+    fn on_legacy_raw_reasoning_final(&mut self, event_id: Option<&str>, text: String) {
+        if !self.config.show_raw_agent_reasoning
+            || self.consume_live_legacy_reasoning_completion(
+                event_id,
+                LegacyReasoningCompletion::Raw(text.clone()),
+            )
+            || self
+                .last_legacy_reasoning_finalized
+                .as_deref()
+                .is_some_and(|finalized| finalized.ends_with(&text))
+        {
+            return;
+        }
+
+        self.last_legacy_reasoning_finalized = None;
+        self.append_reasoning_completion(&text);
+        self.finalize_legacy_reasoning();
+    }
+
+    fn append_reasoning_completion(&mut self, text: &str) {
+        let presentation = split_reasoning_presentation(&self.reasoning_buffer);
+        if presentation.transcript_markdown.is_empty()
+            && presentation.latest_status_title.as_deref() == Some(text.trim())
+        {
+            return;
+        }
+
+        let missing = missing_reasoning_suffix(&self.reasoning_buffer, text);
+        if !missing.is_empty() {
+            self.on_agent_reasoning_delta(missing.to_string());
+        }
+    }
+
+    fn finalize_legacy_reasoning(&mut self) {
+        let mut finalized = self.full_reasoning_buffer.clone();
+        finalized.push_str(&self.reasoning_buffer);
+        self.on_agent_reasoning_final();
+        self.last_legacy_reasoning_finalized = (!finalized.is_empty()).then_some(finalized);
+    }
+
     fn on_agent_reasoning_final(&mut self) {
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
         let presentation = split_reasoning_presentation(&self.full_reasoning_buffer);
@@ -1565,6 +1844,9 @@ impl ChatWidget {
     fn clear_reasoning_buffers(&mut self) {
         self.reasoning_buffer.clear();
         self.full_reasoning_buffer.clear();
+        self.reasoning_item_states.clear();
+        self.pending_live_legacy_reasoning.clear();
+        self.last_legacy_reasoning_finalized = None;
     }
 
     fn finish_review_progress_ui(&mut self) {
@@ -1590,8 +1872,6 @@ impl ChatWidget {
         self.full_reasoning_buffer.push_str("\n\n");
         self.reasoning_buffer.clear();
     }
-
-    // Raw reasoning uses the same flow as summarized reasoning
 
     fn on_agent_job_status(&mut self, event: AgentJobStatusEvent) {
         let AgentJobStatusEvent {
@@ -1656,8 +1936,7 @@ impl ChatWidget {
         self.quit_shortcut_key = None;
         self.current_status = StatusIndicatorState::working();
         self.retry_status = None;
-        self.full_reasoning_buffer.clear();
-        self.reasoning_buffer.clear();
+        self.clear_reasoning_buffers();
         if defer_review_redraw {
             self.update_task_running_state_with_redraw(false);
             return;
@@ -1712,6 +1991,7 @@ impl ChatWidget {
         self.unified_exec_wait_streak = None;
         self.pending_streamed_agent_message_echo = None;
         self.clear_unified_exec_processes();
+        self.clear_reasoning_buffers();
         self.request_redraw();
 
         if !from_replay && self.queued_user_messages.is_empty() {
@@ -3051,6 +3331,9 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            reasoning_item_states: HashMap::new(),
+            pending_live_legacy_reasoning: HashMap::new(),
+            last_legacy_reasoning_finalized: None,
             current_status: StatusIndicatorState::working(),
             retry_status: None,
             thread_id: None,
@@ -3233,6 +3516,9 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            reasoning_item_states: HashMap::new(),
+            pending_live_legacy_reasoning: HashMap::new(),
+            last_legacy_reasoning_finalized: None,
             current_status: StatusIndicatorState::working(),
             retry_status: None,
             thread_id: None,
@@ -3418,8 +3704,7 @@ impl ChatWidget {
                     if self.is_session_configured() {
                         // Submitted is only emitted when steer is enabled (Enter sends immediately).
                         // Reset any reasoning header only when we are actually submitting a turn.
-                        self.reasoning_buffer.clear();
-                        self.full_reasoning_buffer.clear();
+                        self.clear_reasoning_buffers();
                         self.set_status_header(String::from("Working"));
                         self.submit_user_message(user_message);
                     } else {
@@ -4538,16 +4823,22 @@ impl ChatWidget {
                 self.on_agent_message_delta(delta)
             }
             EventMsg::PlanDelta(event) => self.on_plan_delta(event.delta),
-            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta })
-            | EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
-                delta,
-            }) => self.on_agent_reasoning_delta(delta),
-            EventMsg::AgentReasoning(AgentReasoningEvent { .. }) => self.on_agent_reasoning_final(),
-            EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
-                self.on_agent_reasoning_delta(text);
-                self.on_agent_reasoning_final();
+            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }) => {
+                self.on_legacy_reasoning_delta(delta)
             }
-            EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
+            EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
+                delta,
+            }) => self.on_legacy_raw_reasoning_delta(delta),
+            EventMsg::AgentReasoning(AgentReasoningEvent { text }) => {
+                self.on_legacy_reasoning_final(id.as_deref(), text)
+            }
+            EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
+                self.on_legacy_raw_reasoning_final(id.as_deref(), text)
+            }
+            EventMsg::AgentReasoningSectionBreak(_) => {
+                self.last_legacy_reasoning_finalized = None;
+                self.on_reasoning_section_break();
+            }
             EventMsg::TurnStarted(_) => self.on_task_started(),
             EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
                 self.on_task_complete(last_agent_message, from_replay)
@@ -4652,23 +4943,29 @@ impl ChatWidget {
             EventMsg::RawTranscriptItem(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::AgentMessageContentDelta(_)
-            | EventMsg::ReasoningContentDelta(_)
-            | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_)
             | EventMsg::WorkflowUpdate(_) => {}
+            EventMsg::ReasoningContentDelta(event) => self.on_reasoning_content_delta(event),
+            EventMsg::ReasoningRawContentDelta(event) => self.on_reasoning_raw_content_delta(event),
             EventMsg::ItemCompleted(event) => {
-                if let crate::product::protocol::items::TurnItem::ContextCompaction(_) = &event.item
-                {
-                    // Replay omits the outer event id, but legacy compact events still follow
-                    // structured compaction events in order. Reserve a suppression slot even for
-                    // parent-thread compactions so fork replay does not misattribute them.
-                    if id.is_none() {
-                        self.pending_replay_legacy_context_compactions += 1;
+                let crate::product::agent::protocol::ItemCompletedEvent {
+                    thread_id, item, ..
+                } = event;
+                match item {
+                    TurnItem::Reasoning(item) => {
+                        self.on_reasoning_item_completed(id.as_deref(), item, from_replay);
                     }
+                    TurnItem::ContextCompaction(item) => {
+                        // Replay omits the outer event id, but legacy compact events still follow
+                        // structured compaction events in order. Reserve a suppression slot even
+                        // for parent-thread compactions so fork replay does not misattribute them.
+                        if id.is_none() {
+                            self.pending_replay_legacy_context_compactions += 1;
+                        }
 
-                    if self.thread_id == Some(event.thread_id) {
-                        let item_id = event.item.id();
-                        if self.counted_context_compaction_item_ids.insert(item_id) {
+                        if self.thread_id == Some(thread_id)
+                            && self.counted_context_compaction_item_ids.insert(item.id)
+                        {
                             self.context_compact_count += 1;
                             if let Some(event_id) = id.as_ref() {
                                 *self
@@ -4678,9 +4975,10 @@ impl ChatWidget {
                             }
                         }
                     }
-                }
-                if let crate::product::protocol::items::TurnItem::Plan(plan_item) = event.item {
-                    self.on_plan_item_completed(plan_item.text);
+                    TurnItem::Plan(plan_item) => self.on_plan_item_completed(plan_item.text),
+                    TurnItem::UserMessage(_)
+                    | TurnItem::AgentMessage(_)
+                    | TurnItem::WebSearch(_) => {}
                 }
             }
         }
@@ -7741,6 +8039,20 @@ fn standalone_reasoning_title(line: &str) -> Option<String> {
         .and_then(|rest| rest.strip_suffix("**"))?
         .trim();
     (!title.is_empty() && !title.contains("**")).then(|| title.to_string())
+}
+
+fn missing_reasoning_suffix<'a>(received: &str, completed: &'a str) -> &'a str {
+    if completed.is_empty() || received.ends_with(completed) {
+        return "";
+    }
+
+    let mut overlap_len = 0;
+    for (index, _) in completed.char_indices().skip(1) {
+        if received.ends_with(&completed[..index]) {
+            overlap_len = index;
+        }
+    }
+    &completed[overlap_len..]
 }
 
 fn strip_leading_html_comments(mut line: &str) -> (bool, &str) {
