@@ -399,7 +399,6 @@ impl HistoryCell for UserHistoryCell {
 
 #[derive(Debug)]
 pub(crate) struct ReasoningSummaryCell {
-    _header: String,
     content: String,
     transcript_only: bool,
     lines_cache: std::sync::Mutex<Option<ReasoningSummaryLinesCache>>,
@@ -412,9 +411,8 @@ struct ReasoningSummaryLinesCache {
 }
 
 impl ReasoningSummaryCell {
-    pub(crate) fn new(header: String, content: String, transcript_only: bool) -> Self {
+    pub(crate) fn new(content: String, transcript_only: bool) -> Self {
         Self {
-            _header: header,
             content,
             transcript_only,
             lines_cache: std::sync::Mutex::new(None),
@@ -2765,48 +2763,14 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
     PlainHistoryCell { lines }
 }
 
-pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<dyn HistoryCell> {
-    new_reasoning_summary_block_with_visibility(full_reasoning_buffer, true)
+pub(crate) fn new_reasoning_summary_content(content: String) -> Box<dyn HistoryCell> {
+    Box::new(ReasoningSummaryCell::new(content, false))
 }
 
-pub(crate) fn new_reasoning_summary_block_transcript_only(
-    full_reasoning_buffer: String,
+pub(crate) fn new_reasoning_summary_content_transcript_only(
+    content: String,
 ) -> Box<dyn HistoryCell> {
-    new_reasoning_summary_block_with_visibility(full_reasoning_buffer, false)
-}
-
-fn new_reasoning_summary_block_with_visibility(
-    full_reasoning_buffer: String,
-    visible_when_summary_present: bool,
-) -> Box<dyn HistoryCell> {
-    let full_reasoning_buffer = full_reasoning_buffer.trim();
-    if let Some(open) = full_reasoning_buffer.find("**") {
-        let after_open = &full_reasoning_buffer[(open + 2)..];
-        if let Some(close) = after_open.find("**") {
-            let after_close_idx = open + 2 + close + 2;
-            // if we don't have anything beyond `after_close_idx`
-            // then we don't have a summary to inject into history
-            if after_close_idx < full_reasoning_buffer.len() {
-                let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
-                let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
-                return Box::new(ReasoningSummaryCell::new(
-                    header_buffer,
-                    summary_buffer,
-                    !visible_when_summary_present,
-                ));
-            }
-            return Box::new(ReasoningSummaryCell::new(
-                "".to_string(),
-                full_reasoning_buffer.to_string(),
-                !visible_when_summary_present,
-            ));
-        }
-    }
-    Box::new(ReasoningSummaryCell::new(
-        "".to_string(),
-        full_reasoning_buffer.to_string(),
-        true,
-    ))
+    Box::new(ReasoningSummaryCell::new(content, true))
 }
 
 #[derive(Debug)]
@@ -4652,10 +4616,8 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_summary_block() {
-        let cell = new_reasoning_summary_block(
-            "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
-        );
+    fn reasoning_summary_content_renders_body() {
+        let cell = new_reasoning_summary_content("Detailed reasoning goes here.".to_string());
 
         let rendered_display = render_lines(&cell.display_lines(80));
         assert_eq!(rendered_display, vec!["• Detailed reasoning goes here."]);
@@ -4665,95 +4627,9 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_summary_block_returns_reasoning_cell_when_feature_disabled() {
-        let cell = new_reasoning_summary_block("Detailed reasoning goes here.".to_string());
-
-        let rendered = render_transcript(cell.as_ref());
-        assert_eq!(rendered, vec!["• Detailed reasoning goes here."]);
-    }
-
-    #[tokio::test]
-    async fn reasoning_summary_block_respects_config_overrides() {
-        let mut config = test_config().await;
-        config.model = Some("gpt-3.5-turbo".to_string());
-        config.model_supports_reasoning_summaries = Some(true);
-        let cell = new_reasoning_summary_block(
-            "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
-        );
-
-        let rendered_display = render_lines(&cell.display_lines(80));
-        assert_eq!(rendered_display, vec!["• Detailed reasoning goes here."]);
-    }
-
-    #[test]
-    fn reasoning_summary_block_falls_back_when_header_is_missing() {
+    fn reasoning_summary_content_transcript_only_hides_live_display() {
         let cell =
-            new_reasoning_summary_block("**High level reasoning without closing".to_string());
-
-        let rendered_display = render_lines(&cell.display_lines(80));
-        assert_eq!(rendered_display, Vec::<String>::new());
-
-        let rendered = render_transcript(cell.as_ref());
-        assert_eq!(rendered, vec!["• **High level reasoning without closing"]);
-    }
-
-    #[test]
-    fn reasoning_summary_block_falls_back_when_summary_is_missing() {
-        let cell =
-            new_reasoning_summary_block("**High level reasoning without closing**".to_string());
-
-        let rendered_display = render_lines(&cell.display_lines(80));
-        assert_eq!(
-            rendered_display,
-            vec!["• High level reasoning without closing"]
-        );
-
-        let rendered = render_transcript(cell.as_ref());
-        assert_eq!(rendered, vec!["• High level reasoning without closing"]);
-
-        let cell = new_reasoning_summary_block(
-            "**High level reasoning without closing**\n\n  ".to_string(),
-        );
-
-        let rendered_display = render_lines(&cell.display_lines(80));
-        assert_eq!(
-            rendered_display,
-            vec!["• High level reasoning without closing"]
-        );
-
-        let rendered = render_transcript(cell.as_ref());
-        assert_eq!(rendered, vec!["• High level reasoning without closing"]);
-    }
-
-    #[test]
-    fn reasoning_summary_block_transcript_only_hides_fallback_display_lines() {
-        let cell = new_reasoning_summary_block_transcript_only("**Late reasoning**".to_string());
-
-        let rendered_display = render_lines(&cell.display_lines(80));
-        assert_eq!(rendered_display, Vec::<String>::new());
-
-        let rendered_transcript = render_transcript(cell.as_ref());
-        assert_eq!(rendered_transcript, vec!["• Late reasoning"]);
-    }
-
-    #[test]
-    fn reasoning_summary_block_splits_header_and_summary_when_present() {
-        let cell = new_reasoning_summary_block(
-            "**High level plan**\n\nWe should fix the bug next.".to_string(),
-        );
-
-        let rendered_display = render_lines(&cell.display_lines(80));
-        assert_eq!(rendered_display, vec!["• We should fix the bug next."]);
-
-        let rendered_transcript = render_transcript(cell.as_ref());
-        assert_eq!(rendered_transcript, vec!["• We should fix the bug next."]);
-    }
-
-    #[test]
-    fn reasoning_summary_block_transcript_only_hides_display_lines() {
-        let cell = new_reasoning_summary_block_transcript_only(
-            "**Late reasoning**\n\nThis should stay hidden.".to_string(),
-        );
+            new_reasoning_summary_content_transcript_only("This should stay hidden.".to_string());
 
         let rendered_display = render_lines(&cell.display_lines(80));
         assert_eq!(rendered_display, Vec::<String>::new());

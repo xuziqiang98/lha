@@ -9055,6 +9055,58 @@ async fn request_user_input_response_restores_suspended_status_before_follow_up_
 }
 
 #[tokio::test]
+async fn request_user_input_restores_reasoning_status_without_visible_title() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let title = "Locating agent status rendering logic";
+
+    chat.on_task_started();
+    chat.handle_codex_event(Event {
+        id: "reasoning-status-delta".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: format!("**{title}**"),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "reasoning-status-final".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: title.to_string(),
+        }),
+    });
+    assert_eq!(
+        drain_insert_history(&mut rx),
+        Vec::<Vec<ratatui::text::Line<'static>>>::new()
+    );
+
+    chat.on_agent_message_delta("partial answer\n".to_string());
+    chat.on_commit_tick();
+    assert!(chat.bottom_pane.status_widget().is_none());
+    let _ = drain_events(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "request-user-input".into(),
+        msg: EventMsg::RequestUserInput(request_user_input_event()),
+    });
+    let _ = drain_events(&mut rx);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char('1')));
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("reasoning status should return after answering request_user_input");
+    assert_eq!(status.header(), title);
+
+    let visible_history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(
+        !visible_history.contains(title),
+        "restored status title should not enter visible transcript: {visible_history:?}"
+    );
+}
+
+#[tokio::test]
 async fn request_user_input_suppresses_final_agent_message_after_midstream_prompt() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
@@ -12193,70 +12245,24 @@ async fn repeated_reasoning_header_requests_only_one_risky_row_repair() {
 }
 
 #[tokio::test]
-async fn reasoning_status_only_summary_updates_status_without_visible_transcript() {
+async fn title_only_reasoning_updates_status_without_visible_transcript() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
+    chat.on_task_started();
     chat.handle_codex_event(Event {
-        id: "status-only-start".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            model_context_window: None,
-            identity_kind: IdentityKind::Nobody,
-        }),
-    });
-    chat.handle_codex_event(Event {
-        id: "status-only-reasoning-delta".into(),
+        id: "title-only-reasoning-delta".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: "<!-- -->**Planning Rust crate patching**\n<!-- -->**Conducting quick memory search**"
-                .into(),
-        }),
-    });
-    assert_eq!(chat.current_status.header, "Planning Rust crate patching");
-    chat.handle_codex_event(Event {
-        id: "status-only-reasoning-final".into(),
-        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
-            text: "Planning Rust crate patching".into(),
-        }),
-    });
-
-    let visible_history = drain_insert_history(&mut rx)
-        .iter()
-        .map(|lines| lines_to_single_string(lines))
-        .collect::<String>();
-    assert!(
-        !visible_history.contains("Planning Rust crate patching"),
-        "status title should not enter visible transcript: {visible_history:?}"
-    );
-    assert!(
-        !visible_history.contains("Conducting quick memory search"),
-        "status title should not enter visible transcript: {visible_history:?}"
-    );
-    assert!(
-        !visible_history.contains("<!-- -->"),
-        "HTML comment spacer should not enter visible transcript: {visible_history:?}"
-    );
-
-    chat.handle_codex_event(Event {
-        id: "status-only-follow-up-start".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            model_context_window: None,
-            identity_kind: IdentityKind::Nobody,
-        }),
-    });
-    chat.handle_codex_event(Event {
-        id: "status-only-follow-up-reasoning-delta".into(),
-        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: "**Preparing to run full cargo test**\n\n<!-- -->\n**Checking git status before tests**\n\n<!-- -->"
-                .into(),
+            delta: "**Locating agent status rendering logic**".into(),
         }),
     });
     assert_eq!(
         chat.current_status.header,
-        "Preparing to run full cargo test"
+        "Locating agent status rendering logic"
     );
     chat.handle_codex_event(Event {
-        id: "status-only-follow-up-reasoning-final".into(),
+        id: "title-only-reasoning-final".into(),
         msg: EventMsg::AgentReasoning(AgentReasoningEvent {
-            text: "Preparing to run full cargo test".into(),
+            text: "Locating agent status rendering logic".into(),
         }),
     });
 
@@ -12264,79 +12270,25 @@ async fn reasoning_status_only_summary_updates_status_without_visible_transcript
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
-    assert!(
-        !visible_history.contains("Preparing to run full cargo test"),
-        "status title should not enter visible transcript: {visible_history:?}"
-    );
-    assert!(
-        !visible_history.contains("Checking git status before tests"),
-        "status title should not enter visible transcript: {visible_history:?}"
-    );
-}
-
-#[test]
-fn reasoning_summary_status_only_accepts_title_followed_by_comment_placeholder() {
-    assert!(reasoning_summary_is_status_only(
-        "**Preparing to run full cargo test**\n\n<!-- -->"
-    ));
-}
-
-#[test]
-fn reasoning_summary_status_only_accepts_multiple_title_comment_blocks() {
-    assert!(reasoning_summary_is_status_only(
-        "**Updating goal to run all features**\n\n<!-- -->\n**Preparing to run full cargo test**\n\n<!-- -->\n**Checking git status before tests**\n\n<!-- -->"
-    ));
-}
-
-#[test]
-fn reasoning_summary_status_only_accepts_leading_comment_title() {
-    assert!(reasoning_summary_is_status_only(
-        "<!-- --> **Checking git status**"
-    ));
-}
-
-#[test]
-fn reasoning_summary_status_only_accepts_trailing_comment_title() {
-    assert!(reasoning_summary_is_status_only(
-        "**Checking git status** <!-- -->"
-    ));
-}
-
-#[test]
-fn reasoning_summary_status_only_rejects_title_with_real_body() {
-    assert!(!reasoning_summary_is_status_only(
-        "**Checking git status**\n\nI need to inspect the worktree before running tests."
-    ));
-}
-
-#[test]
-fn reasoning_summary_status_only_rejects_bulleted_reasoning_body() {
-    assert!(!reasoning_summary_is_status_only(
-        "**Planning fix**\n\n- update parser\n- add tests"
-    ));
-}
-
-#[test]
-fn reasoning_summary_status_only_rejects_plain_reasoning_summary() {
-    assert!(!reasoning_summary_is_status_only(
-        "This is a normal reasoning summary."
-    ));
+    assert_eq!(visible_history, "");
 }
 
 #[tokio::test]
-async fn bold_only_reasoning_summary_remains_visible() {
+async fn titled_reasoning_displays_body_without_title() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
+    chat.on_task_started();
     chat.handle_codex_event(Event {
-        id: "bold-only-reasoning-delta".into(),
+        id: "titled-reasoning-delta".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: "**Found root cause**".into(),
+            delta: "**Finding the root cause**\n\nThe rendering cell preserves the heading.".into(),
         }),
     });
+    assert_eq!(chat.current_status.header, "Finding the root cause");
     chat.handle_codex_event(Event {
-        id: "bold-only-reasoning-final".into(),
+        id: "titled-reasoning-final".into(),
         msg: EventMsg::AgentReasoning(AgentReasoningEvent {
-            text: "Found root cause".into(),
+            text: "The rendering cell preserves the heading.".into(),
         }),
     });
 
@@ -12345,25 +12297,31 @@ async fn bold_only_reasoning_summary_remains_visible() {
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
     assert!(
-        visible_history.contains("Found root cause"),
-        "bold-only reasoning summary should remain visible: {visible_history:?}"
+        visible_history.contains("The rendering cell preserves the heading."),
+        "reasoning body should remain visible: {visible_history:?}"
+    );
+    assert!(
+        !visible_history.contains("Finding the root cause"),
+        "reasoning title should stay in the status area: {visible_history:?}"
     );
 }
 
 #[tokio::test]
-async fn ordinary_reasoning_summary_remains_visible() {
+async fn untitled_reasoning_body_remains_visible_with_working_status() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
+    chat.on_task_started();
     chat.handle_codex_event(Event {
-        id: "ordinary-reasoning-delta".into(),
+        id: "untitled-reasoning-delta".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: "**Reasoning**\n\nVisible ordinary reasoning.".into(),
+            delta: "The parser has no standalone status title for this explanation.".into(),
         }),
     });
+    assert_eq!(chat.current_status.header, "Working");
     chat.handle_codex_event(Event {
-        id: "ordinary-reasoning-final".into(),
+        id: "untitled-reasoning-final".into(),
         msg: EventMsg::AgentReasoning(AgentReasoningEvent {
-            text: "Visible ordinary reasoning.".into(),
+            text: "The parser has no standalone status title for this explanation.".into(),
         }),
     });
 
@@ -12372,26 +12330,34 @@ async fn ordinary_reasoning_summary_remains_visible() {
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
     assert!(
-        visible_history.contains("Visible ordinary reasoning."),
-        "ordinary reasoning summary should remain visible: {visible_history:?}"
+        visible_history.contains("The parser has no standalone status title for this explanation."),
+        "untitled reasoning content should remain visible: {visible_history:?}"
     );
 }
 
 #[tokio::test]
-async fn mixed_status_and_explanation_reasoning_remains_visible_without_html_comment() {
+async fn multiple_reasoning_sections_hide_all_titles_and_keep_bodies() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
+    chat.on_task_started();
     chat.handle_codex_event(Event {
-        id: "mixed-reasoning-delta".into(),
+        id: "first-reasoning-delta".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: "<!-- -->**Planning Rust crate patching**\n\nThe parser failure is in markdown rendering."
-                .into(),
+            delta: "**Inspecting the renderer**\n\nFirst body.".into(),
         }),
     });
+    chat.on_reasoning_section_break();
     chat.handle_codex_event(Event {
-        id: "mixed-reasoning-final".into(),
+        id: "second-reasoning-delta".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "<!-- -->**Checking the status restore**<!-- -->\n\nSecond body.".into(),
+        }),
+    });
+    assert_eq!(chat.current_status.header, "Checking the status restore");
+    chat.handle_codex_event(Event {
+        id: "multiple-reasoning-final".into(),
         msg: EventMsg::AgentReasoning(AgentReasoningEvent {
-            text: "The parser failure is in markdown rendering.".into(),
+            text: "Second body.".into(),
         }),
     });
 
@@ -12400,12 +12366,67 @@ async fn mixed_status_and_explanation_reasoning_remains_visible_without_html_com
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
     assert!(
-        visible_history.contains("The parser failure is in markdown rendering."),
-        "mixed reasoning with explanation should remain visible: {visible_history:?}"
+        visible_history.contains("First body.") && visible_history.contains("Second body."),
+        "all reasoning bodies should remain visible: {visible_history:?}"
     );
     assert!(
-        !visible_history.contains("<!-- -->"),
-        "HTML comment spacer should not enter visible transcript: {visible_history:?}"
+        !visible_history.contains("Inspecting the renderer")
+            && !visible_history.contains("Checking the status restore")
+            && !visible_history.contains("<!-- -->"),
+        "reasoning titles and spacer comments should stay out of history: {visible_history:?}"
+    );
+}
+
+#[tokio::test]
+async fn inline_bold_reasoning_remains_transcript_content() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_task_started();
+    chat.handle_codex_event(Event {
+        id: "inline-bold-reasoning-delta".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "The **important detail** belongs in the reasoning body.".into(),
+        }),
+    });
+    assert_eq!(chat.current_status.header, "Working");
+    chat.handle_codex_event(Event {
+        id: "inline-bold-reasoning-final".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "The important detail belongs in the reasoning body.".into(),
+        }),
+    });
+
+    let visible_history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(
+        visible_history.contains("important detail"),
+        "inline bold reasoning should remain transcript content: {visible_history:?}"
+    );
+}
+
+#[test]
+fn reasoning_presentation_strips_titles_and_comment_spacers() {
+    assert_eq!(
+        split_reasoning_presentation(
+            "<!-- --> **First title**\n\nFirst body.\n\n**Second title** <!-- -->\n\nSecond body."
+        ),
+        ReasoningPresentation {
+            latest_status_title: Some("Second title".to_string()),
+            transcript_markdown: "First body.\n\n\nSecond body.".to_string(),
+        }
+    );
+}
+
+#[test]
+fn reasoning_presentation_keeps_multiple_inline_bold_spans() {
+    assert_eq!(
+        split_reasoning_presentation("**First detail** and **second detail** stay visible."),
+        ReasoningPresentation {
+            latest_status_title: None,
+            transcript_markdown: "**First detail** and **second detail** stay visible.".to_string(),
+        }
     );
 }
 

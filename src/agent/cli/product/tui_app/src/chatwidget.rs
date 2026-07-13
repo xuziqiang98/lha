@@ -591,9 +591,9 @@ pub(crate) struct ChatWidget {
     connectors_cache: ConnectorsCacheState,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
-    // Accumulates the current reasoning block text to extract a header
+    // Accumulates the current reasoning section for title and body presentation.
     reasoning_buffer: String,
-    // Accumulates full reasoning content for transcript-only recording
+    // Accumulates all reasoning sections before they are finalized into history.
     full_reasoning_buffer: String,
     // Full status snapshot shown in the status indicator.
     current_status: StatusIndicatorState,
@@ -925,7 +925,9 @@ impl ChatWidget {
     }
 
     fn restore_reasoning_status_header(&mut self) {
-        if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
+        if let Some(header) =
+            split_reasoning_presentation(&self.reasoning_buffer).latest_status_title
+        {
             self.set_status_header(header);
         } else if self.bottom_pane.is_task_running() {
             self.set_status_header(String::from("Working"));
@@ -1521,9 +1523,7 @@ impl ChatWidget {
     }
 
     fn on_agent_reasoning_delta(&mut self, delta: String) {
-        // For reasoning deltas, do not stream to history. Accumulate the
-        // current reasoning block and extract the first bold element
-        // (between **/**) as the chunk header. Show this header as status.
+        // Reasoning titles are live status; the remaining Markdown is finalized into history.
         self.reasoning_buffer.push_str(&delta);
 
         if self.unified_exec_wait_streak.is_some() {
@@ -1532,27 +1532,24 @@ impl ChatWidget {
             return;
         }
 
-        if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
-            // Update the shimmer header to the extracted reasoning chunk header.
+        if let Some(header) =
+            split_reasoning_presentation(&self.reasoning_buffer).latest_status_title
+        {
             self.set_status_header(header);
-        } else {
-            // Fallback while we don't yet have a bold header: leave existing header as-is.
         }
         self.request_redraw();
     }
 
     fn on_agent_reasoning_final(&mut self) {
-        // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
-        if !self.full_reasoning_buffer.is_empty()
-            && !reasoning_summary_is_status_only(&self.full_reasoning_buffer)
-        {
+        let presentation = split_reasoning_presentation(&self.full_reasoning_buffer);
+        if !presentation.transcript_markdown.is_empty() {
             let cell = if self.should_hide_reasoning_summary_from_display() {
-                history_cell::new_reasoning_summary_block_transcript_only(
-                    self.full_reasoning_buffer.clone(),
+                history_cell::new_reasoning_summary_content_transcript_only(
+                    presentation.transcript_markdown,
                 )
             } else {
-                history_cell::new_reasoning_summary_block(self.full_reasoning_buffer.clone())
+                history_cell::new_reasoning_summary_content(presentation.transcript_markdown)
             };
             self.add_boxed_history(cell);
         }
@@ -7700,74 +7697,50 @@ const PLACEHOLDERS: [&str; 8] = [
     "Use /skills to manage skills",
 ];
 
-// Extract the first bold (Markdown) element in the form **...** from `s`.
-// Returns the inner text if found; otherwise `None`.
-fn extract_first_bold(s: &str) -> Option<String> {
-    let bytes = s.as_bytes();
-    let mut i = 0usize;
-    while i + 1 < bytes.len() {
-        if bytes[i] == b'*' && bytes[i + 1] == b'*' {
-            let start = i + 2;
-            let mut j = start;
-            while j + 1 < bytes.len() {
-                if bytes[j] == b'*' && bytes[j + 1] == b'*' {
-                    // Found closing **
-                    let inner = &s[start..j];
-                    let trimmed = inner.trim();
-                    if !trimmed.is_empty() {
-                        return Some(trimmed.to_string());
-                    } else {
-                        return None;
-                    }
-                }
-                j += 1;
-            }
-            // No closing; stop searching (wait for more deltas)
-            return None;
-        }
-        i += 1;
-    }
-    None
+#[derive(Debug, PartialEq, Eq)]
+struct ReasoningPresentation {
+    latest_status_title: Option<String>,
+    transcript_markdown: String,
 }
 
-fn reasoning_summary_is_status_only(markdown: &str) -> bool {
-    let mut saw_status_title = false;
-    let mut pending_title_without_comment = false;
+fn split_reasoning_presentation(markdown: &str) -> ReasoningPresentation {
+    let mut latest_status_title = None;
+    let mut transcript_lines: Vec<String> = Vec::new();
 
     for raw_line in markdown.lines() {
-        let line = raw_line.trim();
-        if line.is_empty() {
+        let (had_leading_comment, without_leading_comment) = strip_leading_html_comments(raw_line);
+        let (had_trailing_comment, without_comments) =
+            strip_trailing_html_comments(without_leading_comment);
+        let normalized = without_comments.trim();
+
+        if let Some(title) = standalone_reasoning_title(normalized) {
+            latest_status_title = Some(title);
             continue;
         }
 
-        let (had_leading_comment, line) = strip_leading_html_comments(line);
-        let (had_trailing_comment, line) = strip_trailing_html_comments(line);
-        let line = line.trim();
-        if line.is_empty() {
-            if had_leading_comment || had_trailing_comment {
-                pending_title_without_comment = false;
-                continue;
-            }
+        if normalized.is_empty() && (had_leading_comment || had_trailing_comment) {
             continue;
         }
-        if pending_title_without_comment {
-            return false;
-        }
 
-        let Some(title) = line
-            .strip_prefix("**")
-            .and_then(|rest| rest.strip_suffix("**"))
-        else {
-            return false;
-        };
-        if title.trim().is_empty() {
-            return false;
+        if had_leading_comment || had_trailing_comment {
+            transcript_lines.push(normalized.to_string());
+        } else {
+            transcript_lines.push(raw_line.to_string());
         }
-        saw_status_title = true;
-        pending_title_without_comment = !had_leading_comment && !had_trailing_comment;
     }
 
-    saw_status_title && !pending_title_without_comment
+    ReasoningPresentation {
+        latest_status_title,
+        transcript_markdown: transcript_lines.join("\n").trim().to_string(),
+    }
+}
+
+fn standalone_reasoning_title(line: &str) -> Option<String> {
+    let title = line
+        .strip_prefix("**")
+        .and_then(|rest| rest.strip_suffix("**"))?
+        .trim();
+    (!title.is_empty() && !title.contains("**")).then(|| title.to_string())
 }
 
 fn strip_leading_html_comments(mut line: &str) -> (bool, &str) {
