@@ -656,6 +656,16 @@ impl BottomPane {
         }
     }
 
+    fn restore_suspended_status_indicator(&mut self) {
+        if self.status.is_none()
+            && let Some(status) = self.suspended_status.take()
+        {
+            self.status = Some(status);
+            self.sync_status_inline_message();
+            self.request_redraw_with_risky_row_repair();
+        }
+    }
+
     pub(crate) fn ensure_status_indicator(&mut self) {
         if self.status.is_none() {
             self.status = Some(self.suspended_status.take().unwrap_or_else(|| {
@@ -838,7 +848,7 @@ impl BottomPane {
         self.resume_status_timer_after_modal();
         self.set_composer_input_enabled(true, None);
         if self.is_task_running {
-            self.ensure_status_indicator();
+            self.restore_suspended_status_indicator();
         }
     }
 
@@ -1023,6 +1033,7 @@ mod tests {
     use crate::product::tui_app::app_event::AppEvent;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use std::cell::Cell;
@@ -1467,6 +1478,80 @@ mod tests {
             .expect("new task should create a fresh status indicator");
         assert_eq!(status.header(), "Working");
         assert_eq!(status.details(), None);
+    }
+
+    #[test]
+    fn dismissing_view_after_status_hidden_does_not_restore_status() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask LHA to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        assert!(pane.status_widget().is_some());
+
+        pane.hide_status_indicator();
+        assert!(pane.status_widget().is_none());
+        assert!(pane.suspended_status.is_none());
+
+        pane.show_selection_view(SelectionViewParams {
+            title: Some("How was this?".to_string()),
+            ..Default::default()
+        });
+        pane.dismiss_active_view();
+
+        assert!(pane.is_task_running());
+        assert!(pane.status_widget().is_none());
+        assert!(pane.suspended_status.is_none());
+    }
+
+    #[test]
+    fn dismissing_view_restores_suspended_status() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask LHA to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        pane.update_status(
+            "Waiting for background terminal".to_string(),
+            Some("cargo test -p lha".to_string()),
+            StatusDetailsCapitalization::Preserve,
+            1,
+        );
+        pane.suspend_status_indicator();
+
+        assert!(pane.status_widget().is_none());
+        assert!(pane.suspended_status.is_some());
+
+        pane.show_selection_view(SelectionViewParams {
+            title: Some("How was this?".to_string()),
+            ..Default::default()
+        });
+        pane.dismiss_active_view();
+
+        let status = pane
+            .status_widget()
+            .expect("dismissing a view should restore suspended status");
+        assert_eq!(status.header(), "Waiting for background terminal");
+        assert_eq!(status.details(), Some("cargo test -p lha"));
+        assert!(pane.suspended_status.is_none());
     }
 
     #[test]
