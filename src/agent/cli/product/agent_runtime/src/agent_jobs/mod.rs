@@ -165,24 +165,18 @@ pub(crate) enum AgentJobOutputMode {
 }
 
 pub(crate) struct AgentJobSpawnOptions {
-    max_runtime_seconds: Option<u64>,
     output_mode: AgentJobOutputMode,
 }
 
 impl AgentJobSpawnOptions {
-    pub(crate) fn log_only(max_runtime_seconds: Option<u64>) -> Self {
+    pub(crate) fn log_only() -> Self {
         Self {
-            max_runtime_seconds,
             output_mode: AgentJobOutputMode::LogOnly,
         }
     }
 
-    pub(crate) fn raw_events(
-        max_runtime_seconds: Option<u64>,
-        progress_tx: mpsc::UnboundedSender<EventMsg>,
-    ) -> Self {
+    pub(crate) fn raw_events(progress_tx: mpsc::UnboundedSender<EventMsg>) -> Self {
         Self {
-            max_runtime_seconds,
             output_mode: AgentJobOutputMode::RawEvents { progress_tx },
         }
     }
@@ -291,11 +285,8 @@ impl AgentJobManager {
         exec_config: AgentJobExecConfig,
         options: AgentJobSpawnOptions,
     ) -> Result<AgentJobSnapshot, CodexErr> {
-        let AgentJobSpawnOptions {
-            max_runtime_seconds,
-            output_mode,
-        } = options;
-        let max_runtime = self.resolve_max_runtime(max_runtime_seconds)?;
+        let AgentJobSpawnOptions { output_mode } = options;
+        let max_runtime = self.configured_max_runtime;
         let permit = self.semaphore.clone().try_acquire_owned().map_err(|_| {
             CodexErr::UnsupportedOperation("agent job concurrency limit reached".to_string())
         })?;
@@ -497,16 +488,6 @@ impl AgentJobManager {
             snapshots.push(handle.wait_for_completion(id).await);
         }
         snapshots
-    }
-
-    fn resolve_max_runtime(&self, requested_seconds: Option<u64>) -> Result<Duration, CodexErr> {
-        match requested_seconds {
-            Some(0) => Err(CodexErr::UnsupportedOperation(
-                "max_runtime_seconds must be at least 1".to_string(),
-            )),
-            Some(seconds) => Ok(Duration::from_secs(seconds).min(self.configured_max_runtime)),
-            None => Ok(self.configured_max_runtime),
-        }
     }
 
     async fn allocate_job_name(&self) -> String {
@@ -1206,7 +1187,7 @@ printf "explorer result" > "$out"
                 "inspect this".to_string(),
                 dir.path().to_path_buf(),
                 test_exec_config(lha_home.path(), "test-provider.main:test-model"),
-                AgentJobSpawnOptions::log_only(None),
+                AgentJobSpawnOptions::log_only(),
             )
             .await
             .expect("spawn job");
@@ -1303,7 +1284,7 @@ printf "raw mode result" > "$out"
                 "inspect this".to_string(),
                 dir.path().to_path_buf(),
                 test_exec_config(lha_home.path(), "test-provider.main:test-model"),
-                AgentJobSpawnOptions::raw_events(None, progress_tx),
+                AgentJobSpawnOptions::raw_events(progress_tx),
             )
             .await
             .expect("spawn job");
@@ -1349,7 +1330,7 @@ printf "raw mode result" > "$out"
     }
 
     #[tokio::test]
-    async fn requested_runtime_is_capped_by_configured_max() {
+    async fn spawned_job_records_configured_runtime() {
         let dir = tempfile::tempdir().expect("tempdir");
         let lha_home = tempfile::tempdir().expect("lha home");
         let script = write_script(
@@ -1379,7 +1360,7 @@ printf "runtime result" > "$out"
                 "inspect this".to_string(),
                 dir.path().to_path_buf(),
                 test_exec_config(lha_home.path(), "test-provider.main:test-model"),
-                AgentJobSpawnOptions::log_only(Some(9999)),
+                AgentJobSpawnOptions::log_only(),
             )
             .await
             .expect("spawn job");
@@ -1399,30 +1380,6 @@ printf "runtime result" > "$out"
         .expect("metadata json");
 
         assert_eq!(metadata["max_runtime_seconds"], serde_json::json!(3));
-    }
-
-    #[tokio::test]
-    async fn zero_requested_runtime_is_rejected() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let lha_home = tempfile::tempdir().expect("lha home");
-        let manager = AgentJobManager::new(lha_home.path().to_path_buf(), Some(1), Some(5));
-
-        let err = manager
-            .spawn(
-                ThreadId::new(),
-                AgentJobType::Explorer,
-                "inspect this".to_string(),
-                dir.path().to_path_buf(),
-                test_exec_config(lha_home.path(), "test-provider.main:test-model"),
-                AgentJobSpawnOptions::log_only(Some(0)),
-            )
-            .await
-            .expect_err("zero max runtime should fail");
-
-        assert_eq!(
-            err.to_string(),
-            "unsupported operation: max_runtime_seconds must be at least 1"
-        );
     }
 
     #[tokio::test]
@@ -1487,7 +1444,7 @@ printf "args result" > "$out"
                     windows_sandbox_level: WindowsSandboxLevel::Disabled,
                     reasoning_effort: Some(ReasoningEffort::High),
                 },
-                AgentJobSpawnOptions::log_only(None),
+                AgentJobSpawnOptions::log_only(),
             )
             .await
             .expect("spawn job");
@@ -1591,7 +1548,7 @@ printf "null effort result" > "$out"
                 "inspect this".to_string(),
                 dir.path().to_path_buf(),
                 test_exec_config(lha_home.path(), "test-provider.main:test-model"),
-                AgentJobSpawnOptions::log_only(None),
+                AgentJobSpawnOptions::log_only(),
             )
             .await
             .expect("spawn job");
@@ -1628,7 +1585,7 @@ exec sleep 30
                 "inspect this".to_string(),
                 dir.path().to_path_buf(),
                 test_exec_config(lha_home.path(), "test-provider.main:test-model"),
-                AgentJobSpawnOptions::log_only(None),
+                AgentJobSpawnOptions::log_only(),
             )
             .await
             .expect("spawn job");
@@ -1675,7 +1632,7 @@ exec sleep 30
                 "inspect first".to_string(),
                 dir.path().to_path_buf(),
                 test_exec_config(lha_home.path(), "test-provider.main:test-model"),
-                AgentJobSpawnOptions::log_only(None),
+                AgentJobSpawnOptions::log_only(),
             )
             .await
             .expect("spawn first job");
@@ -1686,7 +1643,7 @@ exec sleep 30
                 "inspect second".to_string(),
                 dir.path().to_path_buf(),
                 test_exec_config(lha_home.path(), "test-provider.main:test-model"),
-                AgentJobSpawnOptions::log_only(None),
+                AgentJobSpawnOptions::log_only(),
             )
             .await
             .expect("spawn second job");

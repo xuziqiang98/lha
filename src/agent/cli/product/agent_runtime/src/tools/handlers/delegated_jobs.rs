@@ -65,7 +65,6 @@ impl ToolHandler for DelegatedJobHandler {
 struct SpawnAgentArgs {
     message: String,
     agent_type: Option<String>,
-    max_runtime_seconds: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -104,7 +103,7 @@ async fn spawn_agent(
             args.message,
             turn.cwd.clone(),
             exec_config,
-            AgentJobSpawnOptions::log_only(args.max_runtime_seconds),
+            AgentJobSpawnOptions::log_only(),
         )
         .await
         .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;

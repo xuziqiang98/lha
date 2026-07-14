@@ -130,7 +130,7 @@ async fn run_review_job(
             prompt,
             ctx.cwd.clone(),
             exec_config,
-            AgentJobSpawnOptions::raw_events(None, progress_tx),
+            AgentJobSpawnOptions::raw_events(progress_tx),
         )
         .await
     {

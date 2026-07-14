@@ -16,7 +16,7 @@
           "type": "integer"
         },
         "job_max_runtime_seconds": {
-          "description": "Default maximum runtime in seconds for agent job workers.",
+          "description": "Maximum runtime in seconds for each one-shot agent job.",
           "format": "uint64",
           "minimum": 1.0,
           "type": "integer"

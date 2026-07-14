@@ -1187,7 +1187,7 @@ pub struct AgentsToml {
     /// When unset, no limit is enforced.
     #[schemars(range(min = 1))]
     pub job_max_concurrency: Option<usize>,
-    /// Default maximum runtime in seconds for agent job workers.
+    /// Maximum runtime in seconds for each one-shot agent job.
     #[schemars(range(min = 1))]
     pub job_max_runtime_seconds: Option<u64>,
 }

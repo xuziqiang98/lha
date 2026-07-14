@@ -605,7 +605,7 @@ fn create_imagegen_tool() -> ToolDescriptor {
     })
 }
 
-fn create_spawn_agent_tool(_config: &ToolsConfig) -> ToolDescriptor {
+fn create_spawn_agent_tool() -> ToolDescriptor {
     let properties = BTreeMap::from([
         (
             "message".to_string(),
@@ -619,14 +619,6 @@ fn create_spawn_agent_tool(_config: &ToolsConfig) -> ToolDescriptor {
             JsonSchema::String {
                 description: Some("Delegated job type. Only `explorer` is supported.".to_string()),
                 enum_values: None,
-            },
-        ),
-        (
-            "max_runtime_seconds".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "Optional maximum runtime in seconds for the delegated job, capped by agents.job_max_runtime_seconds.".to_string(),
-                ),
             },
         ),
     ]);
@@ -1943,7 +1935,7 @@ pub(crate) fn build_specs(
         maybe_push_spec_and_register_handler(
             &mut builder,
             config,
-            create_spawn_agent_tool(config),
+            create_spawn_agent_tool(),
             "spawn_agent",
             delegated_job_handler.clone(),
         );
@@ -2016,6 +2008,44 @@ mod tests {
             ToolDescriptor::WebSearch { .. } => "web_search",
             ToolDescriptor::Freeform(FreeformToolDescriptor { name, .. }) => name,
         }
+    }
+
+    #[test]
+    fn spawn_agent_tool_omits_per_job_runtime() {
+        assert_eq!(
+            create_spawn_agent_tool(),
+            ToolDescriptor::Function(ResponsesApiTool {
+                name: "spawn_agent".to_string(),
+                description:
+                    "Start an isolated one-shot exploration job. Use this for specific codebase questions when the final result is useful but the exploration process should stay out of the main context."
+                        .to_string(),
+                strict: false,
+                parameters: JsonSchema::Object {
+                    properties: std::collections::BTreeMap::from([
+                        (
+                            "message".to_string(),
+                            JsonSchema::String {
+                                description: Some(
+                                    "Plain-text task for the isolated exploration job.".to_string(),
+                                ),
+                                enum_values: None,
+                            },
+                        ),
+                        (
+                            "agent_type".to_string(),
+                            JsonSchema::String {
+                                description: Some(
+                                    "Delegated job type. Only `explorer` is supported.".to_string(),
+                                ),
+                                enum_values: None,
+                            },
+                        ),
+                    ]),
+                    required: Some(vec!["message".to_string()]),
+                    additional_properties: Some(false.into()),
+                },
+            })
+        );
     }
 
     // Avoid order-based assertions; compare via set containment instead.
@@ -2151,7 +2181,7 @@ mod tests {
             expected.insert(tool_name(&spec).to_string(), spec);
         }
         for (name, spec) in [
-            ("spawn_agent", create_spawn_agent_tool(&config)),
+            ("spawn_agent", create_spawn_agent_tool()),
             ("wait", create_wait_tool()),
             ("close_agent", create_close_agent_tool()),
         ] {
