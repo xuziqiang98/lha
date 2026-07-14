@@ -53,6 +53,7 @@ use crate::product::agent::protocol::ReviewTarget;
 use crate::product::agent::protocol::SessionSource;
 use crate::product::agent::protocol::StreamErrorEvent;
 use crate::product::agent::protocol::TerminalInteractionEvent;
+use crate::product::agent::protocol::ThreadGoalSnapshotEvent;
 use crate::product::agent::protocol::TokenCountEvent;
 use crate::product::agent::protocol::TokenUsage;
 use crate::product::agent::protocol::TokenUsageInfo;
@@ -2738,7 +2739,9 @@ async fn make_chatwidget_manual_inner_with_otel(
         feedback: crate::product::feedback::CodexFeedback::new(),
         current_rollout_path: None,
         current_goal: None,
-        current_goal_state_known: false,
+        current_goal_state_known: true,
+        pending_plan_implementation_goal_state_refresh: false,
+        pending_plan_implementation_prompt: false,
         external_editor_state: ExternalEditorState::Closed,
         git_branch: None,
     };
@@ -2923,7 +2926,9 @@ async fn make_chatwidget_manual_with_frame_requester(
         feedback: crate::product::feedback::CodexFeedback::new(),
         current_rollout_path: None,
         current_goal: None,
-        current_goal_state_known: false,
+        current_goal_state_known: true,
+        pending_plan_implementation_goal_state_refresh: false,
+        pending_plan_implementation_prompt: false,
         external_editor_state: ExternalEditorState::Closed,
         git_branch: None,
     };
@@ -3448,6 +3453,20 @@ fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {
     }
 }
 
+fn plan_implementation_goal(status: ThreadGoalStatus) -> ThreadGoal {
+    ThreadGoal {
+        thread_id: ThreadId::new(),
+        goal_id: "goal-123".to_string(),
+        objective: "unfinished planner goal".to_string(),
+        status,
+        token_budget: Some(1_000),
+        tokens_used: 12,
+        time_used_seconds: 34,
+        created_at: 1_700_000_000,
+        updated_at: 1_700_000_100,
+    }
+}
+
 #[tokio::test]
 async fn plan_implementation_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
@@ -3492,6 +3511,7 @@ async fn plan_implementation_popup_with_goal_tracking_emits_start_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::Identities, true);
     chat.set_feature_enabled(Feature::Goals, true);
+    chat.current_goal_state_known = true;
     chat.on_plan_item_completed("# Captured plan\n- implement it".to_string());
     let _ = drain_insert_history(&mut rx);
     chat.open_plan_implementation_prompt();
@@ -3510,6 +3530,190 @@ async fn plan_implementation_popup_with_goal_tracking_emits_start_event() {
     };
     assert_eq!(plan_text, "# Captured plan\n- implement it");
     assert_eq!(identity.kind, Some(IdentityKind::Programmer));
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_with_unfinished_goal_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    chat.set_feature_enabled(Feature::Goals, true);
+    chat.latest_proposed_plan_text = Some("# Plan\n- implement it".to_string());
+    chat.current_goal = Some(plan_implementation_goal(ThreadGoalStatus::Active));
+    chat.current_goal_state_known = true;
+    chat.open_plan_implementation_prompt();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("plan_implementation_popup_with_unfinished_goal", popup);
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_offers_replacement_for_each_unfinished_goal_status() {
+    for status in [
+        ThreadGoalStatus::Active,
+        ThreadGoalStatus::Paused,
+        ThreadGoalStatus::Blocked,
+        ThreadGoalStatus::UsageLimited,
+        ThreadGoalStatus::BudgetLimited,
+    ] {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+        chat.set_feature_enabled(Feature::Identities, true);
+        chat.set_feature_enabled(Feature::Goals, true);
+        chat.latest_proposed_plan_text = Some("# Plan\n- implement it".to_string());
+        chat.current_goal = Some(plan_implementation_goal(status));
+        chat.current_goal_state_known = true;
+        chat.open_plan_implementation_prompt();
+
+        // The first item remains focused but disabled, so Enter is non-destructive.
+        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+
+        chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        assert_matches!(
+            rx.try_recv(),
+            Ok(AppEvent::ClearGoalAndStartFromProposedPlan {
+                plan_text,
+                expected_goal_id,
+                identity,
+            }) if plan_text == "# Plan\n- implement it"
+                && expected_goal_id == "goal-123"
+                && identity.kind == Some(IdentityKind::Programmer)
+        );
+    }
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_completed_goal_keeps_direct_start() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    chat.set_feature_enabled(Feature::Goals, true);
+    chat.latest_proposed_plan_text = Some("# Plan\n- implement it".to_string());
+    chat.current_goal = Some(plan_implementation_goal(ThreadGoalStatus::Complete));
+    chat.current_goal_state_known = true;
+    chat.open_plan_implementation_prompt();
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::StartGoalFromProposedPlan {
+            plan_text,
+            identity,
+        }) if plan_text == "# Plan\n- implement it"
+            && identity.kind == Some(IdentityKind::Programmer)
+    );
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_refreshes_unknown_goal_state_silently() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.set_feature_enabled(Feature::Identities, true);
+    chat.set_feature_enabled(Feature::Goals, true);
+    let planner_mask =
+        identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+            .expect("expected planner identity");
+    chat.set_identity_mask(planner_mask);
+    chat.latest_proposed_plan_text = Some("# Plan\n- implement it".to_string());
+    chat.saw_plan_item_this_turn = true;
+    chat.current_goal_state_known = false;
+
+    chat.maybe_prompt_plan_implementation();
+    chat.maybe_prompt_plan_implementation();
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::ThreadGoalGet));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    assert!(!render_bottom_popup(&chat, 80).contains(PLAN_IMPLEMENTATION_TITLE));
+
+    chat.handle_codex_event(Event {
+        id: "goal-snapshot".to_string(),
+        msg: EventMsg::ThreadGoalSnapshot(ThreadGoalSnapshotEvent {
+            thread_id,
+            goal: Some(plan_implementation_goal(ThreadGoalStatus::Active)),
+        }),
+    });
+
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(popup.contains(PLAN_IMPLEMENTATION_TITLE));
+    assert!(popup.contains("Yes, implement this plan (disabled)"));
+    assert!(popup.contains(PLAN_IMPLEMENTATION_CLEAR_UNFINISHED_GOAL));
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_retries_after_goal_snapshot_arrives_behind_picker() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.set_feature_enabled(Feature::Identities, true);
+    chat.set_feature_enabled(Feature::Goals, true);
+    let planner_mask =
+        identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+            .expect("expected planner identity");
+    chat.set_identity_mask(planner_mask);
+    chat.latest_proposed_plan_text = Some("# Plan\n- implement it".to_string());
+    chat.saw_plan_item_this_turn = true;
+    chat.current_goal_state_known = false;
+
+    chat.maybe_prompt_plan_implementation();
+    assert_matches!(op_rx.try_recv(), Ok(Op::ThreadGoalGet));
+    chat.bottom_pane
+        .show_selection_view(SelectionViewParams::default());
+
+    chat.handle_codex_event(Event {
+        id: "goal-snapshot".to_string(),
+        msg: EventMsg::ThreadGoalSnapshot(ThreadGoalSnapshotEvent {
+            thread_id,
+            goal: Some(plan_implementation_goal(ThreadGoalStatus::Active)),
+        }),
+    });
+
+    assert!(!render_bottom_popup(&chat, 80).contains(PLAN_IMPLEMENTATION_TITLE));
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(popup.contains(PLAN_IMPLEMENTATION_TITLE));
+    assert!(popup.contains(PLAN_IMPLEMENTATION_CLEAR_UNFINISHED_GOAL));
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_waits_for_running_turn_after_goal_snapshot() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.set_feature_enabled(Feature::Identities, true);
+    chat.set_feature_enabled(Feature::Goals, true);
+    let planner_mask =
+        identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+            .expect("expected planner identity");
+    chat.set_identity_mask(planner_mask);
+    chat.latest_proposed_plan_text = Some("# Plan\n- implement it".to_string());
+    chat.saw_plan_item_this_turn = true;
+    chat.current_goal_state_known = false;
+
+    chat.maybe_prompt_plan_implementation();
+    assert_matches!(op_rx.try_recv(), Ok(Op::ThreadGoalGet));
+    chat.agent_turn_running = true;
+
+    chat.handle_codex_event(Event {
+        id: "goal-snapshot".to_string(),
+        msg: EventMsg::ThreadGoalSnapshot(ThreadGoalSnapshotEvent {
+            thread_id,
+            goal: Some(plan_implementation_goal(ThreadGoalStatus::Active)),
+        }),
+    });
+
+    assert!(!render_bottom_popup(&chat, 80).contains(PLAN_IMPLEMENTATION_TITLE));
+
+    chat.agent_turn_running = false;
+    chat.maybe_prompt_plan_implementation();
+
+    assert!(render_bottom_popup(&chat, 80).contains(PLAN_IMPLEMENTATION_TITLE));
 }
 
 #[tokio::test]
@@ -3562,6 +3766,34 @@ async fn start_goal_from_proposed_plan_syncs_programmer_identity_and_starts_goal
         op_rx.try_recv(),
         Ok(Op::ThreadGoalStartFromProposedPlan { plan_text }) if plan_text == "# Plan\n- finish"
     );
+}
+
+#[tokio::test]
+async fn clear_goal_and_start_from_proposed_plan_emits_atomic_replacement_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::Identities, true);
+    let programmer_mask = identities::programmer_mask(chat.thread_manager.as_ref())
+        .expect("expected programmer identity");
+
+    chat.clear_goal_and_start_from_proposed_plan(
+        "# Plan\n- finish".to_string(),
+        "goal-123".to_string(),
+        programmer_mask,
+    );
+
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ThreadGoalClearAndStartFromProposedPlan {
+            plan_text,
+            expected_goal_id,
+            identity: Identity {
+                kind: IdentityKind::Programmer,
+                ..
+            },
+        }) if plan_text == "# Plan\n- finish" && expected_goal_id == "goal-123"
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 #[tokio::test]

@@ -328,6 +328,8 @@ pub enum Op {
     ListModels,
 
     /// Read the current long-running goal for this thread.
+    ///
+    /// This is a read-only operation and may be requested from any identity.
     ThreadGoalGet,
 
     /// Set or edit the current long-running goal objective.
@@ -344,6 +346,15 @@ pub enum Op {
 
     /// Start a long-running goal from a planner-proposed plan.
     ThreadGoalStartFromProposedPlan { plan_text: String },
+
+    /// Clear a matching unfinished goal and start a planner-proposed plan.
+    ///
+    /// The supplied identity is applied without resuming the cleared goal.
+    ThreadGoalClearAndStartFromProposedPlan {
+        plan_text: String,
+        expected_goal_id: String,
+        identity: Identity,
+    },
 }
 
 /// Snapshot of the active TUI buddy to attach to a user turn.

@@ -85,6 +85,30 @@ async fn switch_to_programmer(test: &TestCodex) -> Result<()> {
     Ok(())
 }
 
+async fn switch_to_planner(test: &TestCodex) -> Result<()> {
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            identity: Some(Identity {
+                kind: IdentityKind::Planner,
+                settings: Settings {
+                    model: test.session_configured.model.clone(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            }),
+            personality: None,
+        })
+        .await?;
+    Ok(())
+}
+
 async fn wait_for_request_count(mock: &ResponseMock, expected: usize) {
     for _ in 0..100 {
         if mock.requests().len() >= expected {
@@ -239,6 +263,205 @@ async fn start_goal_from_proposed_plan_creates_goal_and_continues_until_complete
         crate::product::state::ThreadGoalStatus::Complete,
         stored.status
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn planner_can_read_goal_snapshot() -> Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::Goals);
+    });
+    let test = builder.build(&server).await?;
+    let db = test.codex.state_db().expect("state db enabled");
+    let expected = db
+        .replace_thread_goal(
+            test.session_configured.session_id,
+            "planner snapshot goal",
+            crate::product::state::ThreadGoalStatus::Paused,
+            None,
+        )
+        .await?;
+    switch_to_planner(&test).await?;
+
+    test.codex.submit(Op::ThreadGoalGet).await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ThreadGoalSnapshot(snapshot)
+                if snapshot.goal.as_ref().is_some_and(|goal| goal.goal_id == expected.goal_id)
+        )
+    })
+    .await;
+    assert_eq!(0, response_request_count(&server).await);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replacing_planner_goal_starts_new_plan_without_resuming_old_goal() -> Result<()> {
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            update_goal_response(
+                "complete-replacement-goal",
+                "resp-replacement-goal-1",
+                "complete",
+            ),
+            sse(vec![
+                ev_assistant_message("msg-replacement-goal-complete", "replacement goal complete"),
+                ev_completed("resp-replacement-goal-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::Goals);
+    });
+    let test = builder.build(&server).await?;
+    let db = test.codex.state_db().expect("state db enabled");
+    let old_goal = db
+        .replace_thread_goal(
+            test.session_configured.session_id,
+            "old planner goal must not resume",
+            crate::product::state::ThreadGoalStatus::Active,
+            None,
+        )
+        .await?;
+    switch_to_planner(&test).await?;
+
+    let plan_text = "# Plan\n- Replace the unfinished goal\n";
+    let plan_path = test
+        .lha_home_path()
+        .join("goals")
+        .join(test.session_configured.session_id.to_string())
+        .join("proposed_plan.md");
+    let expected_objective = format!(
+        "Implement the proposed plan stored at:\n{}\n\nBefore marking this goal complete, verify every explicit requirement in that plan, including docs, formatting, tests, and cleanup.",
+        plan_path.display()
+    );
+    test.codex
+        .submit(Op::ThreadGoalClearAndStartFromProposedPlan {
+            plan_text: plan_text.to_string(),
+            expected_goal_id: old_goal.goal_id.clone(),
+            identity: Identity {
+                kind: IdentityKind::Programmer,
+                settings: Settings {
+                    model: test.session_configured.model.clone(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            },
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ThreadGoalCleared(_))
+    })
+    .await;
+    let active_goal = wait_for_goal_update_matching(&test, |goal| {
+        goal.objective == expected_objective && goal.status == ThreadGoalStatus::Active
+    })
+    .await;
+    assert_ne!(old_goal.goal_id, active_goal.goal_id);
+    assert_eq!(
+        IdentityKind::Programmer,
+        test.codex.config_snapshot().await.identity_kind
+    );
+    assert_eq!(plan_text, tokio::fs::read_to_string(&plan_path).await?);
+
+    wait_for_request_count(&mock, 1).await;
+    let goal_request = mock
+        .requests()
+        .into_iter()
+        .find(|request| {
+            request
+                .message_input_texts("user")
+                .iter()
+                .any(|text| text.contains("<goal_context>"))
+        })
+        .expect("replacement continuation request should be sent");
+    let goal_context = goal_request.message_input_texts("user").join("\n");
+    assert!(goal_context.contains(&plan_path.display().to_string()));
+    assert!(!goal_context.contains("old planner goal must not resume"));
+
+    wait_for_goal_update(&test, &expected_objective, ThreadGoalStatus::Complete).await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    wait_for_request_count(&mock, 2).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stale_planner_goal_replacement_preserves_current_goal_without_continuing_it() -> Result<()>
+{
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::Goals);
+    });
+    let test = builder.build(&server).await?;
+    let db = test.codex.state_db().expect("state db enabled");
+    let stale_goal = db
+        .replace_thread_goal(
+            test.session_configured.session_id,
+            "stale planner goal",
+            crate::product::state::ThreadGoalStatus::Active,
+            None,
+        )
+        .await?;
+    let current_goal = db
+        .replace_thread_goal(
+            test.session_configured.session_id,
+            "newer planner goal",
+            crate::product::state::ThreadGoalStatus::Paused,
+            None,
+        )
+        .await?;
+    switch_to_planner(&test).await?;
+
+    test.codex
+        .submit(Op::ThreadGoalClearAndStartFromProposedPlan {
+            plan_text: "# Plan\n- do not replace a stale goal\n".to_string(),
+            expected_goal_id: stale_goal.goal_id,
+            identity: Identity {
+                kind: IdentityKind::Programmer,
+                settings: Settings {
+                    model: test.session_configured.model.clone(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            },
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::Error(error)
+                if error
+                    .message
+                    .contains("The current goal changed before it could be cleared")
+        )
+    })
+    .await;
+    assert_eq!(
+        Some(current_goal),
+        db.get_thread_goal(test.session_configured.session_id)
+            .await?
+    );
+    assert_eq!(
+        IdentityKind::Programmer,
+        test.codex.config_snapshot().await.identity_kind
+    );
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(0, response_request_count(&server).await);
 
     Ok(())
 }

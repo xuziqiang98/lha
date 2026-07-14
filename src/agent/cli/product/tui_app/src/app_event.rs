@@ -339,6 +339,13 @@ pub(crate) enum AppEvent {
         identity: IdentityMask,
     },
 
+    /// Clear an unfinished goal and start a planner-proposed plan with a programmer identity.
+    ClearGoalAndStartFromProposedPlan {
+        plan_text: String,
+        expected_goal_id: String,
+        identity: IdentityMask,
+    },
+
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
 

@@ -88,9 +88,12 @@ Planner implementation can also create a goal that references a persisted
 proposed plan file. Goal status, pause, resume, and clear behavior is the same
 as any other `/goal`.
 
-Starting implementation from a planner plan requires no unfinished goal. If a
-goal is already active, paused, blocked, usage-limited, or budget-limited,
-complete or clear it before starting the planner-derived goal.
+Directly starting implementation from a planner plan requires no unfinished
+goal. If a goal is already active, paused, blocked, usage-limited, or
+budget-limited, the planner implementation prompt disables direct start and
+offers an explicit option to clear the current goal before creating the
+planner-derived goal. Outside that prompt, complete or clear the current goal
+before starting the plan-derived goal.
 
 ## Plan Commands
 

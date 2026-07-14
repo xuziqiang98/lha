@@ -1169,9 +1169,49 @@ RETURNING
         status: crate::product::state::ThreadGoalStatus,
         token_budget: Option<i64>,
     ) -> anyhow::Result<Option<crate::product::state::ThreadGoal>> {
+        self.replace_thread_goal_if_goal_id_excluding_status(
+            thread_id,
+            expected_goal_id,
+            objective,
+            status,
+            token_budget,
+            None,
+        )
+        .await
+    }
+
+    pub async fn replace_unfinished_thread_goal_if_goal_id(
+        &self,
+        thread_id: ThreadId,
+        expected_goal_id: &str,
+        objective: &str,
+        status: crate::product::state::ThreadGoalStatus,
+        token_budget: Option<i64>,
+    ) -> anyhow::Result<Option<crate::product::state::ThreadGoal>> {
+        self.replace_thread_goal_if_goal_id_excluding_status(
+            thread_id,
+            expected_goal_id,
+            objective,
+            status,
+            token_budget,
+            Some(crate::product::state::ThreadGoalStatus::Complete),
+        )
+        .await
+    }
+
+    async fn replace_thread_goal_if_goal_id_excluding_status(
+        &self,
+        thread_id: ThreadId,
+        expected_goal_id: &str,
+        objective: &str,
+        status: crate::product::state::ThreadGoalStatus,
+        token_budget: Option<i64>,
+        excluded_status: Option<crate::product::state::ThreadGoalStatus>,
+    ) -> anyhow::Result<Option<crate::product::state::ThreadGoal>> {
         let goal_id = Uuid::new_v4().to_string();
         let now_ms = datetime_to_epoch_millis(Utc::now());
         let status = status_after_budget_limit(status, 0, token_budget);
+        let excluded_status = excluded_status.map(crate::product::state::ThreadGoalStatus::as_str);
         let row = sqlx::query(
             r#"
 UPDATE thread_goals
@@ -1186,6 +1226,7 @@ SET
     updated_at_ms = ?
 WHERE thread_id = ?
   AND goal_id = ?
+  AND (? IS NULL OR status != ?)
 RETURNING
     thread_id,
     goal_id,
@@ -1206,6 +1247,8 @@ RETURNING
         .bind(now_ms)
         .bind(thread_id.to_string())
         .bind(expected_goal_id)
+        .bind(excluded_status)
+        .bind(excluded_status)
         .fetch_optional(self.pool.as_ref())
         .await?;
 
@@ -3259,6 +3302,41 @@ INSERT INTO stage1_outputs (
         assert_eq!(None, stale_replacement);
         assert_eq!(
             Some(replacement),
+            runtime
+                .get_thread_goal(thread_id)
+                .await
+                .expect("goal read should succeed")
+        );
+    }
+
+    #[tokio::test]
+    async fn replace_unfinished_thread_goal_if_goal_id_rejects_completed_goal() {
+        let runtime = test_runtime().await;
+        let thread_id = test_thread_id();
+        let completed = runtime
+            .replace_thread_goal(
+                thread_id,
+                "completed objective",
+                crate::product::state::ThreadGoalStatus::Complete,
+                None,
+            )
+            .await
+            .expect("goal replacement should succeed");
+
+        let replacement = runtime
+            .replace_unfinished_thread_goal_if_goal_id(
+                thread_id,
+                &completed.goal_id,
+                "replacement objective",
+                crate::product::state::ThreadGoalStatus::Active,
+                None,
+            )
+            .await
+            .expect("conditional replacement should not fail");
+
+        assert_eq!(None, replacement);
+        assert_eq!(
+            Some(completed),
             runtime
                 .get_thread_goal(thread_id)
                 .await

@@ -144,6 +144,8 @@ use tracing::debug;
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
+const PLAN_IMPLEMENTATION_CLEAR_UNFINISHED_GOAL: &str =
+    "Clear unfinished goal and implement this plan";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in planner identity";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 pub(crate) const DRAG_AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -738,6 +740,10 @@ pub(crate) struct ChatWidget {
     current_rollout_path: Option<PathBuf>,
     current_goal: Option<ThreadGoal>,
     current_goal_state_known: bool,
+    // A planner-created plan waits for this read-only snapshot before deciding which action to show.
+    pending_plan_implementation_goal_state_refresh: bool,
+    // A resolved snapshot can wait behind a temporary picker before showing its prompt.
+    pending_plan_implementation_prompt: bool,
     external_editor_state: ExternalEditorState,
     git_branch: Option<String>,
 }
@@ -1434,6 +1440,8 @@ impl ChatWidget {
         self.current_rollout_path = event.rollout_path.clone();
         self.current_goal = None;
         self.current_goal_state_known = false;
+        self.pending_plan_implementation_goal_state_refresh = false;
+        self.pending_plan_implementation_prompt = false;
         self.pending_proposed_plan_rendered_this_turn = false;
         self.latest_proposed_plan_text = None;
         self.latest_proposed_plan_title = None;
@@ -1519,8 +1527,16 @@ impl ChatWidget {
         if self.thread_id != Some(event.thread_id) {
             return;
         }
+        let refreshes_plan_implementation =
+            std::mem::take(&mut self.pending_plan_implementation_goal_state_refresh);
         self.current_goal = event.goal;
         self.current_goal_state_known = true;
+        if refreshes_plan_implementation {
+            self.pending_plan_implementation_prompt = true;
+            self.request_redraw();
+            self.maybe_prompt_plan_implementation();
+            return;
+        }
         if let Some(goal) = self.current_goal.clone() {
             self.show_goal_summary(&goal);
         } else {
@@ -2013,6 +2029,8 @@ impl ChatWidget {
         self.turn_sleep_inhibitor
             .set_turn_running(/* turn_running */ true);
         self.saw_plan_update_this_turn = false;
+        self.pending_plan_implementation_goal_state_refresh = false;
+        self.pending_plan_implementation_prompt = false;
         let cleared_plan_stream = self.discard_pending_proposed_plan_turn_state();
         if cleared_plan_stream {
             self.stop_commit_animation_if_no_stream_controllers();
@@ -2099,6 +2117,9 @@ impl ChatWidget {
     }
 
     fn maybe_prompt_plan_implementation(&mut self) {
+        if self.task_running_state() {
+            return;
+        }
         if !self.identities_enabled() {
             return;
         }
@@ -2114,70 +2135,142 @@ impl ChatWidget {
         if !self.bottom_pane.no_modal_or_popup_active() {
             return;
         }
+        if self.config.features.enabled(Feature::Goals) && !self.current_goal_state_known {
+            if !self.pending_plan_implementation_goal_state_refresh {
+                self.pending_plan_implementation_goal_state_refresh = true;
+                self.submit_op(Op::ThreadGoalGet);
+            }
+            return;
+        }
 
+        self.pending_plan_implementation_prompt = false;
         self.open_plan_implementation_prompt();
+    }
+
+    fn retry_pending_plan_implementation_prompt(&mut self) {
+        if self.pending_plan_implementation_prompt && self.bottom_pane.no_modal_or_popup_active() {
+            self.maybe_prompt_plan_implementation();
+        }
     }
 
     fn open_plan_implementation_prompt(&mut self) {
         let programmer_mask = identities::programmer_mask(self.thread_manager.as_ref());
         let goal_tracking_enabled = self.config.features.enabled(Feature::Goals);
         let latest_plan_text = self.latest_proposed_plan_text.clone();
-        let (implement_actions, implement_disabled_reason) = match programmer_mask {
-            Some(mask) if goal_tracking_enabled => {
-                if let Some(plan_text) = latest_plan_text {
+        let unfinished_goal = if goal_tracking_enabled {
+            self.current_goal
+                .as_ref()
+                .filter(|goal| goal.status != ThreadGoalStatus::Complete)
+        } else {
+            None
+        };
+        let (implement_actions, implement_disabled_reason) = if let Some(goal) = unfinished_goal {
+            (
+                Vec::new(),
+                Some(format!(
+                    "Clear the current {} /goal before implementing this plan.",
+                    goal_status_label(goal.status)
+                )),
+            )
+        } else {
+            match (programmer_mask.as_ref(), goal_tracking_enabled) {
+                (Some(mask), true) => {
+                    if let Some(plan_text) = latest_plan_text.as_ref() {
+                        let mask = mask.clone();
+                        let plan_text = plan_text.clone();
+                        let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                            tx.send(AppEvent::StartGoalFromProposedPlan {
+                                plan_text: plan_text.clone(),
+                                identity: mask.clone(),
+                            });
+                        })];
+                        (actions, None)
+                    } else {
+                        (Vec::new(), Some("latest plan text unavailable".to_string()))
+                    }
+                }
+                (Some(mask), false) => {
+                    let mask = mask.clone();
+                    let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
                     let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                        tx.send(AppEvent::StartGoalFromProposedPlan {
-                            plan_text: plan_text.clone(),
+                        tx.send(AppEvent::SubmitUserMessageWithMode {
+                            text: user_text.clone(),
                             identity: mask.clone(),
                         });
                     })];
                     (actions, None)
-                } else {
-                    (Vec::new(), Some("latest plan text unavailable".to_string()))
                 }
+                (None, _) => (
+                    Vec::new(),
+                    Some("programmer identity unavailable".to_string()),
+                ),
             }
-            Some(mask) => {
-                let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
-                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::SubmitUserMessageWithMode {
-                        text: user_text.clone(),
-                        identity: mask.clone(),
-                    });
-                })];
-                (actions, None)
-            }
-            None => (
-                Vec::new(),
-                Some("programmer identity unavailable".to_string()),
-            ),
         };
 
-        let items = vec![
-            SelectionItem {
-                name: PLAN_IMPLEMENTATION_YES.to_string(),
-                description: Some(if goal_tracking_enabled {
-                    "Switch to programmer and track this plan as a /goal until complete."
-                        .to_string()
-                } else {
-                    "Switch to programmer identity.".to_string()
-                }),
+        let mut items = vec![SelectionItem {
+            name: PLAN_IMPLEMENTATION_YES.to_string(),
+            description: Some(if goal_tracking_enabled {
+                "Switch to programmer and track this plan as a /goal until complete.".to_string()
+            } else {
+                "Switch to programmer identity.".to_string()
+            }),
+            selected_description: None,
+            is_current: false,
+            actions: implement_actions,
+            disabled_reason: implement_disabled_reason,
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+        if let Some(goal) = unfinished_goal {
+            let (actions, disabled_reason) =
+                match (programmer_mask.as_ref(), latest_plan_text.as_ref()) {
+                    (Some(mask), Some(plan_text)) if !goal.goal_id.is_empty() => {
+                        let mask = mask.clone();
+                        let plan_text = plan_text.clone();
+                        let expected_goal_id = goal.goal_id.clone();
+                        let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                            tx.send(AppEvent::ClearGoalAndStartFromProposedPlan {
+                                plan_text: plan_text.clone(),
+                                expected_goal_id: expected_goal_id.clone(),
+                                identity: mask.clone(),
+                            });
+                        })];
+                        (actions, None)
+                    }
+                    (Some(_), Some(_)) => {
+                        (Vec::new(), Some("current goal id unavailable".to_string()))
+                    }
+                    (Some(_), None) => {
+                        (Vec::new(), Some("latest plan text unavailable".to_string()))
+                    }
+                    (None, _) => (
+                        Vec::new(),
+                        Some("programmer identity unavailable".to_string()),
+                    ),
+                };
+            items.push(SelectionItem {
+                name: PLAN_IMPLEMENTATION_CLEAR_UNFINISHED_GOAL.to_string(),
+                description: Some(
+                    "Clear the current /goal, switch to programmer, and track this plan until complete."
+                        .to_string(),
+                ),
                 selected_description: None,
                 is_current: false,
-                actions: implement_actions,
-                disabled_reason: implement_disabled_reason,
+                actions,
+                disabled_reason,
                 dismiss_on_select: true,
                 ..Default::default()
-            },
-            SelectionItem {
-                name: PLAN_IMPLEMENTATION_NO.to_string(),
-                description: Some("Continue planning with the model.".to_string()),
-                selected_description: None,
-                is_current: false,
-                actions: Vec::new(),
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-        ];
+            });
+        }
+        items.push(SelectionItem {
+            name: PLAN_IMPLEMENTATION_NO.to_string(),
+            description: Some("Continue planning with the model.".to_string()),
+            selected_description: None,
+            is_current: false,
+            actions: Vec::new(),
+            dismiss_on_select: true,
+            ..Default::default()
+        });
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some(PLAN_IMPLEMENTATION_TITLE.to_string()),
@@ -3465,6 +3558,8 @@ impl ChatWidget {
             current_rollout_path: None,
             current_goal: None,
             current_goal_state_known: false,
+            pending_plan_implementation_goal_state_refresh: false,
+            pending_plan_implementation_prompt: false,
             external_editor_state: ExternalEditorState::Closed,
             git_branch: None,
         };
@@ -3649,6 +3744,8 @@ impl ChatWidget {
             current_rollout_path: None,
             current_goal: None,
             current_goal_state_known: false,
+            pending_plan_implementation_goal_state_refresh: false,
+            pending_plan_implementation_prompt: false,
             external_editor_state: ExternalEditorState::Closed,
             git_branch: None,
         };
@@ -3688,6 +3785,7 @@ impl ChatWidget {
                 ..
             } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c') => {
                 self.on_ctrl_c();
+                self.retry_pending_plan_implementation_prompt();
                 return;
             }
             KeyEvent {
@@ -3779,51 +3877,54 @@ impl ChatWidget {
                     self.request_redraw();
                 }
             }
-            _ => match self.bottom_pane.handle_key_event(key_event) {
-                InputResult::Submitted {
-                    text,
-                    text_elements,
-                } => {
-                    let user_message = UserMessage {
+            _ => {
+                match self.bottom_pane.handle_key_event(key_event) {
+                    InputResult::Submitted {
                         text,
-                        local_images: self
-                            .bottom_pane
-                            .take_recent_submission_images_with_placeholders(),
                         text_elements,
-                        mention_paths: self.bottom_pane.take_mention_paths(),
-                    };
-                    if self.is_session_configured() {
-                        // Submitted is only emitted when steer is enabled (Enter sends immediately).
-                        // Reset any reasoning header only when we are actually submitting a turn.
-                        self.clear_reasoning_buffers();
-                        self.set_status_header(String::from("Working"));
-                        self.submit_user_message(user_message);
-                    } else {
+                    } => {
+                        let user_message = UserMessage {
+                            text,
+                            local_images: self
+                                .bottom_pane
+                                .take_recent_submission_images_with_placeholders(),
+                            text_elements,
+                            mention_paths: self.bottom_pane.take_mention_paths(),
+                        };
+                        if self.is_session_configured() {
+                            // Submitted is only emitted when steer is enabled (Enter sends immediately).
+                            // Reset any reasoning header only when we are actually submitting a turn.
+                            self.clear_reasoning_buffers();
+                            self.set_status_header(String::from("Working"));
+                            self.submit_user_message(user_message);
+                        } else {
+                            self.queue_user_message(user_message);
+                        }
+                    }
+                    InputResult::Queued {
+                        text,
+                        text_elements,
+                    } => {
+                        let user_message = UserMessage {
+                            text,
+                            local_images: self
+                                .bottom_pane
+                                .take_recent_submission_images_with_placeholders(),
+                            text_elements,
+                            mention_paths: self.bottom_pane.take_mention_paths(),
+                        };
                         self.queue_user_message(user_message);
                     }
+                    InputResult::Command(cmd) => {
+                        self.dispatch_command(cmd);
+                    }
+                    InputResult::CommandWithArgs(cmd, args) => {
+                        self.dispatch_command_with_args(cmd, args);
+                    }
+                    InputResult::None => {}
                 }
-                InputResult::Queued {
-                    text,
-                    text_elements,
-                } => {
-                    let user_message = UserMessage {
-                        text,
-                        local_images: self
-                            .bottom_pane
-                            .take_recent_submission_images_with_placeholders(),
-                        text_elements,
-                        mention_paths: self.bottom_pane.take_mention_paths(),
-                    };
-                    self.queue_user_message(user_message);
-                }
-                InputResult::Command(cmd) => {
-                    self.dispatch_command(cmd);
-                }
-                InputResult::CommandWithArgs(cmd, args) => {
-                    self.dispatch_command_with_args(cmd, args);
-                }
-                InputResult::None => {}
-            },
+                self.retry_pending_plan_implementation_prompt();
+            }
         }
     }
 
@@ -7456,6 +7557,20 @@ impl ChatWidget {
         self.set_identity_mask(identity);
         self.sync_active_identity_to_runtime();
         self.submit_op(Op::ThreadGoalStartFromProposedPlan { plan_text });
+    }
+
+    pub(crate) fn clear_goal_and_start_from_proposed_plan(
+        &mut self,
+        plan_text: String,
+        expected_goal_id: String,
+        identity: IdentityMask,
+    ) {
+        self.set_identity_mask(identity);
+        self.submit_op(Op::ThreadGoalClearAndStartFromProposedPlan {
+            plan_text,
+            expected_goal_id,
+            identity: self.effective_identity(),
+        });
     }
 
     /// True when the UI is in the regular composer state with no running task,

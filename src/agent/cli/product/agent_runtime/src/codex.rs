@@ -1995,15 +1995,6 @@ impl Session {
                 .await;
             return;
         }
-        if !self.goals_allowed_for_current_identity().await {
-            self.send_goal_error(
-                sub_id,
-                "Goal requires programmer identity. Use /identity and choose Programmer before running /goal."
-                    .to_string(),
-            )
-            .await;
-            return;
-        }
         self.settle_active_goal_usage_for_display().await;
         match state_db.get_thread_goal(self.conversation_id).await {
             Ok(goal) => {
@@ -2322,26 +2313,158 @@ impl Session {
             }
         }
 
+        let Some(plan_path) = self.persist_proposed_plan_goal(&sub_id, &plan_text).await else {
+            return false;
+        };
+
+        let objective = proposed_plan_goal_objective(&plan_path);
+        self.set_thread_goal_objective(sub_id, objective, ThreadGoalSetMode::ConfirmIfExists)
+            .await
+    }
+
+    async fn clear_thread_goal_and_start_from_proposed_plan(
+        &self,
+        sub_id: String,
+        plan_text: String,
+        expected_goal_id: String,
+        identity: Identity,
+    ) -> bool {
+        if identity.kind != IdentityKind::Programmer {
+            self.send_goal_error(
+                sub_id,
+                "Plan goal replacement requires programmer identity.".to_string(),
+            )
+            .await;
+            return false;
+        }
+        if expected_goal_id.is_empty() {
+            self.send_goal_error(
+                sub_id,
+                "Plan goal replacement was missing the current goal id. Refresh the plan and try again."
+                    .to_string(),
+            )
+            .await;
+            return false;
+        }
+        if !self.features.enabled(Feature::Goals) {
+            self.send_goal_error(sub_id, "Goals are disabled.".to_string())
+                .await;
+            return false;
+        }
+        let Some(state_db) = self.state_db() else {
+            self.send_goal_error(sub_id, "Goals require a persisted session.".to_string())
+                .await;
+            return false;
+        };
+        if let Err(message) = validate_proposed_plan_goal_text(&plan_text) {
+            self.send_goal_error(sub_id, message).await;
+            return false;
+        }
+        if let Err(err) = self
+            .update_settings(SessionSettingsUpdate {
+                identity: Some(identity),
+                ..Default::default()
+            })
+            .await
+        {
+            self.send_goal_error(sub_id, err.to_string()).await;
+            return false;
+        }
+        self.persist_current_turn_context_snapshot().await;
+
+        match state_db.get_thread_goal(self.conversation_id).await {
+            Ok(Some(goal))
+                if goal.goal_id == expected_goal_id
+                    && goal.status != crate::product::state::ThreadGoalStatus::Complete => {}
+            Ok(Some(_)) | Ok(None) => {
+                self.send_goal_error(
+                    sub_id,
+                    "The current goal changed before it could be cleared. Refresh the plan and try again."
+                        .to_string(),
+                )
+                .await;
+                return false;
+            }
+            Err(err) => {
+                self.send_goal_error(sub_id, format!("Failed to read goal: {err}"))
+                    .await;
+                return false;
+            }
+        }
+
+        let Some(plan_path) = self.persist_proposed_plan_goal(&sub_id, &plan_text).await else {
+            return false;
+        };
+        let objective = proposed_plan_goal_objective(&plan_path);
+
+        match state_db
+            .replace_unfinished_thread_goal_if_goal_id(
+                self.conversation_id,
+                &expected_goal_id,
+                &objective,
+                crate::product::state::ThreadGoalStatus::Active,
+                None,
+            )
+            .await
+        {
+            Ok(Some(goal)) => {
+                self.send_event_raw(Event {
+                    id: sub_id.clone(),
+                    msg: EventMsg::ThreadGoalCleared(ThreadGoalClearedEvent {
+                        thread_id: self.conversation_id,
+                    }),
+                })
+                .await;
+                self.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
+                        thread_id: self.conversation_id,
+                        turn_id: None,
+                        goal: protocol_goal_from_state(goal),
+                    }),
+                })
+                .await;
+                true
+            }
+            Ok(None) => {
+                self.send_goal_error(
+                    sub_id,
+                    "The current goal changed before it could be cleared. Refresh the plan and try again."
+                        .to_string(),
+                )
+                .await;
+                false
+            }
+            Err(err) => {
+                self.send_goal_error(sub_id, format!("Failed to replace goal: {err}"))
+                    .await;
+                false
+            }
+        }
+    }
+
+    async fn persist_proposed_plan_goal(&self, sub_id: &str, plan_text: &str) -> Option<PathBuf> {
         let plan_path = self.proposed_plan_goal_path().await;
         if let Some(parent) = plan_path.parent()
             && let Err(err) = tokio::fs::create_dir_all(parent).await
         {
             self.send_goal_error(
-                sub_id,
+                sub_id.to_string(),
                 format!("Failed to create proposed plan directory: {err}"),
             )
             .await;
-            return false;
+            return None;
         }
         if let Err(err) = tokio::fs::write(&plan_path, plan_text).await {
-            self.send_goal_error(sub_id, format!("Failed to write proposed plan: {err}"))
-                .await;
-            return false;
+            self.send_goal_error(
+                sub_id.to_string(),
+                format!("Failed to write proposed plan: {err}"),
+            )
+            .await;
+            return None;
         }
 
-        let objective = proposed_plan_goal_objective(&plan_path);
-        self.set_thread_goal_objective(sub_id, objective, ThreadGoalSetMode::ConfirmIfExists)
-            .await
+        Some(plan_path)
     }
 
     async fn proposed_plan_goal_path(&self) -> PathBuf {
@@ -4811,6 +4934,20 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 handlers::thread_goal_start_from_proposed_plan(&sess, sub.id.clone(), plan_text)
                     .await;
             }
+            Op::ThreadGoalClearAndStartFromProposedPlan {
+                plan_text,
+                expected_goal_id,
+                identity,
+            } => {
+                handlers::thread_goal_clear_and_start_from_proposed_plan(
+                    &sess,
+                    sub.id.clone(),
+                    plan_text,
+                    expected_goal_id,
+                    identity,
+                )
+                .await;
+            }
             Op::Shutdown => {
                 if handlers::shutdown(&sess, sub.id.clone()).await {
                     break;
@@ -4845,6 +4982,7 @@ mod handlers {
     use crate::product::agent::tasks::RegularTask;
     use crate::product::agent::tasks::UndoTask;
     use crate::product::agent::tasks::UserShellCommandTask;
+    use crate::product::protocol::config_types::Identity;
     use crate::product::protocol::custom_prompts::CustomPrompt;
     use crate::product::protocol::protocol::CodexErrorInfo;
     use crate::product::protocol::protocol::ErrorEvent;
@@ -5073,6 +5211,26 @@ mod handlers {
     ) {
         if sess
             .start_thread_goal_from_proposed_plan(sub_id, plan_text)
+            .await
+        {
+            sess.maybe_continue_active_automation().await;
+        }
+    }
+
+    pub async fn thread_goal_clear_and_start_from_proposed_plan(
+        sess: &Arc<Session>,
+        sub_id: String,
+        plan_text: String,
+        expected_goal_id: String,
+        identity: Identity,
+    ) {
+        if sess
+            .clear_thread_goal_and_start_from_proposed_plan(
+                sub_id,
+                plan_text,
+                expected_goal_id,
+                identity,
+            )
             .await
         {
             sess.maybe_continue_active_automation().await;

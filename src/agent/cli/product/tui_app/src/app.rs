@@ -3638,6 +3638,13 @@ impl App {
                 self.chat_widget
                     .start_goal_from_proposed_plan(plan_text, identity);
             }
+            AppEvent::ClearGoalAndStartFromProposedPlan {
+                plan_text,
+                expected_goal_id,
+                identity,
+            } => {
+                self.clear_goal_and_start_from_proposed_plan(plan_text, expected_goal_id, identity);
+            }
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
                     let diff_summary = DiffSummary::new(changes, cwd);
@@ -3838,6 +3845,19 @@ impl App {
                 }
             }
         }
+    }
+
+    fn clear_goal_and_start_from_proposed_plan(
+        &mut self,
+        plan_text: String,
+        expected_goal_id: String,
+        identity: IdentityMask,
+    ) {
+        self.chat_widget.clear_goal_and_start_from_proposed_plan(
+            plan_text,
+            expected_goal_id,
+            identity,
+        );
     }
 
     fn open_identity_modal(&mut self) {
@@ -5212,6 +5232,33 @@ mod tests {
             )),
             "expected nobody identity runtime sync, got {ops:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn clear_goal_and_start_from_proposed_plan_routes_one_atomic_op() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        app.chat_widget
+            .set_feature_enabled(Feature::Identities, true);
+        let programmer_mask =
+            identities::programmer_mask(app.server.as_ref()).expect("expected programmer identity");
+
+        app.clear_goal_and_start_from_proposed_plan(
+            "# Plan\n- finish".to_string(),
+            "goal-123".to_string(),
+            programmer_mask,
+        );
+
+        assert!(matches!(
+            op_rx.try_recv(),
+            Ok(Op::ThreadGoalClearAndStartFromProposedPlan {
+                plan_text,
+                expected_goal_id,
+                identity,
+            }) if plan_text == "# Plan\n- finish"
+                && expected_goal_id == "goal-123"
+                && identity.kind == IdentityKind::Programmer
+        ));
+        assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
     }
 
     #[tokio::test]
