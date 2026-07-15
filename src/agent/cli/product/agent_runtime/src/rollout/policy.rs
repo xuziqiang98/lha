@@ -46,6 +46,7 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::ThreadRolledBack(_)
         | EventMsg::ThreadGoalUpdated(_)
         | EventMsg::ThreadGoalCleared(_)
+        | EventMsg::ThreadGoalReplaced(_)
         | EventMsg::UndoCompleted(_)
         | EventMsg::TurnAborted(_) => true,
         EventMsg::ItemCompleted(event) => {
@@ -120,12 +121,15 @@ mod tests {
     use crate::product::agent::protocol::EventMsg;
     use crate::product::agent::protocol::ItemCompletedEvent;
     use crate::product::agent::protocol::RolloutItem;
+    use crate::product::agent::protocol::ThreadGoalReplacedEvent;
     use crate::product::protocol::ThreadId;
     use crate::product::protocol::items::ContextCompactionItem;
     use crate::product::protocol::items::PlanItem;
     use crate::product::protocol::items::TurnItem;
     use crate::product::protocol::protocol::InputSlimmingStoredInputItem;
     use crate::product::protocol::protocol::InputSlimmingStoredInputMetadata;
+    use crate::product::protocol::protocol::ThreadGoal;
+    use crate::product::protocol::protocol::ThreadGoalStatus;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -148,6 +152,28 @@ mod tests {
                 id: "plan-1".to_string(),
                 text: "plan".to_string(),
             }),
+        });
+
+        assert_eq!(should_persist_event_msg(&event), true);
+    }
+
+    #[test]
+    fn persists_thread_goal_replaced_events() {
+        let thread_id = ThreadId::new();
+        let event = EventMsg::ThreadGoalReplaced(ThreadGoalReplacedEvent {
+            thread_id,
+            previous_goal_id: "old-goal".to_string(),
+            goal: ThreadGoal {
+                thread_id,
+                goal_id: "new-goal".to_string(),
+                objective: "replacement goal".to_string(),
+                status: ThreadGoalStatus::Active,
+                token_budget: None,
+                tokens_used: 0,
+                time_used_seconds: 0,
+                created_at: 1_700_000_000,
+                updated_at: 1_700_000_000,
+            },
         });
 
         assert_eq!(should_persist_event_msg(&event), true);

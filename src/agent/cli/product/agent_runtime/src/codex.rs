@@ -121,6 +121,7 @@ use tracing::info_span;
 use tracing::instrument;
 use tracing::trace_span;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::feedback_tags;
 use crate::product::agent::client::TurnRuntime;
@@ -212,6 +213,7 @@ use crate::product::agent::protocol::Submission;
 use crate::product::agent::protocol::ThreadGoal;
 use crate::product::agent::protocol::ThreadGoalClearedEvent;
 use crate::product::agent::protocol::ThreadGoalReplaceConfirmationRequiredEvent;
+use crate::product::agent::protocol::ThreadGoalReplacedEvent;
 use crate::product::agent::protocol::ThreadGoalSetMode;
 use crate::product::agent::protocol::ThreadGoalSnapshotEvent;
 use crate::product::agent::protocol::ThreadGoalStatus;
@@ -369,11 +371,55 @@ fn proposed_plan_goal_objective(plan_path: &Path) -> String {
     )
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ProposedPlanGoalPathLayout {
+    Legacy,
+    Versioned { file_name: String },
+}
+
 fn proposed_plan_goal_path_for_thread(lha_home: &Path, thread_id: ThreadId) -> PathBuf {
     lha_home
         .join("goals")
         .join(thread_id.to_string())
         .join("proposed_plan.md")
+}
+
+fn proposed_plan_goal_directory_for_thread(lha_home: &Path, thread_id: ThreadId) -> PathBuf {
+    lha_home
+        .join("goals")
+        .join(thread_id.to_string())
+        .join("plans")
+}
+
+fn versioned_proposed_plan_goal_path_for_thread(
+    lha_home: &Path,
+    thread_id: ThreadId,
+    file_name: &str,
+) -> PathBuf {
+    proposed_plan_goal_directory_for_thread(lha_home, thread_id).join(file_name)
+}
+
+fn new_proposed_plan_goal_path_for_thread(lha_home: &Path, thread_id: ThreadId) -> PathBuf {
+    versioned_proposed_plan_goal_path_for_thread(
+        lha_home,
+        thread_id,
+        &format!("{}.md", Uuid::new_v4()),
+    )
+}
+
+fn proposed_plan_goal_path_for_layout(
+    lha_home: &Path,
+    thread_id: ThreadId,
+    layout: &ProposedPlanGoalPathLayout,
+) -> PathBuf {
+    match layout {
+        ProposedPlanGoalPathLayout::Legacy => {
+            proposed_plan_goal_path_for_thread(lha_home, thread_id)
+        }
+        ProposedPlanGoalPathLayout::Versioned { file_name } => {
+            versioned_proposed_plan_goal_path_for_thread(lha_home, thread_id, file_name)
+        }
+    }
 }
 
 fn proposed_plan_goal_objective_path(objective: &str) -> Option<&str> {
@@ -383,16 +429,48 @@ fn proposed_plan_goal_objective_path(objective: &str) -> Option<&str> {
     (!path_text.trim().is_empty()).then_some(path_text)
 }
 
-fn proposed_plan_goal_objective_path_matches_thread(path_text: &str, thread_id: ThreadId) -> bool {
+fn proposed_plan_goal_path_layout_from_objective_path(
+    path_text: &str,
+    thread_id: ThreadId,
+) -> Option<ProposedPlanGoalPathLayout> {
     let normalized = path_text.trim().replace('\\', "/");
     let thread_id_text = thread_id.to_string();
     let mut components = normalized
         .split('/')
         .filter(|component| !component.is_empty())
         .rev();
-    matches!(components.next(), Some("proposed_plan.md"))
+    let file_name = components.next()?;
+    if file_name == "proposed_plan.md"
         && matches!(components.next(), Some(thread) if thread == thread_id_text)
         && matches!(components.next(), Some("goals"))
+    {
+        return Some(ProposedPlanGoalPathLayout::Legacy);
+    }
+
+    let plan_id = file_name.strip_suffix(".md")?;
+    Uuid::parse_str(plan_id).ok()?;
+    if matches!(components.next(), Some("plans"))
+        && matches!(components.next(), Some(thread) if thread == thread_id_text)
+        && matches!(components.next(), Some("goals"))
+    {
+        Some(ProposedPlanGoalPathLayout::Versioned {
+            file_name: file_name.to_string(),
+        })
+    } else {
+        None
+    }
+}
+
+fn proposed_plan_goal_path_from_objective(
+    lha_home: &Path,
+    thread_id: ThreadId,
+    objective: &str,
+) -> Option<PathBuf> {
+    let path_text = proposed_plan_goal_objective_path(objective)?;
+    let layout = proposed_plan_goal_path_layout_from_objective_path(path_text, thread_id)?;
+    Some(proposed_plan_goal_path_for_layout(
+        lha_home, thread_id, &layout,
+    ))
 }
 
 struct ForkedThreadGoal {
@@ -587,31 +665,32 @@ fn latest_thread_goal_from_rollout(rollout_items: &[RolloutItem]) -> Option<Fork
         }
         match item {
             RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(event)) => {
-                let goal_id = event.goal.goal_id.clone();
-                let is_new_goal = goal
+                record_forked_thread_goal(
+                    &mut goal,
+                    &mut pending_plan_text,
+                    &mut proposed_plan_text_by_goal_id,
+                    &event.goal,
+                );
+            }
+            RolloutItem::EventMsg(EventMsg::ThreadGoalReplaced(event)) => {
+                if goal
                     .as_ref()
-                    .map(|forked_goal| forked_goal.goal.goal_id.as_str())
-                    != Some(goal_id.as_str());
-                if is_new_goal {
-                    if proposed_plan_goal_objective_path(&event.goal.objective).is_some() {
-                        if let Some(plan_text) = pending_plan_text.take() {
-                            proposed_plan_text_by_goal_id.insert(goal_id.clone(), plan_text);
-                        }
-                    } else {
-                        pending_plan_text = None;
-                    }
+                    .is_some_and(|forked_goal| forked_goal.goal.goal_id == event.previous_goal_id)
+                {
+                    proposed_plan_text_by_goal_id.remove(&event.previous_goal_id);
                 }
-                goal = Some(ForkedThreadGoal {
-                    goal: event.goal.clone(),
-                    proposed_plan_text: proposed_plan_text_by_goal_id.get(&goal_id).cloned(),
-                });
+                record_forked_thread_goal(
+                    &mut goal,
+                    &mut pending_plan_text,
+                    &mut proposed_plan_text_by_goal_id,
+                    &event.goal,
+                );
             }
             RolloutItem::EventMsg(EventMsg::ThreadGoalCleared(_)) => {
                 if let Some(forked_goal) = &goal {
                     proposed_plan_text_by_goal_id.remove(&forked_goal.goal.goal_id);
                 }
                 goal = None;
-                pending_plan_text = None;
             }
             RolloutItem::SessionMeta(_)
             | RolloutItem::TranscriptItem(_)
@@ -624,6 +703,35 @@ fn latest_thread_goal_from_rollout(rollout_items: &[RolloutItem]) -> Option<Fork
         }
     }
     goal
+}
+
+fn record_forked_thread_goal(
+    current_goal: &mut Option<ForkedThreadGoal>,
+    pending_plan_text: &mut Option<String>,
+    proposed_plan_text_by_goal_id: &mut HashMap<String, String>,
+    updated_goal: &ThreadGoal,
+) {
+    let goal_id = updated_goal.goal_id.clone();
+    let is_new_goal = current_goal
+        .as_ref()
+        .map(|forked_goal| forked_goal.goal.goal_id.as_str())
+        != Some(goal_id.as_str());
+    if is_new_goal {
+        if proposed_plan_goal_objective_path(&updated_goal.objective).is_some_and(|path_text| {
+            proposed_plan_goal_path_layout_from_objective_path(path_text, updated_goal.thread_id)
+                .is_some()
+        }) {
+            if let Some(plan_text) = pending_plan_text.take() {
+                proposed_plan_text_by_goal_id.insert(goal_id.clone(), plan_text);
+            }
+        } else {
+            *pending_plan_text = None;
+        }
+    }
+    *current_goal = Some(ForkedThreadGoal {
+        goal: updated_goal.clone(),
+        proposed_plan_text: proposed_plan_text_by_goal_id.get(&goal_id).cloned(),
+    });
 }
 
 fn session_status_from_event(msg: &EventMsg) -> Option<SessionStatus> {
@@ -1469,6 +1577,13 @@ fn buddy_turn_snapshot_to_config(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ThreadGoalSetOutcome {
+    Applied,
+    ConfirmationRequired,
+    Failed,
+}
+
 impl Session {
     /// Don't expand the number of mutated arguments on config. We are in the process of getting rid of it.
     pub(crate) fn build_per_turn_config(session_configuration: &SessionConfiguration) -> Config {
@@ -1936,11 +2051,8 @@ impl Session {
         if goal.status != crate::product::state::ThreadGoalStatus::Active {
             return None;
         }
-        let path_text = proposed_plan_goal_objective_path(&goal.objective)?;
-        if !proposed_plan_goal_objective_path_matches_thread(path_text, self.conversation_id) {
-            return None;
-        }
-        Some(PathBuf::from(path_text))
+        let lha_home = self.lha_home().await;
+        proposed_plan_goal_path_from_objective(&lha_home, self.conversation_id, &goal.objective)
     }
 
     pub(crate) fn request_goal_continuation(&self) {
@@ -2019,16 +2131,16 @@ impl Session {
         sub_id: String,
         objective: String,
         mode: ThreadGoalSetMode,
-    ) -> bool {
+    ) -> ThreadGoalSetOutcome {
         let Some(state_db) = self.state_db() else {
             self.send_goal_error(sub_id, "Goals require a persisted session.".to_string())
                 .await;
-            return false;
+            return ThreadGoalSetOutcome::Failed;
         };
         if !self.features.enabled(Feature::Goals) {
             self.send_goal_error(sub_id, "Goals are disabled.".to_string())
                 .await;
-            return false;
+            return ThreadGoalSetOutcome::Failed;
         }
         if !self.goals_allowed_for_current_identity().await {
             self.send_goal_error(
@@ -2037,13 +2149,13 @@ impl Session {
                     .to_string(),
             )
             .await;
-            return false;
+            return ThreadGoalSetOutcome::Failed;
         }
         if let Err(message) =
             crate::product::protocol::protocol::validate_thread_goal_objective(&objective)
         {
             self.send_goal_error(sub_id, message).await;
-            return false;
+            return ThreadGoalSetOutcome::Failed;
         }
         self.settle_active_goal_usage_for_display().await;
         let state_goal = match mode {
@@ -2072,7 +2184,7 @@ impl Session {
                             ),
                         })
                         .await;
-                        return false;
+                        return ThreadGoalSetOutcome::ConfirmationRequired;
                     }
                     Ok(_) => state_db
                         .insert_thread_goal_or_replace_completed(
@@ -2152,12 +2264,12 @@ impl Session {
                     }),
                 })
                 .await;
-                true
+                ThreadGoalSetOutcome::Applied
             }
             Err(err) => {
                 self.send_goal_error(sub_id, format!("Failed to set goal: {err}"))
                     .await;
-                false
+                ThreadGoalSetOutcome::Failed
             }
         }
     }
@@ -2317,9 +2429,23 @@ impl Session {
             return false;
         };
 
-        let objective = proposed_plan_goal_objective(&plan_path);
-        self.set_thread_goal_objective(sub_id, objective, ThreadGoalSetMode::ConfirmIfExists)
+        self.finalize_staged_proposed_plan_goal(sub_id, plan_path)
             .await
+    }
+
+    async fn finalize_staged_proposed_plan_goal(&self, sub_id: String, plan_path: PathBuf) -> bool {
+        let objective = proposed_plan_goal_objective(&plan_path);
+        match self
+            .set_thread_goal_objective(sub_id, objective, ThreadGoalSetMode::ConfirmIfExists)
+            .await
+        {
+            ThreadGoalSetOutcome::Applied => true,
+            ThreadGoalSetOutcome::ConfirmationRequired => false,
+            ThreadGoalSetOutcome::Failed => {
+                self.remove_proposed_plan_goal(&plan_path).await;
+                false
+            }
+        }
     }
 
     async fn clear_thread_goal_and_start_from_proposed_plan(
@@ -2395,8 +2521,24 @@ impl Session {
         let Some(plan_path) = self.persist_proposed_plan_goal(&sub_id, &plan_text).await else {
             return false;
         };
-        let objective = proposed_plan_goal_objective(&plan_path);
 
+        self.replace_unfinished_thread_goal_with_proposed_plan(
+            sub_id,
+            state_db,
+            expected_goal_id,
+            plan_path,
+        )
+        .await
+    }
+
+    async fn replace_unfinished_thread_goal_with_proposed_plan(
+        &self,
+        sub_id: String,
+        state_db: state_db::StateDbHandle,
+        expected_goal_id: String,
+        plan_path: PathBuf,
+    ) -> bool {
+        let objective = proposed_plan_goal_objective(&plan_path);
         match state_db
             .replace_unfinished_thread_goal_if_goal_id(
                 self.conversation_id,
@@ -2409,17 +2551,10 @@ impl Session {
         {
             Ok(Some(goal)) => {
                 self.send_event_raw(Event {
-                    id: sub_id.clone(),
-                    msg: EventMsg::ThreadGoalCleared(ThreadGoalClearedEvent {
-                        thread_id: self.conversation_id,
-                    }),
-                })
-                .await;
-                self.send_event_raw(Event {
                     id: sub_id,
-                    msg: EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
+                    msg: EventMsg::ThreadGoalReplaced(ThreadGoalReplacedEvent {
                         thread_id: self.conversation_id,
-                        turn_id: None,
+                        previous_goal_id: expected_goal_id,
                         goal: protocol_goal_from_state(goal),
                     }),
                 })
@@ -2427,6 +2562,7 @@ impl Session {
                 true
             }
             Ok(None) => {
+                self.remove_proposed_plan_goal(&plan_path).await;
                 self.send_goal_error(
                     sub_id,
                     "The current goal changed before it could be cleared. Refresh the plan and try again."
@@ -2436,6 +2572,7 @@ impl Session {
                 false
             }
             Err(err) => {
+                self.remove_proposed_plan_goal(&plan_path).await;
                 self.send_goal_error(sub_id, format!("Failed to replace goal: {err}"))
                     .await;
                 false
@@ -2444,7 +2581,8 @@ impl Session {
     }
 
     async fn persist_proposed_plan_goal(&self, sub_id: &str, plan_text: &str) -> Option<PathBuf> {
-        let plan_path = self.proposed_plan_goal_path().await;
+        let lha_home = self.lha_home().await;
+        let plan_path = new_proposed_plan_goal_path_for_thread(&lha_home, self.conversation_id);
         if let Some(parent) = plan_path.parent()
             && let Err(err) = tokio::fs::create_dir_all(parent).await
         {
@@ -2467,9 +2605,15 @@ impl Session {
         Some(plan_path)
     }
 
-    async fn proposed_plan_goal_path(&self) -> PathBuf {
-        let lha_home = self.lha_home().await;
-        proposed_plan_goal_path_for_thread(&lha_home, self.conversation_id)
+    async fn remove_proposed_plan_goal(&self, plan_path: &Path) {
+        if let Err(err) = tokio::fs::remove_file(plan_path).await
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            warn!(
+                "failed to remove uncommitted proposed plan file {}: {err}",
+                plan_path.display()
+            );
+        }
     }
 
     async fn send_goal_error(&self, sub_id: String, message: String) {
@@ -2791,32 +2935,25 @@ impl Session {
         proposed_plan_text: Option<&str>,
     ) -> Option<String> {
         let lha_home = self.lha_home().await;
-        let source_plan_path = proposed_plan_goal_path_for_thread(&lha_home, goal.thread_id);
-        let objective_path_text = proposed_plan_goal_objective_path(&goal.objective)?;
-        if !proposed_plan_goal_objective_path_matches_thread(objective_path_text, goal.thread_id) {
-            return None;
-        }
+        let source_plan_path =
+            proposed_plan_goal_path_from_objective(&lha_home, goal.thread_id, &goal.objective)?;
 
         let plan_text = match proposed_plan_text.filter(|text| !text.trim().is_empty()) {
             Some(plan_text) => plan_text.to_string(),
-            None => {
-                if goal.objective != proposed_plan_goal_objective(&source_plan_path) {
+            None => match tokio::fs::read_to_string(&source_plan_path).await {
+                Ok(plan_text) => plan_text,
+                Err(err) => {
+                    warn!(
+                        "failed to read source proposed plan file while forking goal {}: {err}",
+                        source_plan_path.display()
+                    );
                     return None;
                 }
-                match tokio::fs::read_to_string(&source_plan_path).await {
-                    Ok(plan_text) => plan_text,
-                    Err(err) => {
-                        warn!(
-                            "failed to read source proposed plan file while forking goal {}: {err}",
-                            source_plan_path.display()
-                        );
-                        return None;
-                    }
-                }
-            }
+            },
         };
 
-        let target_plan_path = proposed_plan_goal_path_for_thread(&lha_home, self.conversation_id);
+        let target_plan_path =
+            new_proposed_plan_goal_path_for_thread(&lha_home, self.conversation_id);
         if let Some(parent) = target_plan_path.parent()
             && let Err(err) = tokio::fs::create_dir_all(parent).await
         {
@@ -4966,6 +5103,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
 mod handlers {
     use crate::product::agent::codex::Session;
     use crate::product::agent::codex::SessionSettingsUpdate;
+    use crate::product::agent::codex::ThreadGoalSetOutcome;
     use crate::product::agent::codex::buddy_turn_snapshot_to_config;
     use crate::product::agent::codex::identity_for_user_turn;
 
@@ -5182,10 +5320,11 @@ mod handlers {
         objective: String,
         mode: ThreadGoalSetMode,
     ) {
-        if sess
-            .set_thread_goal_objective(sub_id, objective, mode)
-            .await
-        {
+        if matches!(
+            sess.set_thread_goal_objective(sub_id, objective, mode)
+                .await,
+            ThreadGoalSetOutcome::Applied
+        ) {
             sess.maybe_continue_active_automation().await;
         }
     }
@@ -9388,7 +9527,10 @@ mod tests {
             .record_initial_history(InitialHistory::Forked(rollout_items))
             .await;
 
-        let target_plan_path = session.proposed_plan_goal_path().await;
+        let target_plan_path = session
+            .active_proposed_plan_goal_path()
+            .await
+            .expect("forked goal should reference a proposed plan path");
         let expected_objective = proposed_plan_goal_objective(&target_plan_path);
         assert_eq!(
             "original plan",
@@ -9477,7 +9619,10 @@ mod tests {
             .record_initial_history(InitialHistory::Forked(rollout_items))
             .await;
 
-        let target_plan_path = session.proposed_plan_goal_path().await;
+        let target_plan_path = session
+            .active_proposed_plan_goal_path()
+            .await
+            .expect("forked goal should reference a proposed plan path");
         let expected_objective = proposed_plan_goal_objective(&target_plan_path);
         assert_eq!(
             "original rollout plan",
@@ -9550,7 +9695,10 @@ mod tests {
             .record_initial_history(InitialHistory::Forked(rollout_items))
             .await;
 
-        let target_plan_path = session.proposed_plan_goal_path().await;
+        let target_plan_path = session
+            .active_proposed_plan_goal_path()
+            .await
+            .expect("forked goal should reference a proposed plan path");
         let expected_objective = proposed_plan_goal_objective(&target_plan_path);
         assert_eq!(
             "current source plan",
@@ -9596,9 +9744,9 @@ mod tests {
                     text: "recovered relocated plan".to_string(),
                 }),
             })),
-            RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
+            RolloutItem::EventMsg(EventMsg::ThreadGoalReplaced(ThreadGoalReplacedEvent {
                 thread_id: source_thread_id,
-                turn_id: Some("source-turn".to_string()),
+                previous_goal_id: "previous-proposed-plan-goal-id".to_string(),
                 goal: test_protocol_goal(
                     source_thread_id,
                     "source-proposed-plan-goal-id".to_string(),
@@ -9612,7 +9760,10 @@ mod tests {
             .record_initial_history(InitialHistory::Forked(rollout_items))
             .await;
 
-        let target_plan_path = session.proposed_plan_goal_path().await;
+        let target_plan_path = session
+            .active_proposed_plan_goal_path()
+            .await
+            .expect("forked goal should reference a proposed plan path");
         let expected_objective = proposed_plan_goal_objective(&target_plan_path);
         assert_eq!(
             "recovered relocated plan",
@@ -9633,12 +9784,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn record_initial_history_recovers_legacy_clear_then_update_plan_text() {
+        let (session, state_db, rx, _state_home) = make_goal_session_with_state().await;
+        let source_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000126").expect("valid thread id");
+        let relocated_lha_home = PathBuf::from("/old/lha/home");
+        let source_plan_path =
+            proposed_plan_goal_path_for_thread(&relocated_lha_home, source_thread_id);
+        let source_objective = proposed_plan_goal_objective(&source_plan_path);
+        let rollout_items = vec![
+            RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id: source_thread_id,
+                turn_id: "source-turn".to_string(),
+                item: TurnItem::Plan(PlanItem {
+                    id: "plan-legacy-replacement".to_string(),
+                    text: "legacy replacement plan".to_string(),
+                }),
+            })),
+            RolloutItem::EventMsg(EventMsg::ThreadGoalCleared(ThreadGoalClearedEvent {
+                thread_id: source_thread_id,
+            })),
+            RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
+                thread_id: source_thread_id,
+                turn_id: Some("source-turn".to_string()),
+                goal: test_protocol_goal(
+                    source_thread_id,
+                    "legacy-replacement-goal-id".to_string(),
+                    &source_objective,
+                    ThreadGoalStatus::Active,
+                ),
+            })),
+        ];
+
+        session
+            .record_initial_history(InitialHistory::Forked(rollout_items))
+            .await;
+
+        let target_plan_path = session
+            .active_proposed_plan_goal_path()
+            .await
+            .expect("forked goal should reference a proposed plan path");
+        assert_eq!(
+            "legacy replacement plan",
+            tokio::fs::read_to_string(&target_plan_path)
+                .await
+                .expect("target plan should be written")
+        );
+        let stored = state_db
+            .get_thread_goal(session.conversation_id)
+            .await
+            .expect("goal read should succeed")
+            .expect("forked goal should exist");
+        assert_eq!(
+            proposed_plan_goal_objective(&target_plan_path),
+            stored.objective
+        );
+        assert_eq!(
+            proposed_plan_goal_objective(&target_plan_path),
+            wait_for_goal_updated(&rx).await.objective
+        );
+    }
+
+    #[tokio::test]
     async fn record_initial_history_localizes_forked_proposed_plan_goal_from_source_file() {
         let (session, state_db, rx, _state_home) = make_goal_session_with_state().await;
         let source_thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000122").expect("valid thread id");
         let lha_home = session.lha_home().await;
-        let source_plan_path = proposed_plan_goal_path_for_thread(&lha_home, source_thread_id);
+        let source_plan_path = new_proposed_plan_goal_path_for_thread(&lha_home, source_thread_id);
         tokio::fs::create_dir_all(source_plan_path.parent().unwrap())
             .await
             .expect("source plan directory should be created");
@@ -9663,7 +9876,10 @@ mod tests {
             .record_initial_history(InitialHistory::Forked(rollout_items))
             .await;
 
-        let target_plan_path = session.proposed_plan_goal_path().await;
+        let target_plan_path = session
+            .active_proposed_plan_goal_path()
+            .await
+            .expect("forked goal should reference a proposed plan path");
         let expected_objective = proposed_plan_goal_objective(&target_plan_path);
         assert_eq!(
             "copied source plan",
@@ -12254,6 +12470,22 @@ mod tests {
         }
     }
 
+    async fn wait_for_goal_replace_confirmation_required(
+        rx: &async_channel::Receiver<Event>,
+    ) -> ThreadGoalReplaceConfirmationRequiredEvent {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let evt = tokio::time::timeout(remaining, rx.recv())
+                .await
+                .expect("timeout waiting for goal replacement confirmation")
+                .expect("event");
+            if let EventMsg::ThreadGoalReplaceConfirmationRequired(required) = evt.msg {
+                return required;
+            }
+        }
+    }
+
     async fn wait_for_goal_error(rx: &async_channel::Receiver<Event>) -> ErrorEvent {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
         loop {
@@ -12266,6 +12498,12 @@ mod tests {
                 return error;
             }
         }
+    }
+
+    async fn plan_goal_path(session: &Session, objective: &str) -> PathBuf {
+        let lha_home = session.lha_home().await;
+        proposed_plan_goal_path_from_objective(&lha_home, session.conversation_id, objective)
+            .expect("goal objective should reference a supported proposed plan path")
     }
 
     async fn wait_for_turn_complete(rx: &async_channel::Receiver<Event>) {
@@ -12283,6 +12521,175 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rejected_staged_plan_replacement_preserves_surviving_plan_sidecar() {
+        let (sess, state_db, rx, _state_home) = make_goal_session_with_state().await;
+        let lha_home = sess.lha_home().await;
+        let stale = state_db
+            .replace_thread_goal(
+                sess.conversation_id,
+                "stale goal",
+                crate::product::state::ThreadGoalStatus::Active,
+                None,
+            )
+            .await
+            .expect("stale goal should be created");
+        let surviving_plan_path =
+            new_proposed_plan_goal_path_for_thread(&lha_home, sess.conversation_id);
+        tokio::fs::create_dir_all(
+            surviving_plan_path
+                .parent()
+                .expect("versioned plan path should have a parent"),
+        )
+        .await
+        .expect("versioned plan directory should be created");
+        tokio::fs::write(&surviving_plan_path, "surviving plan")
+            .await
+            .expect("surviving plan should be written");
+        let surviving = state_db
+            .replace_thread_goal(
+                sess.conversation_id,
+                &proposed_plan_goal_objective(&surviving_plan_path),
+                crate::product::state::ThreadGoalStatus::Active,
+                None,
+            )
+            .await
+            .expect("surviving goal should be created");
+        let staged_plan_path = sess
+            .persist_proposed_plan_goal("staged-replacement", "rejected replacement")
+            .await
+            .expect("staged plan should be written");
+
+        assert!(
+            !sess
+                .replace_unfinished_thread_goal_with_proposed_plan(
+                    "staged-replacement".to_string(),
+                    state_db.clone(),
+                    stale.goal_id,
+                    staged_plan_path.clone(),
+                )
+                .await
+        );
+
+        let error = wait_for_goal_error(&rx).await;
+        assert!(
+            error
+                .message
+                .contains("The current goal changed before it could be cleared")
+        );
+        assert_eq!(
+            "surviving plan",
+            tokio::fs::read_to_string(&surviving_plan_path)
+                .await
+                .expect("surviving plan should remain readable")
+        );
+        assert!(
+            !tokio::fs::try_exists(staged_plan_path)
+                .await
+                .expect("staged plan existence check should succeed")
+        );
+        assert_eq!(
+            Some(surviving),
+            state_db
+                .get_thread_goal(sess.conversation_id)
+                .await
+                .expect("goal read should succeed")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn staged_plan_sidecar_survives_confirmation_and_confirmed_replacement() {
+        let (sess, state_db, rx, _state_home) = make_goal_session_with_state().await;
+        set_programmer_identity(&sess).await;
+
+        assert_eq!(
+            None,
+            state_db
+                .get_thread_goal(sess.conversation_id)
+                .await
+                .expect("goal read should succeed")
+        );
+
+        let plan_text = "# Plan\n- retain staged sidecar until confirmation";
+        let plan_path = sess
+            .persist_proposed_plan_goal("stage-plan-for-confirmation", plan_text)
+            .await
+            .expect("staged plan should be written");
+        let existing = state_db
+            .replace_thread_goal(
+                sess.conversation_id,
+                "concurrent unfinished goal",
+                crate::product::state::ThreadGoalStatus::Active,
+                None,
+            )
+            .await
+            .expect("concurrent goal should be created");
+
+        assert!(
+            !sess
+                .finalize_staged_proposed_plan_goal(
+                    "stage-plan-for-confirmation".to_string(),
+                    plan_path.clone(),
+                )
+                .await
+        );
+
+        let confirmation = wait_for_goal_replace_confirmation_required(&rx).await;
+        assert_eq!(existing.goal_id, confirmation.existing_goal.goal_id);
+        assert_eq!(
+            proposed_plan_goal_objective(&plan_path),
+            confirmation.objective
+        );
+        assert_eq!(
+            plan_text,
+            tokio::fs::read_to_string(&plan_path)
+                .await
+                .expect("staged plan should remain readable")
+        );
+        assert_eq!(
+            Some(existing.clone()),
+            state_db
+                .get_thread_goal(sess.conversation_id)
+                .await
+                .expect("goal read should succeed")
+        );
+
+        let objective = confirmation.objective;
+        assert_eq!(
+            ThreadGoalSetOutcome::Applied,
+            sess.set_thread_goal_objective(
+                "confirm-staged-plan".to_string(),
+                objective.clone(),
+                ThreadGoalSetMode::ReplaceExisting {
+                    expected_goal_id: existing.goal_id.clone(),
+                },
+            )
+            .await
+        );
+
+        let updated = wait_for_goal_updated(&rx).await;
+        let active_plan_path = plan_goal_path(&sess, &updated.objective).await;
+        assert_eq!(objective, updated.objective);
+        assert_eq!(plan_path, active_plan_path);
+        assert_eq!(
+            plan_text,
+            tokio::fs::read_to_string(&active_plan_path)
+                .await
+                .expect("confirmed plan should remain readable")
+        );
+        let stored = state_db
+            .get_thread_goal(sess.conversation_id)
+            .await
+            .expect("goal read should succeed")
+            .expect("confirmed goal should exist");
+        assert_eq!(updated.goal_id, stored.goal_id);
+        assert_eq!(objective, stored.objective);
+        assert_eq!(
+            crate::product::state::ThreadGoalStatus::Active,
+            stored.status
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn start_goal_from_proposed_plan_writes_plan_file_and_sets_goal() {
         let (sess, state_db, rx, _state_home) = make_goal_session_with_state().await;
         set_programmer_identity(&sess).await;
@@ -12296,14 +12703,17 @@ mod tests {
         );
 
         let updated = wait_for_goal_updated(&rx).await;
-        let plan_path = sess.proposed_plan_goal_path().await;
+        let plan_path = plan_goal_path(&sess, &updated.objective).await;
         let expected_plan_text = "# Plan\n- implement it";
-        let expected_objective = proposed_plan_goal_objective(&plan_path);
         assert_eq!(
             expected_plan_text,
             tokio::fs::read_to_string(&plan_path).await.unwrap()
         );
-        assert_eq!(expected_objective, updated.objective);
+        assert!(
+            plan_path
+                .parent()
+                .is_some_and(|parent| parent.ends_with("plans"))
+        );
 
         let stored = state_db
             .get_thread_goal(sess.conversation_id)
@@ -12313,7 +12723,7 @@ mod tests {
         let expected = crate::product::state::ThreadGoal {
             thread_id: sess.conversation_id,
             goal_id: stored.goal_id.clone(),
-            objective: expected_objective,
+            objective: updated.objective,
             status: crate::product::state::ThreadGoalStatus::Active,
             token_budget: None,
             tokens_used: 0,
@@ -12328,7 +12738,9 @@ mod tests {
     async fn start_goal_from_proposed_plan_rejects_empty_plan_text() {
         let (sess, state_db, rx, _state_home) = make_goal_session_with_state().await;
         set_programmer_identity(&sess).await;
-        let plan_path = sess.proposed_plan_goal_path().await;
+        let lha_home = sess.lha_home().await;
+        let plan_directory =
+            proposed_plan_goal_directory_for_thread(&lha_home, sess.conversation_id);
 
         assert!(
             !sess
@@ -12341,7 +12753,7 @@ mod tests {
 
         let error = wait_for_goal_error(&rx).await;
         assert_eq!("proposed plan text must not be empty", error.message);
-        assert!(!tokio::fs::try_exists(plan_path).await.unwrap());
+        assert!(!tokio::fs::try_exists(plan_directory).await.unwrap());
         assert_eq!(
             None,
             state_db
@@ -12366,15 +12778,13 @@ mod tests {
         );
 
         let updated = wait_for_goal_updated(&rx).await;
-        let plan_path = sess.proposed_plan_goal_path().await;
-        let expected_objective = proposed_plan_goal_objective(&plan_path);
+        let plan_path = plan_goal_path(&sess, &updated.objective).await;
         assert_eq!(
             plan_text,
             tokio::fs::read_to_string(&plan_path)
                 .await
                 .expect("plan text should be written")
         );
-        assert_eq!(expected_objective, updated.objective);
 
         let stored = state_db
             .get_thread_goal(sess.conversation_id)
@@ -12384,7 +12794,7 @@ mod tests {
         let expected = crate::product::state::ThreadGoal {
             thread_id: sess.conversation_id,
             goal_id: stored.goal_id.clone(),
-            objective: expected_objective,
+            objective: updated.objective,
             status: crate::product::state::ThreadGoalStatus::Active,
             token_budget: None,
             tokens_used: 0,
@@ -12399,7 +12809,8 @@ mod tests {
     async fn start_goal_from_proposed_plan_rejects_unfinished_goal_without_writing_plan_file() {
         let (sess, state_db, rx, _state_home) = make_goal_session_with_state().await;
         set_programmer_identity(&sess).await;
-        let plan_path = sess.proposed_plan_goal_path().await;
+        let lha_home = sess.lha_home().await;
+        let plan_path = proposed_plan_goal_path_for_thread(&lha_home, sess.conversation_id);
         tokio::fs::create_dir_all(plan_path.parent().unwrap())
             .await
             .expect("plan directory should be created");
@@ -12469,10 +12880,8 @@ mod tests {
         );
 
         let updated = wait_for_goal_updated(&rx).await;
-        let plan_path = sess.proposed_plan_goal_path().await;
-        let expected_objective = proposed_plan_goal_objective(&plan_path);
+        let plan_path = plan_goal_path(&sess, &updated.objective).await;
         assert_ne!(completed.goal_id, updated.goal_id);
-        assert_eq!(expected_objective, updated.objective);
         assert_eq!(ThreadGoalStatus::Active, updated.status);
         assert_eq!(
             "# Plan\n- replace completed",
@@ -12484,7 +12893,7 @@ mod tests {
             .await
             .expect("goal read should succeed")
             .expect("goal should exist");
-        assert_eq!(expected_objective, stored.objective);
+        assert_eq!(updated.objective, stored.objective);
         assert_eq!(
             crate::product::state::ThreadGoalStatus::Active,
             stored.status

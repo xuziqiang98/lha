@@ -47,7 +47,9 @@ When goals are enabled, the TUI can start implementation from a planner plan by
 switching to `programmer` and creating a `/goal` that points at the persisted
 proposed plan. If the thread has an unfinished goal, the implementation prompt
 keeps direct start disabled and offers an explicit option to clear that goal
-before switching and creating the plan-derived goal.
+before switching and creating the plan-derived goal. Each plan-derived goal
+references its own persisted plan snapshot, so replacing a goal does not modify
+the plan referenced by the previous goal.
 
 ## `programmer`
 

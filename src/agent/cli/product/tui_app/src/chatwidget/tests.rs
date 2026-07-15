@@ -53,6 +53,7 @@ use crate::product::agent::protocol::ReviewTarget;
 use crate::product::agent::protocol::SessionSource;
 use crate::product::agent::protocol::StreamErrorEvent;
 use crate::product::agent::protocol::TerminalInteractionEvent;
+use crate::product::agent::protocol::ThreadGoalReplacedEvent;
 use crate::product::agent::protocol::ThreadGoalSnapshotEvent;
 use crate::product::agent::protocol::TokenCountEvent;
 use crate::product::agent::protocol::TokenUsage;
@@ -3717,6 +3718,42 @@ async fn plan_implementation_popup_waits_for_running_turn_after_goal_snapshot() 
 }
 
 #[tokio::test]
+async fn plan_implementation_popup_retries_after_mcp_startup_completes() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.set_feature_enabled(Feature::Identities, true);
+    chat.set_feature_enabled(Feature::Goals, true);
+    let planner_mask =
+        identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+            .expect("expected planner identity");
+    chat.set_identity_mask(planner_mask);
+    chat.latest_proposed_plan_text = Some("# Plan\n- implement it".to_string());
+    chat.saw_plan_item_this_turn = true;
+    chat.current_goal_state_known = true;
+
+    chat.handle_codex_event(Event {
+        id: "mcp-starting".to_string(),
+        msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+            server: "example".to_string(),
+            status: McpStartupStatus::Starting,
+        }),
+    });
+    chat.maybe_prompt_plan_implementation();
+
+    assert!(chat.pending_plan_implementation_prompt);
+    assert!(!render_bottom_popup(&chat, 80).contains(PLAN_IMPLEMENTATION_TITLE));
+
+    chat.handle_codex_event(Event {
+        id: "mcp-complete".to_string(),
+        msg: EventMsg::McpStartupComplete(McpStartupCompleteEvent::default()),
+    });
+
+    assert!(!chat.pending_plan_implementation_prompt);
+    assert!(render_bottom_popup(&chat, 80).contains(PLAN_IMPLEMENTATION_TITLE));
+}
+
+#[tokio::test]
 async fn submit_user_message_with_mode_sets_coding_identity() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());
@@ -4321,6 +4358,42 @@ async fn goal_summary_preserves_multiline_proposed_plan_objective_spacing() {
 }
 
 #[tokio::test]
+async fn thread_goal_replaced_renders_one_replacement_summary() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    chat.handle_codex_event(Event {
+        id: "goal-replaced".to_string(),
+        msg: EventMsg::ThreadGoalReplaced(ThreadGoalReplacedEvent {
+            thread_id,
+            previous_goal_id: "old-goal".to_string(),
+            goal: ThreadGoal {
+                thread_id,
+                goal_id: "new-goal".to_string(),
+                objective: "replace the goal".to_string(),
+                status: ThreadGoalStatus::Active,
+                token_budget: None,
+                tokens_used: 0,
+                time_used_seconds: 0,
+                created_at: 1_700_000_000,
+                updated_at: 1_700_000_100,
+            },
+        }),
+    });
+
+    let cells: Vec<_> = drain_events(&mut rx)
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .collect();
+    assert_eq!(1, cells.len());
+    let text = lines_to_strings(&cells[0].display_lines(80)).join("\n");
+    assert!(text.contains("Goal replaced:"));
+    assert!(text.contains("replace the goal"));
+    assert!(!text.contains("Goal cleared."));
+}
+
+#[tokio::test]
 async fn goal_edit_submits_expected_goal_id() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.config.features.enable(Feature::Goals);
@@ -4532,6 +4605,7 @@ async fn plan_implementation_popup_skips_when_messages_queued() {
     chat.set_identity_mask(plan_mask);
     chat.bottom_pane.set_task_running(true);
     chat.queue_user_message("Queued message".into());
+    chat.pending_plan_implementation_prompt = true;
 
     chat.on_task_complete(Some("Plan details".to_string()), false);
 
@@ -4540,6 +4614,7 @@ async fn plan_implementation_popup_skips_when_messages_queued() {
         !popup.contains(PLAN_IMPLEMENTATION_TITLE),
         "expected no plan popup with queued messages, got {popup:?}"
     );
+    assert!(!chat.pending_plan_implementation_prompt);
 }
 
 #[tokio::test]

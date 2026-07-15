@@ -30,6 +30,7 @@ use crate::test_support::core::wait_for_event_match;
 use anyhow::Result;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::path::PathBuf;
 use tokio::time::Duration;
 
 async fn submit_user_turn(test: &TestCodex, prompt: &str) -> Result<()> {
@@ -199,16 +200,6 @@ async fn start_goal_from_proposed_plan_creates_goal_and_continues_until_complete
     switch_to_programmer(&test).await?;
 
     let plan_text = "# Plan\n- Finish the proposed work\n";
-    let plan_path = test
-        .lha_home_path()
-        .join("goals")
-        .join(test.session_configured.session_id.to_string())
-        .join("proposed_plan.md");
-    assert!(plan_path.is_absolute());
-    let expected_objective = format!(
-        "Implement the proposed plan stored at:\n{}\n\nBefore marking this goal complete, verify every explicit requirement in that plan, including docs, formatting, tests, and cleanup.",
-        plan_path.display()
-    );
 
     test.codex
         .submit(Op::ThreadGoalStartFromProposedPlan {
@@ -216,11 +207,18 @@ async fn start_goal_from_proposed_plan_creates_goal_and_continues_until_complete
         })
         .await?;
 
-    let active_goal = wait_for_goal_update_matching(&test, |goal| {
-        goal.objective == expected_objective && goal.status == ThreadGoalStatus::Active
-    })
-    .await;
-    assert_eq!(expected_objective, active_goal.objective);
+    let active_goal =
+        wait_for_goal_update_matching(&test, |goal| goal.status == ThreadGoalStatus::Active).await;
+    let plan_path = PathBuf::from(super::proposed_plan_path_from_objective(
+        &active_goal.objective,
+    ));
+    let expected_objective = active_goal.objective.clone();
+    assert!(plan_path.is_absolute());
+    assert!(
+        plan_path
+            .parent()
+            .is_some_and(|path| path.ends_with("plans"))
+    );
     assert_eq!(ThreadGoalStatus::Active, active_goal.status);
     assert_eq!(plan_text, tokio::fs::read_to_string(&plan_path).await?);
 
@@ -335,15 +333,6 @@ async fn replacing_planner_goal_starts_new_plan_without_resuming_old_goal() -> R
     switch_to_planner(&test).await?;
 
     let plan_text = "# Plan\n- Replace the unfinished goal\n";
-    let plan_path = test
-        .lha_home_path()
-        .join("goals")
-        .join(test.session_configured.session_id.to_string())
-        .join("proposed_plan.md");
-    let expected_objective = format!(
-        "Implement the proposed plan stored at:\n{}\n\nBefore marking this goal complete, verify every explicit requirement in that plan, including docs, formatting, tests, and cleanup.",
-        plan_path.display()
-    );
     test.codex
         .submit(Op::ThreadGoalClearAndStartFromProposedPlan {
             plan_text: plan_text.to_string(),
@@ -359,18 +348,32 @@ async fn replacing_planner_goal_starts_new_plan_without_resuming_old_goal() -> R
         })
         .await?;
 
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::ThreadGoalCleared(_))
+    let active_goal = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ThreadGoalCleared(_) => {
+            panic!("replacement must not emit a cleared intermediate event");
+        }
+        EventMsg::ThreadGoalReplaced(replaced)
+            if replaced.previous_goal_id == old_goal.goal_id
+                && replaced.goal.status == ThreadGoalStatus::Active =>
+        {
+            Some(replaced.goal.clone())
+        }
+        _ => None,
     })
     .await;
-    let active_goal = wait_for_goal_update_matching(&test, |goal| {
-        goal.objective == expected_objective && goal.status == ThreadGoalStatus::Active
-    })
-    .await;
+    let plan_path = PathBuf::from(super::proposed_plan_path_from_objective(
+        &active_goal.objective,
+    ));
+    let expected_objective = active_goal.objective.clone();
     assert_ne!(old_goal.goal_id, active_goal.goal_id);
     assert_eq!(
         IdentityKind::Programmer,
         test.codex.config_snapshot().await.identity_kind
+    );
+    assert!(
+        plan_path
+            .parent()
+            .is_some_and(|path| path.ends_with("plans"))
     );
     assert_eq!(plan_text, tokio::fs::read_to_string(&plan_path).await?);
 

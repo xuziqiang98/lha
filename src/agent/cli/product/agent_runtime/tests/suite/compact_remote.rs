@@ -912,12 +912,11 @@ async fn remote_compact_uses_active_goal_plan_file_instead_of_backfilling_plan_t
             plan_text: plan_text.to_string(),
         })
         .await?;
-    wait_for_event(&codex, |ev| {
-        matches!(
-            ev,
-            EventMsg::ThreadGoalUpdated(updated)
-                if updated.goal.status == ThreadGoalStatus::Active
-        )
+    let active_goal = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ThreadGoalUpdated(updated) if updated.goal.status == ThreadGoalStatus::Active => {
+            Some(updated.goal.clone())
+        }
+        _ => None,
     })
     .await;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -945,12 +944,7 @@ async fn remote_compact_uses_active_goal_plan_file_instead_of_backfilling_plan_t
     let follow_up_body = follow_up_json.to_string();
     let developer_texts = message_input_texts(&follow_up_json, "developer").join("\n");
     let user_texts = message_input_texts(&follow_up_json, "user").join("\n");
-    let plan_path = harness
-        .test()
-        .lha_home_path()
-        .join("goals")
-        .join(harness.test().session_configured.session_id.to_string())
-        .join("proposed_plan.md");
+    let plan_path = super::proposed_plan_path_from_objective(&active_goal.objective);
     assert!(
         developer_texts.contains(
             "Runtime note: the active programmer goal references a user-provided proposed plan"
@@ -962,7 +956,7 @@ async fn remote_compact_uses_active_goal_plan_file_instead_of_backfilling_plan_t
         "expected remote compacted history not to include active-goal plan file reminder as user text"
     );
     assert!(
-        follow_up_body.contains(&plan_path.display().to_string()),
+        developer_texts.contains(plan_path),
         "expected remote compacted history to include proposed plan path"
     );
     assert!(

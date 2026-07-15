@@ -631,6 +631,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::UndoStarted(_)
             | EventMsg::ThreadGoalUpdated(_)
             | EventMsg::ThreadGoalCleared(_)
+            | EventMsg::ThreadGoalReplaced(_)
             | EventMsg::ThreadGoalSnapshot(_)
             | EventMsg::ThreadGoalReplaceConfirmationRequired(_)
             | EventMsg::ThreadRolledBack(_)

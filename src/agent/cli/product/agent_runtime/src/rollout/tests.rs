@@ -34,6 +34,7 @@ use crate::product::protocol::models::TranscriptItem;
 use crate::product::protocol::protocol::AskForApproval;
 use crate::product::protocol::protocol::EventMsg;
 use crate::product::protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3;
+use crate::product::protocol::protocol::ROLLOUT_SCHEMA_VERSION_V5;
 use crate::product::protocol::protocol::RolloutItem;
 use crate::product::protocol::protocol::RolloutLine;
 use crate::product::protocol::protocol::SandboxPolicy;
@@ -388,6 +389,31 @@ async fn load_rollout_items_accepts_v3_schema_version() {
     let history = RolloutRecorder::get_rollout_history(&path)
         .await
         .expect("v3 rollout should load");
+
+    assert!(matches!(
+        history,
+        crate::product::protocol::protocol::InitialHistory::Resumed(_)
+    ));
+}
+
+#[tokio::test]
+async fn load_rollout_items_accepts_v5_schema_version() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let ts = "2025-04-03T10-31-00";
+    let uuid = Uuid::from_u128(112);
+    let path = write_session_file_with_meta_payload_and_schema_version(
+        home,
+        ts,
+        uuid,
+        minimal_meta_payload(uuid, ts),
+        Some(ROLLOUT_SCHEMA_VERSION_V5),
+    )
+    .unwrap();
+
+    let history = RolloutRecorder::get_rollout_history(&path)
+        .await
+        .expect("v5 rollout should load");
 
     assert!(matches!(
         history,

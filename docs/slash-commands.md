@@ -85,8 +85,9 @@ LHA shows a prompt to switch with `/identity` and does not mutate goal state.
 | `/goal clear` | Clear the current goal. |
 
 Planner implementation can also create a goal that references a persisted
-proposed plan file. Goal status, pause, resume, and clear behavior is the same
-as any other `/goal`.
+proposed plan snapshot. Each plan-derived goal keeps its own snapshot, so
+replacing a goal does not change the plan referenced by the previous goal. Goal
+status, pause, resume, and clear behavior is the same as any other `/goal`.
 
 Directly starting implementation from a planner plan requires no unfinished
 goal. If a goal is already active, paused, blocked, usage-limited, or

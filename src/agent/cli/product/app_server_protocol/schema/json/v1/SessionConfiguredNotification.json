@@ -1205,6 +1205,35 @@
           "title": "ThreadGoalClearedEventMsg"
         },
         {
+          "description": "Replaced the current long-running goal without a cleared intermediate state.",
+          "type": "object",
+          "required": [
+            "goal",
+            "previousGoalId",
+            "threadId",
+            "type"
+          ],
+          "properties": {
+            "goal": {
+              "$ref": "#/definitions/ThreadGoal"
+            },
+            "previousGoalId": {
+              "type": "string"
+            },
+            "threadId": {
+              "$ref": "#/definitions/ThreadId"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "thread_goal_replaced"
+              ],
+              "title": "ThreadGoalReplacedEventMsgType"
+            }
+          },
+          "title": "ThreadGoalReplacedEventMsg"
+        },
+        {
           "description": "Snapshot of the current long-running goal for the thread.",
           "type": "object",
           "required": [

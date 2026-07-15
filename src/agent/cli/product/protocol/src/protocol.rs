@@ -831,6 +831,9 @@ pub enum EventMsg {
     /// Cleared the long-running goal for the thread.
     ThreadGoalCleared(ThreadGoalClearedEvent),
 
+    /// Replaced the current long-running goal without a cleared intermediate state.
+    ThreadGoalReplaced(ThreadGoalReplacedEvent),
+
     /// Snapshot of the current long-running goal for the thread.
     ThreadGoalSnapshot(ThreadGoalSnapshotEvent),
 
@@ -1375,6 +1378,15 @@ pub struct ThreadGoalClearedEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "protocol/")]
+pub struct ThreadGoalReplacedEvent {
+    pub thread_id: ThreadId,
+    pub previous_goal_id: String,
+    pub goal: ThreadGoal,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "protocol/")]
 pub struct ThreadGoalSnapshotEvent {
     pub thread_id: ThreadId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1830,9 +1842,10 @@ impl From<CompactedItem> for TranscriptItem {
 pub const ROLLOUT_SCHEMA_VERSION_V3: u32 = 3;
 pub const ROLLOUT_SCHEMA_VERSION_V4: u32 = 4;
 pub const ROLLOUT_SCHEMA_VERSION_V5: u32 = 5;
+pub const ROLLOUT_SCHEMA_VERSION_V6: u32 = 6;
 
 pub fn current_rollout_schema_version() -> u32 {
-    ROLLOUT_SCHEMA_VERSION_V5
+    ROLLOUT_SCHEMA_VERSION_V6
 }
 
 fn default_rollout_schema_version() -> u32 {
@@ -2498,9 +2511,9 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn current_rollout_schema_version_is_v5() {
-        assert_eq!(current_rollout_schema_version(), ROLLOUT_SCHEMA_VERSION_V5);
-        assert_eq!(current_rollout_schema_version(), 5);
+    fn current_rollout_schema_version_is_v6() {
+        assert_eq!(current_rollout_schema_version(), ROLLOUT_SCHEMA_VERSION_V6);
+        assert_eq!(current_rollout_schema_version(), 6);
     }
 
     #[test]
@@ -2523,7 +2536,7 @@ mod tests {
         let value = serde_json::to_value(SessionMeta::default())?;
         assert_eq!(
             value.get("rollout_schema_version"),
-            Some(&json!(ROLLOUT_SCHEMA_VERSION_V5))
+            Some(&json!(ROLLOUT_SCHEMA_VERSION_V6))
         );
         Ok(())
     }

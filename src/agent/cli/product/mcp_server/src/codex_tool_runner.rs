@@ -316,6 +316,7 @@ async fn run_codex_tool_session_inner(
                     }
                     EventMsg::ThreadGoalUpdated(_)
                     | EventMsg::ThreadGoalCleared(_)
+                    | EventMsg::ThreadGoalReplaced(_)
                     | EventMsg::ThreadGoalSnapshot(_)
                     | EventMsg::ThreadGoalReplaceConfirmationRequired(_) => {
                         // Ignore long-running automation state updates in MCP tool runner.

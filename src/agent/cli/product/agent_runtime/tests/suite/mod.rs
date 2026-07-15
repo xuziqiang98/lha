@@ -10,6 +10,16 @@ use tempfile::TempDir;
 #[ctor]
 pub static CODEX_ALIASES_TEMP_DIR: Option<TempDir> = unsafe { arg0_dispatch() };
 
+fn proposed_plan_path_from_objective(objective: &str) -> &str {
+    const PREFIX: &str = "Implement the proposed plan stored at:\n";
+    const SUFFIX: &str = "\n\nBefore marking this goal complete, verify every explicit requirement in that plan, including docs, formatting, tests, and cleanup.";
+
+    objective
+        .strip_prefix(PREFIX)
+        .and_then(|path| path.strip_suffix(SUFFIX))
+        .expect("goal objective should reference a proposed plan")
+}
+
 #[cfg(not(target_os = "windows"))]
 mod abort_tasks;
 mod agent_websocket;

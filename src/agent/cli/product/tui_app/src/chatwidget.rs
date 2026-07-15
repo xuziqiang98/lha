@@ -78,6 +78,7 @@ use crate::product::agent::protocol::TerminalInteractionEvent;
 use crate::product::agent::protocol::ThreadGoal;
 use crate::product::agent::protocol::ThreadGoalClearedEvent;
 use crate::product::agent::protocol::ThreadGoalReplaceConfirmationRequiredEvent;
+use crate::product::agent::protocol::ThreadGoalReplacedEvent;
 use crate::product::agent::protocol::ThreadGoalSetMode;
 use crate::product::agent::protocol::ThreadGoalSnapshotEvent;
 use crate::product::agent::protocol::ThreadGoalStatus;
@@ -1523,6 +1524,19 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    fn on_thread_goal_replaced(&mut self, event: ThreadGoalReplacedEvent) {
+        if self.thread_id != Some(event.thread_id) {
+            return;
+        }
+        self.current_goal = Some(event.goal.clone());
+        self.current_goal_state_known = true;
+        self.add_info_message(
+            format!("Goal replaced: {}", format_goal_summary_title(&event.goal)),
+            Some(goal_usage_summary(&event.goal)),
+        );
+        self.request_redraw();
+    }
+
     fn on_thread_goal_snapshot(&mut self, event: ThreadGoalSnapshotEvent) {
         if self.thread_id != Some(event.thread_id) {
             return;
@@ -2105,7 +2119,7 @@ impl ChatWidget {
         self.clear_reasoning_buffers();
         self.request_redraw();
 
-        if !from_replay && self.queued_user_messages.is_empty() {
+        if !from_replay {
             self.maybe_prompt_plan_implementation();
         }
         // If there is a queued user message, send exactly one now to begin the next turn.
@@ -2117,19 +2131,16 @@ impl ChatWidget {
     }
 
     fn maybe_prompt_plan_implementation(&mut self) {
+        if !self.identities_enabled()
+            || !self.queued_user_messages.is_empty()
+            || self.active_identity_kind() != IdentityKind::Planner
+            || !self.saw_plan_item_this_turn
+        {
+            self.pending_plan_implementation_prompt = false;
+            return;
+        }
+        self.pending_plan_implementation_prompt = true;
         if self.task_running_state() {
-            return;
-        }
-        if !self.identities_enabled() {
-            return;
-        }
-        if !self.queued_user_messages.is_empty() {
-            return;
-        }
-        if self.active_identity_kind() != IdentityKind::Planner {
-            return;
-        }
-        if !self.saw_plan_item_this_turn {
             return;
         }
         if !self.bottom_pane.no_modal_or_popup_active() {
@@ -2495,6 +2506,7 @@ impl ChatWidget {
 
         self.mcp_startup_status = None;
         self.update_task_running_state();
+        self.retry_pending_plan_implementation_prompt();
         self.maybe_send_next_queued_input();
         self.request_redraw();
     }
@@ -5004,6 +5016,7 @@ impl ChatWidget {
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
             EventMsg::ThreadGoalUpdated(e) => self.on_thread_goal_updated(e),
             EventMsg::ThreadGoalCleared(e) => self.on_thread_goal_cleared(e),
+            EventMsg::ThreadGoalReplaced(e) => self.on_thread_goal_replaced(e),
             EventMsg::ThreadGoalSnapshot(e) => self.on_thread_goal_snapshot(e),
             EventMsg::ThreadGoalReplaceConfirmationRequired(e) => {
                 self.on_thread_goal_replace_confirmation_required(e)
