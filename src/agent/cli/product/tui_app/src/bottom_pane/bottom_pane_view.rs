@@ -21,6 +21,9 @@ pub(crate) trait BottomPaneView: Renderable {
         CancellationEvent::NotHandled
     }
 
+    /// Handle a programmatic dismissal before this view is removed.
+    fn on_programmatic_dismiss(&mut self) {}
+
     /// Return true if Esc should be routed through `handle_key_event` instead
     /// of the `on_ctrl_c` cancellation path.
     fn prefer_esc_to_handle_key_event(&self) -> bool {

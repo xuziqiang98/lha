@@ -473,6 +473,22 @@ fn proposed_plan_goal_path_from_objective(
     ))
 }
 
+fn versioned_proposed_plan_goal_path_from_objective(
+    lha_home: &Path,
+    thread_id: ThreadId,
+    objective: &str,
+) -> Option<PathBuf> {
+    let path_text = proposed_plan_goal_objective_path(objective)?;
+    let ProposedPlanGoalPathLayout::Versioned { file_name } =
+        proposed_plan_goal_path_layout_from_objective_path(path_text, thread_id)?
+    else {
+        return None;
+    };
+    Some(versioned_proposed_plan_goal_path_for_thread(
+        lha_home, thread_id, &file_name,
+    ))
+}
+
 struct ForkedThreadGoal {
     goal: ThreadGoal,
     proposed_plan_text: Option<String>,
@@ -2446,6 +2462,44 @@ impl Session {
                 false
             }
         }
+    }
+
+    async fn discard_staged_proposed_plan_goal(&self, objective: String) {
+        let Some(state_db) = self.state_db() else {
+            return;
+        };
+        let lha_home = self.lha_home().await;
+        let Some(plan_path) = versioned_proposed_plan_goal_path_from_objective(
+            &lha_home,
+            self.conversation_id,
+            &objective,
+        ) else {
+            return;
+        };
+
+        match state_db.get_thread_goal(self.conversation_id).await {
+            Ok(Some(goal))
+                if proposed_plan_goal_path_from_objective(
+                    &lha_home,
+                    self.conversation_id,
+                    &goal.objective,
+                )
+                .as_ref()
+                    == Some(&plan_path) =>
+            {
+                return;
+            }
+            Ok(_) => {}
+            Err(err) => {
+                warn!(
+                    "failed to read current goal while discarding staged proposed plan {}: {err}",
+                    plan_path.display()
+                );
+                return;
+            }
+        }
+
+        self.remove_proposed_plan_goal(&plan_path).await;
     }
 
     async fn clear_thread_goal_and_start_from_proposed_plan(
@@ -5071,6 +5125,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 handlers::thread_goal_start_from_proposed_plan(&sess, sub.id.clone(), plan_text)
                     .await;
             }
+            Op::ThreadGoalDiscardStagedProposedPlan { objective } => {
+                handlers::thread_goal_discard_staged_proposed_plan(&sess, objective).await;
+            }
             Op::ThreadGoalClearAndStartFromProposedPlan {
                 plan_text,
                 expected_goal_id,
@@ -5354,6 +5411,10 @@ mod handlers {
         {
             sess.maybe_continue_active_automation().await;
         }
+    }
+
+    pub async fn thread_goal_discard_staged_proposed_plan(sess: &Session, objective: String) {
+        sess.discard_staged_proposed_plan_goal(objective).await;
     }
 
     pub async fn thread_goal_clear_and_start_from_proposed_plan(
@@ -12686,6 +12747,149 @@ mod tests {
         assert_eq!(
             crate::product::state::ThreadGoalStatus::Active,
             stored.status
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn discarding_staged_plan_after_confirmation_removes_sidecar() {
+        let (sess, state_db, rx, _state_home) = make_goal_session_with_state().await;
+        set_programmer_identity(&sess).await;
+        let plan_path = sess
+            .persist_proposed_plan_goal("discard-staged-plan", "# Plan\n- discard it")
+            .await
+            .expect("staged plan should be written");
+        let existing = state_db
+            .replace_thread_goal(
+                sess.conversation_id,
+                "keep current goal",
+                crate::product::state::ThreadGoalStatus::Active,
+                None,
+            )
+            .await
+            .expect("existing goal should be created");
+
+        assert!(
+            !sess
+                .finalize_staged_proposed_plan_goal(
+                    "discard-staged-plan".to_string(),
+                    plan_path.clone(),
+                )
+                .await
+        );
+
+        let confirmation = wait_for_goal_replace_confirmation_required(&rx).await;
+        sess.discard_staged_proposed_plan_goal(confirmation.objective)
+            .await;
+
+        assert!(
+            !tokio::fs::try_exists(plan_path)
+                .await
+                .expect("staged plan existence check should succeed")
+        );
+        assert_eq!(
+            Some(existing),
+            state_db
+                .get_thread_goal(sess.conversation_id)
+                .await
+                .expect("goal read should succeed")
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn discarding_staged_plan_referenced_by_current_goal_preserves_sidecar() {
+        let (sess, state_db, _rx, _state_home) = make_goal_session_with_state().await;
+        let plan_text = "# Plan\n- retain it";
+        let plan_path = sess
+            .persist_proposed_plan_goal("retain-staged-plan", plan_text)
+            .await
+            .expect("staged plan should be written");
+        let objective = proposed_plan_goal_objective(&plan_path);
+        let current_goal = state_db
+            .replace_thread_goal(
+                sess.conversation_id,
+                &objective,
+                crate::product::state::ThreadGoalStatus::Complete,
+                None,
+            )
+            .await
+            .expect("current goal should be created");
+
+        sess.discard_staged_proposed_plan_goal(objective).await;
+
+        assert_eq!(
+            plan_text,
+            tokio::fs::read_to_string(&plan_path)
+                .await
+                .expect("referenced plan should remain readable")
+        );
+        assert_eq!(
+            Some(current_goal),
+            state_db
+                .get_thread_goal(sess.conversation_id)
+                .await
+                .expect("goal read should succeed")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn discarding_staged_plan_ignores_unsupported_objectives_and_is_idempotent() {
+        let (sess, _state_db, _rx, _state_home) = make_goal_session_with_state().await;
+        let lha_home = sess.lha_home().await;
+        let legacy_path = proposed_plan_goal_path_for_thread(&lha_home, sess.conversation_id);
+        let foreign_path = new_proposed_plan_goal_path_for_thread(&lha_home, ThreadId::new());
+        let malformed_path =
+            proposed_plan_goal_directory_for_thread(&lha_home, sess.conversation_id)
+                .join("not-a-uuid.md");
+
+        for (path, text) in [
+            (&legacy_path, "legacy plan"),
+            (&foreign_path, "foreign plan"),
+            (&malformed_path, "malformed plan"),
+        ] {
+            tokio::fs::create_dir_all(path.parent().expect("plan path should have a parent"))
+                .await
+                .expect("plan directory should be created");
+            tokio::fs::write(path, text)
+                .await
+                .expect("plan should be written");
+        }
+
+        sess.discard_staged_proposed_plan_goal(proposed_plan_goal_objective(&legacy_path))
+            .await;
+        sess.discard_staged_proposed_plan_goal(proposed_plan_goal_objective(&foreign_path))
+            .await;
+        sess.discard_staged_proposed_plan_goal(proposed_plan_goal_objective(&malformed_path))
+            .await;
+
+        for (path, text) in [
+            (&legacy_path, "legacy plan"),
+            (&foreign_path, "foreign plan"),
+            (&malformed_path, "malformed plan"),
+        ] {
+            assert_eq!(
+                text,
+                tokio::fs::read_to_string(path)
+                    .await
+                    .expect("unsupported plan should remain readable")
+            );
+        }
+
+        let staged_path = sess
+            .persist_proposed_plan_goal("idempotent-discard", "# Plan\n- discard twice")
+            .await
+            .expect("staged plan should be written");
+        let staged_objective = proposed_plan_goal_objective(&staged_path);
+
+        sess.discard_staged_proposed_plan_goal(staged_objective.clone())
+            .await;
+        sess.discard_staged_proposed_plan_goal(staged_objective)
+            .await;
+
+        assert!(
+            !tokio::fs::try_exists(staged_path)
+                .await
+                .expect("staged plan existence check should succeed")
         );
     }
 

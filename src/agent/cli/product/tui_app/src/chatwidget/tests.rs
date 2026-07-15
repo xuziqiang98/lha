@@ -4478,6 +4478,141 @@ async fn goal_replace_confirmation_submits_expected_goal_id() {
         }
         other => panic!("expected replace-existing goal mode, got {other:?}"),
     }
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn keeping_goal_after_replacement_confirmation_discards_staged_plan() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.config.features.enable(Feature::Goals);
+    chat.current_identity.kind = IdentityKind::Programmer;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    chat.on_thread_goal_replace_confirmation_required(ThreadGoalReplaceConfirmationRequiredEvent {
+        thread_id,
+        existing_goal: ThreadGoal {
+            thread_id,
+            goal_id: "goal-123".to_string(),
+            objective: "old objective".to_string(),
+            status: ThreadGoalStatus::Active,
+            token_budget: Some(1_000),
+            tokens_used: 12,
+            time_used_seconds: 34,
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_100,
+        },
+        objective: "staged objective".to_string(),
+    });
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::CodexOp(Op::ThreadGoalDiscardStagedProposedPlan { objective }))
+            if objective == "staged objective"
+    );
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn esc_after_replacement_confirmation_discards_staged_plan() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.config.features.enable(Feature::Goals);
+    chat.current_identity.kind = IdentityKind::Programmer;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    chat.on_thread_goal_replace_confirmation_required(ThreadGoalReplaceConfirmationRequiredEvent {
+        thread_id,
+        existing_goal: ThreadGoal {
+            thread_id,
+            goal_id: "goal-123".to_string(),
+            objective: "old objective".to_string(),
+            status: ThreadGoalStatus::Active,
+            token_budget: Some(1_000),
+            tokens_used: 12,
+            time_used_seconds: 34,
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_100,
+        },
+        objective: "staged objective".to_string(),
+    });
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::CodexOp(Op::ThreadGoalDiscardStagedProposedPlan { objective }))
+            if objective == "staged objective"
+    );
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn ctrl_c_after_replacement_confirmation_discards_staged_plan() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.config.features.enable(Feature::Goals);
+    chat.current_identity.kind = IdentityKind::Programmer;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    chat.on_thread_goal_replace_confirmation_required(ThreadGoalReplaceConfirmationRequiredEvent {
+        thread_id,
+        existing_goal: ThreadGoal {
+            thread_id,
+            goal_id: "goal-123".to_string(),
+            objective: "old objective".to_string(),
+            status: ThreadGoalStatus::Active,
+            token_budget: Some(1_000),
+            tokens_used: 12,
+            time_used_seconds: 34,
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_100,
+        },
+        objective: "staged objective".to_string(),
+    });
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::CodexOp(Op::ThreadGoalDiscardStagedProposedPlan { objective }))
+            if objective == "staged objective"
+    );
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn programmatic_dismissal_after_replacement_confirmation_discards_staged_plan() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.config.features.enable(Feature::Goals);
+    chat.current_identity.kind = IdentityKind::Programmer;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    chat.on_thread_goal_replace_confirmation_required(ThreadGoalReplaceConfirmationRequiredEvent {
+        thread_id,
+        existing_goal: ThreadGoal {
+            thread_id,
+            goal_id: "goal-123".to_string(),
+            objective: "old objective".to_string(),
+            status: ThreadGoalStatus::Active,
+            token_budget: Some(1_000),
+            tokens_used: 12,
+            time_used_seconds: 34,
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_100,
+        },
+        objective: "staged objective".to_string(),
+    });
+    chat.dismiss_active_view();
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::CodexOp(Op::ThreadGoalDiscardStagedProposedPlan { objective }))
+            if objective == "staged objective"
+    );
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 #[tokio::test]

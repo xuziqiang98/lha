@@ -347,6 +347,9 @@ pub enum Op {
     /// Start a long-running goal from a planner-proposed plan.
     ThreadGoalStartFromProposedPlan { plan_text: String },
 
+    /// Discard an uncommitted versioned sidecar for a planner-proposed goal.
+    ThreadGoalDiscardStagedProposedPlan { objective: String },
+
     /// Clear a matching unfinished goal and start a planner-proposed plan.
     ///
     /// The supplied identity is applied without resuming the cleared goal.

@@ -789,6 +789,9 @@ impl BottomPane {
     }
 
     pub(crate) fn dismiss_active_view(&mut self) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.on_programmatic_dismiss();
+        }
         if self.view_stack.pop().is_some() {
             self.on_active_view_complete();
             self.request_redraw_with_risky_row_repair();

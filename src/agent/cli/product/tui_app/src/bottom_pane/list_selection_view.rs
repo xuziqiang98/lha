@@ -51,6 +51,7 @@ pub(crate) struct SelectionViewParams {
     pub footer_note: Option<Line<'static>>,
     pub footer_hint: Option<Line<'static>>,
     pub items: Vec<SelectionItem>,
+    pub on_cancel: Option<SelectionAction>,
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
     pub header: Box<dyn Renderable>,
@@ -66,6 +67,7 @@ impl Default for SelectionViewParams {
             footer_note: None,
             footer_hint: None,
             items: Vec::new(),
+            on_cancel: None,
             is_searchable: false,
             search_placeholder: None,
             header: Box::new(()),
@@ -79,6 +81,7 @@ pub(crate) struct ListSelectionView {
     footer_note: Option<Line<'static>>,
     footer_hint: Option<Line<'static>>,
     items: Vec<SelectionItem>,
+    on_cancel: Option<SelectionAction>,
     state: ScrollState,
     complete: bool,
     app_event_tx: AppEventSender,
@@ -108,6 +111,7 @@ impl ListSelectionView {
             footer_note: params.footer_note,
             footer_hint: params.footer_hint,
             items: params.items,
+            on_cancel: params.on_cancel,
             state: ScrollState::new(),
             complete: false,
             app_event_tx,
@@ -265,8 +269,15 @@ impl ListSelectionView {
                 self.complete = true;
             }
         } else if selected_item.is_none() {
-            self.complete = true;
+            self.cancel();
         }
+    }
+
+    fn cancel(&mut self) {
+        if let Some(on_cancel) = self.on_cancel.take() {
+            on_cancel(&self.app_event_tx);
+        }
+        self.complete = true;
     }
 
     #[cfg(test)]
@@ -424,8 +435,12 @@ impl BottomPaneView for ListSelectionView {
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
-        self.complete = true;
+        self.cancel();
         CancellationEvent::Handled
+    }
+
+    fn on_programmatic_dismiss(&mut self) {
+        self.cancel();
     }
 }
 
@@ -584,6 +599,7 @@ impl Renderable for ListSelectionView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::product::agent::protocol::Op;
     use crate::product::tui_app::app_event::AppEvent;
     use crate::product::tui_app::bottom_pane::popup_consts::standard_popup_hint_line;
     use insta::assert_snapshot;
@@ -646,6 +662,43 @@ mod tests {
             })
             .collect();
         lines.join("\n")
+    }
+
+    #[test]
+    fn cancellation_action_runs_once() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                on_cancel: Some(Box::new(|tx| {
+                    tx.send(AppEvent::CodexOp(Op::ThreadGoalGet));
+                })),
+                ..Default::default()
+            },
+            tx,
+        );
+
+        view.on_ctrl_c();
+        view.on_programmatic_dismiss();
+
+        match rx.try_recv() {
+            Ok(AppEvent::CodexOp(Op::ThreadGoalGet)) => {}
+            other => panic!("expected cancellation action, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+        assert!(view.is_complete());
+    }
+
+    #[test]
+    fn selection_without_cancellation_action_dismisses_without_emitting_an_event() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = ListSelectionView::new(SelectionViewParams::default(), tx);
+
+        view.on_ctrl_c();
+
+        assert!(view.is_complete());
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

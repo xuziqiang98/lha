@@ -1570,6 +1570,8 @@ impl ChatWidget {
         self.current_goal = Some(event.existing_goal);
         self.current_goal_state_known = true;
         let objective = event.objective;
+        let keep_objective = objective.clone();
+        let cancel_objective = objective.clone();
         let replace_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
             tx.send(AppEvent::CodexOp(Op::ThreadGoalSetObjective {
                 objective: objective.clone(),
@@ -1593,10 +1595,20 @@ impl ChatWidget {
                 SelectionItem {
                     name: "Keep current goal".to_string(),
                     description: Some("Cancel the replacement.".to_string()),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::CodexOp(Op::ThreadGoalDiscardStagedProposedPlan {
+                            objective: keep_objective.clone(),
+                        }));
+                    })],
                     dismiss_on_select: true,
                     ..Default::default()
                 },
             ],
+            on_cancel: Some(Box::new(move |tx| {
+                tx.send(AppEvent::CodexOp(Op::ThreadGoalDiscardStagedProposedPlan {
+                    objective: cancel_objective.clone(),
+                }));
+            })),
             allow_background_transcript_interaction: true,
             ..Default::default()
         });
