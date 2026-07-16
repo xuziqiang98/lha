@@ -121,8 +121,8 @@ pub struct RuntimeEndpoint {
     pub env_http_headers: Option<HashMap<String, String>>,
     /// Maximum number of times to retry a failed HTTP request to this provider.
     pub request_max_retries: Option<u64>,
-    /// Number of times to retry reconnecting a dropped streaming response
-    /// before failing.
+    /// Number of times to retry a recoverable response turn, including a
+    /// dropped streaming response or a non-streaming retryable failure.
     pub stream_max_retries: Option<u64>,
     /// Idle timeout (in milliseconds) to wait for activity on a streaming
     /// response before treating the connection as lost.

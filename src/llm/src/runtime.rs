@@ -52,7 +52,7 @@ trait PromptRuntime: PromptConversationCompactor + Send + Sync {
     fn capabilities(&self) -> RuntimeCapabilities;
     fn metadata(&self) -> RuntimeMetadata;
     fn estimated_input_tokens(&self, input: &Prompt) -> Option<i64>;
-    fn stream_retry_limit(&self) -> u64;
+    fn turn_retry_limit(&self) -> u64;
 }
 
 #[async_trait]
@@ -303,7 +303,7 @@ impl DefaultPromptRuntimeFactory {
             client,
             capabilities,
             metadata,
-            stream_retry_limit: endpoint.stream_max_retries(),
+            turn_retry_limit: endpoint.stream_max_retries(),
         })
     }
 
@@ -333,7 +333,7 @@ struct DefaultPromptRuntime {
     client: LlmClient,
     capabilities: RuntimeCapabilities,
     metadata: RuntimeMetadata,
-    stream_retry_limit: u64,
+    turn_retry_limit: u64,
 }
 
 #[async_trait]
@@ -363,8 +363,8 @@ impl PromptRuntime for DefaultPromptRuntime {
         self.client.estimated_input_tokens_for_prompt(input)
     }
 
-    fn stream_retry_limit(&self) -> u64 {
-        self.stream_retry_limit
+    fn turn_retry_limit(&self) -> u64 {
+        self.turn_retry_limit
     }
 }
 
@@ -412,7 +412,7 @@ impl SemanticRuntime for PromptRuntimeAdapter {
     fn new_session(&self) -> Box<dyn SemanticRuntimeSession> {
         Box::new(PromptRuntimeSessionAdapter {
             inner: Arc::new(AsyncMutex::new(self.inner.new_session())),
-            stream_retry_limit: self.inner.stream_retry_limit(),
+            turn_retry_limit: self.inner.turn_retry_limit(),
         })
     }
 
@@ -431,7 +431,7 @@ impl SemanticRuntime for PromptRuntimeAdapter {
 
 struct PromptRuntimeSessionAdapter {
     inner: Arc<AsyncMutex<Box<dyn PromptRuntimeSession>>>,
-    stream_retry_limit: u64,
+    turn_retry_limit: u64,
 }
 
 #[async_trait]
@@ -448,7 +448,7 @@ impl SemanticRuntimeSession for PromptRuntimeSessionAdapter {
     ) -> Result<TurnEventStream> {
         let prompt = input.to_prompt();
         let inner = Arc::clone(&self.inner);
-        let stream_retry_limit = self.stream_retry_limit;
+        let turn_retry_limit = self.turn_retry_limit;
         let (tx_event, rx_event) = mpsc::channel(1600);
 
         tokio::spawn(async move {
@@ -463,15 +463,15 @@ impl SemanticRuntimeSession for PromptRuntimeSessionAdapter {
                 let stream = match response_stream {
                     Ok(stream) => stream,
                     Err(err) => {
-                        if delivery == ResponseDelivery::Streaming
-                            && handle_stream_failure(
-                                &inner,
-                                &tx_event,
-                                stream_retry_limit,
-                                &mut retries,
-                                &err,
-                            )
-                            .await
+                        if handle_turn_failure(
+                            delivery,
+                            &inner,
+                            &tx_event,
+                            turn_retry_limit,
+                            &mut retries,
+                            &err,
+                        )
+                        .await
                         {
                             continue;
                         }
@@ -492,10 +492,11 @@ impl SemanticRuntimeSession for PromptRuntimeSessionAdapter {
                         }
                         Err(err) => {
                             if delivery == ResponseDelivery::Streaming
-                                && handle_stream_failure(
+                                && handle_turn_failure(
+                                    delivery,
                                     &inner,
                                     &tx_event,
-                                    stream_retry_limit,
+                                    turn_retry_limit,
                                     &mut retries,
                                     &err,
                                 )
@@ -515,10 +516,11 @@ impl SemanticRuntimeSession for PromptRuntimeSessionAdapter {
 
                 let err = Error::Stream("stream closed before response.completed".to_string());
                 if delivery == ResponseDelivery::Streaming
-                    && handle_stream_failure(
+                    && handle_turn_failure(
+                        delivery,
                         &inner,
                         &tx_event,
-                        stream_retry_limit,
+                        turn_retry_limit,
                         &mut retries,
                         &err,
                     )
@@ -535,30 +537,33 @@ impl SemanticRuntimeSession for PromptRuntimeSessionAdapter {
     }
 }
 
-async fn handle_stream_failure(
+async fn handle_turn_failure(
+    delivery: ResponseDelivery,
     inner: &Arc<AsyncMutex<Box<dyn PromptRuntimeSession>>>,
     tx_event: &mpsc::Sender<Result<TurnEvent>>,
-    stream_retry_limit: u64,
+    turn_retry_limit: u64,
     retries: &mut u64,
     err: &Error,
 ) -> bool {
-    if !is_retryable_stream_error(err) {
+    if !is_retryable_turn_error(delivery, err) {
         return false;
     }
 
-    if *retries >= stream_retry_limit {
-        let switched = {
-            let mut session = inner.lock().await;
-            session.try_switch_fallback_transport()
-        };
-        if switched {
-            *retries = 0;
-            let notice = TurnEvent::RuntimeNotice(RuntimeNotice {
-                kind: RuntimeNoticeKind::TransportFallback,
-                message: format!("Falling back from WebSockets to HTTPS transport. {err:#}"),
-            });
-            let _ = tx_event.send(Ok(notice)).await;
-            return true;
+    if *retries >= turn_retry_limit {
+        if delivery == ResponseDelivery::Streaming {
+            let switched = {
+                let mut session = inner.lock().await;
+                session.try_switch_fallback_transport()
+            };
+            if switched {
+                *retries = 0;
+                let notice = TurnEvent::RuntimeNotice(RuntimeNotice {
+                    kind: RuntimeNoticeKind::TransportFallback,
+                    message: format!("Falling back from WebSockets to HTTPS transport. {err:#}"),
+                });
+                let _ = tx_event.send(Ok(notice)).await;
+                return true;
+            }
         }
         return false;
     }
@@ -567,7 +572,7 @@ async fn handle_stream_failure(
     let delay = retry_delay(err, *retries);
     let notice = TurnEvent::RuntimeNotice(RuntimeNotice {
         kind: RuntimeNoticeKind::Reconnecting,
-        message: format!("Reconnecting... {retries}/{stream_retry_limit}"),
+        message: format!("Reconnecting... {retries}/{turn_retry_limit}"),
     });
     let _ = tx_event.send(Ok(notice)).await;
     tokio::time::sleep(delay).await;
@@ -589,11 +594,14 @@ fn backoff(retries: u64) -> Duration {
     Duration::from_millis(millis)
 }
 
-fn is_retryable_stream_error(err: &Error) -> bool {
-    matches!(
-        err,
-        Error::Retryable { .. } | Error::Stream(_) | Error::RequestTimeout
-    )
+fn is_retryable_turn_error(delivery: ResponseDelivery, err: &Error) -> bool {
+    match delivery {
+        ResponseDelivery::Streaming => matches!(
+            err,
+            Error::Retryable { .. } | Error::Stream(_) | Error::RequestTimeout
+        ),
+        ResponseDelivery::NonStreaming => matches!(err, Error::Retryable { .. }),
+    }
 }
 
 #[cfg(test)]
