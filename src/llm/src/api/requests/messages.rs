@@ -447,6 +447,61 @@ mod tests {
     }
 
     #[test]
+    fn keeps_tool_results_adjacent_after_assistant_text() {
+        let input = vec![
+            TranscriptItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "read the file".to_string(),
+                }],
+                end_turn: None,
+            },
+            TranscriptItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "I will read it.".to_string(),
+                }],
+                end_turn: None,
+            },
+            TranscriptItem::ToolCall {
+                id: None,
+                call_id: "toolu-1".to_string(),
+                tool_name: "read_file".to_string(),
+                payload: ToolCallPayload::JsonArguments {
+                    arguments: r#"{"path":"README.md"}"#.to_string(),
+                },
+            },
+            TranscriptItem::ToolResult {
+                call_id: "toolu-1".to_string(),
+                tool_name: "read_file".to_string(),
+                payload: ToolResultPayload::Structured {
+                    content: "contents".to_string(),
+                    content_items: None,
+                    success: Some(true),
+                },
+            },
+        ];
+
+        let request = MessagesRequestBuilder::new("claude", "be helpful", &input, &[])
+            .build(&provider())
+            .expect("request should build");
+        let messages = request.body["messages"].as_array().expect("messages");
+
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["content"][0]["type"], "text");
+        assert_eq!(messages[1]["content"][0]["text"], "I will read it.");
+        assert_eq!(messages[2]["role"], "assistant");
+        assert_eq!(messages[2]["content"][0]["type"], "tool_use");
+        assert_eq!(messages[2]["content"][0]["id"], "toolu-1");
+        assert_eq!(messages[3]["role"], "user");
+        assert_eq!(messages[3]["content"][0]["type"], "tool_result");
+        assert_eq!(messages[3]["content"][0]["tool_use_id"], "toolu-1");
+    }
+
+    #[test]
     fn folds_non_user_assistant_messages_into_system_prompt() {
         let input = vec![
             TranscriptItem::Message {

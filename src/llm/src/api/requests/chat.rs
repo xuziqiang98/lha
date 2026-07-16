@@ -136,6 +136,22 @@ impl<'a> ChatRequestBuilder<'a> {
                     }
 
                     if !attached && idx + 1 < input.len() {
+                        // Normalized completions retain text before tool calls, but provider
+                        // reasoning must remain attached to the tool-call assistant message.
+                        if idx + 2 < input.len()
+                            && matches!(
+                                &input[idx + 1],
+                                TranscriptItem::Message { role, .. } if role == "assistant"
+                            )
+                            && matches!(&input[idx + 2], TranscriptItem::ToolCall { .. })
+                        {
+                            reasoning_by_anchor_index
+                                .entry(idx + 2)
+                                .and_modify(|v| v.push_str(&text))
+                                .or_insert(text.clone());
+                            continue;
+                        }
+
                         match &input[idx + 1] {
                             TranscriptItem::ToolCall { .. } => {
                                 reasoning_by_anchor_index
@@ -510,6 +526,62 @@ mod tests {
         assert_eq!(messages[4]["tool_call_id"], "call-b");
         assert_eq!(messages[5]["role"], "tool");
         assert_eq!(messages[5]["tool_call_id"], "call-c");
+    }
+
+    #[test]
+    fn keeps_tool_results_adjacent_after_assistant_text_and_preserves_tool_reasoning() {
+        let prompt_input = vec![
+            text_message("user", "read the file"),
+            TranscriptItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                summary: vec![],
+                content: Some(vec![ReasoningContentItem::ReasoningText {
+                    text: "Need the file contents.".to_string(),
+                }]),
+                encrypted_content: None,
+            },
+            TranscriptItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "I will read it.".to_string(),
+                }],
+                end_turn: None,
+            },
+            TranscriptItem::ToolCall {
+                id: None,
+                call_id: "call-1".to_string(),
+                tool_name: "read_file".to_string(),
+                payload: ToolCallPayload::JsonArguments {
+                    arguments: r#"{"path":"README.md"}"#.to_string(),
+                },
+            },
+            TranscriptItem::ToolResult {
+                call_id: "call-1".to_string(),
+                tool_name: "read_file".to_string(),
+                payload: ToolResultPayload::Structured {
+                    content: "contents".to_string(),
+                    content_items: None,
+                    success: Some(true),
+                },
+            },
+        ];
+
+        let request = ChatRequestBuilder::new("gpt-test", "inst", &prompt_input, &[])
+            .build(&provider())
+            .expect("request");
+        let messages = request.body["messages"].as_array().expect("messages array");
+
+        assert_eq!(messages.len(), 5);
+        assert_eq!(messages[2]["role"], "assistant");
+        assert_eq!(messages[2]["content"], "I will read it.");
+        assert!(messages[2].get("reasoning").is_none());
+        assert_eq!(messages[3]["role"], "assistant");
+        assert_eq!(messages[3]["content"], serde_json::Value::Null);
+        assert_eq!(messages[3]["reasoning"], "Need the file contents.");
+        assert_eq!(messages[3]["tool_calls"][0]["id"], "call-1");
+        assert_eq!(messages[4]["role"], "tool");
+        assert_eq!(messages[4]["tool_call_id"], "call-1");
     }
 
     #[test]

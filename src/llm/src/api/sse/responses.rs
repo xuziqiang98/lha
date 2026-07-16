@@ -35,6 +35,8 @@ use tracing::debug;
 use tracing::trace;
 
 const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
+const RESPONSES_REFUSAL_MESSAGE: &str =
+    "responses request was refused by the provider safety policy";
 
 /// Streams SSE events from an on-disk fixture for tests.
 pub fn stream_from_fixture(
@@ -217,10 +219,8 @@ pub fn process_responses_event(
         }
         "response.output_item.done" => {
             if let Some(item_val) = event.item {
-                if let Some(item) = parse_response_item(item_val) {
-                    return Ok(Some(ResponseEvent::OutputItemDone(item)));
-                }
-                debug!("failed to parse TranscriptItem from output_item.done");
+                let item = parse_response_item(item_val).map_err(ResponsesEventError::Api)?;
+                return Ok(Some(ResponseEvent::OutputItemDone(item)));
             }
         }
         "response.output_text.delta" => {
@@ -304,10 +304,8 @@ pub fn process_responses_event(
         }
         "response.output_item.added" => {
             if let Some(item_val) = event.item {
-                if let Some(item) = parse_response_item(item_val) {
-                    return Ok(Some(ResponseEvent::OutputItemAdded(item)));
-                }
-                debug!("failed to parse TranscriptItem from output_item.added");
+                let item = parse_response_item(item_val).map_err(ResponsesEventError::Api)?;
+                return Ok(Some(ResponseEvent::OutputItemAdded(item)));
             }
         }
         "response.reasoning_summary_part.added" => {
@@ -349,8 +347,8 @@ pub(crate) fn parse_completed_response(value: Value) -> Result<CompletedResponse
         output: response
             .output
             .into_iter()
-            .filter_map(parse_response_item)
-            .collect(),
+            .map(parse_response_item)
+            .collect::<Result<Vec<_>, _>>()?,
         token_usage: response.usage.map(Into::into),
     })
 }
@@ -393,18 +391,39 @@ fn api_error_from_error_event(error: Error) -> ApiError {
     }
 }
 
-pub(crate) fn parse_response_item(item: Value) -> Option<TranscriptItem> {
-    let item_type = item.get("type")?.as_str()?;
-    match item_type {
-        "message" => serde_json::from_value::<MessageItem>(item)
-            .ok()
-            .map(TranscriptItem::from),
+pub(crate) fn parse_response_item(item: Value) -> Result<TranscriptItem, ApiError> {
+    let item_type = item
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::Stream("responses output item missing type".to_string()))?
+        .to_string();
+    match item_type.as_str() {
+        "message" => {
+            if let Some(error) = responses_refusal_error(&item) {
+                return Err(error);
+            }
+            serde_json::from_value::<MessageItem>(item)
+                .map(TranscriptItem::from)
+                .map_err(|err| {
+                    ApiError::Stream(format!(
+                        "failed to parse responses message output item: {err}"
+                    ))
+                })
+        }
         "reasoning" => serde_json::from_value::<ReasoningItem>(item)
-            .ok()
-            .map(TranscriptItem::from),
+            .map(TranscriptItem::from)
+            .map_err(|err| {
+                ApiError::Stream(format!(
+                    "failed to parse responses reasoning output item: {err}"
+                ))
+            }),
         "hosted_activity" => serde_json::from_value::<HostedActivityItem>(item)
-            .ok()
-            .map(TranscriptItem::from),
+            .map(TranscriptItem::from)
+            .map_err(|err| {
+                ApiError::Stream(format!(
+                    "failed to parse responses hosted activity output item: {err}"
+                ))
+            }),
         "web_search_call" => {
             let id = item
                 .get("id")
@@ -415,44 +434,38 @@ pub(crate) fn parse_response_item(item: Value) -> Option<TranscriptItem> {
                 .and_then(Value::as_str)
                 .map(ToString::to_string);
             let payload = item.get("action").cloned().unwrap_or(Value::Null);
-            Some(
-                HostedActivityItem {
-                    id,
-                    activity_type: "web_search".to_string(),
-                    status,
-                    payload,
-                }
-                .into(),
-            )
+            Ok(HostedActivityItem {
+                id,
+                activity_type: "web_search".to_string(),
+                status,
+                payload,
+            }
+            .into())
         }
-        "function_call" => Some(
-            ToolCallItem {
-                id: item
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string),
-                call_id: item.get("call_id")?.as_str()?.to_string(),
-                tool_name: item.get("name")?.as_str()?.to_string(),
-                payload: ToolCallPayload::JsonArguments {
-                    arguments: item.get("arguments")?.as_str()?.to_string(),
-                },
-            }
-            .into(),
-        ),
-        "custom_tool_call" => Some(
-            ToolCallItem {
-                id: item
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string),
-                call_id: item.get("call_id")?.as_str()?.to_string(),
-                tool_name: item.get("name")?.as_str()?.to_string(),
-                payload: ToolCallPayload::TextInput {
-                    input: item.get("input")?.as_str()?.to_string(),
-                },
-            }
-            .into(),
-        ),
+        "function_call" => Ok(ToolCallItem {
+            id: item
+                .get("id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
+            call_id: required_response_item_string(&item, "call_id", "function_call")?,
+            tool_name: required_response_item_string(&item, "name", "function_call")?,
+            payload: ToolCallPayload::JsonArguments {
+                arguments: required_response_item_string(&item, "arguments", "function_call")?,
+            },
+        }
+        .into()),
+        "custom_tool_call" => Ok(ToolCallItem {
+            id: item
+                .get("id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
+            call_id: required_response_item_string(&item, "call_id", "custom_tool_call")?,
+            tool_name: required_response_item_string(&item, "name", "custom_tool_call")?,
+            payload: ToolCallPayload::TextInput {
+                input: required_response_item_string(&item, "input", "custom_tool_call")?,
+            },
+        }
+        .into()),
         "local_shell_call" => {
             let id = item
                 .get("id")
@@ -464,66 +477,134 @@ pub(crate) fn parse_response_item(item: Value) -> Option<TranscriptItem> {
                 .map(ToString::to_string)
                 .or_else(|| id.clone())
                 .unwrap_or_default();
-            let action = item.get("action")?;
+            let action = item
+                .get("action")
+                .filter(|action| action.is_object())
+                .ok_or_else(|| {
+                    ApiError::Stream(
+                        "responses local_shell_call output item missing object action".to_string(),
+                    )
+                })?;
             let arguments = serde_json::json!({
                 "command": action.get("command").cloned().unwrap_or(Value::Array(Vec::new())),
                 "workdir": action.get("working_directory").cloned().unwrap_or(Value::Null),
                 "timeout_ms": action.get("timeout_ms").cloned().unwrap_or(Value::Null),
             })
             .to_string();
-            Some(
-                ToolCallItem {
-                    id,
-                    call_id,
-                    tool_name: "local_shell".to_string(),
-                    payload: ToolCallPayload::JsonArguments { arguments },
-                }
-                .into(),
-            )
-        }
-        "function_call_output" => Some(
-            ToolResultItem {
-                call_id: item.get("call_id")?.as_str()?.to_string(),
-                tool_name: String::new(),
-                payload: parse_structured_tool_result_payload(item.get("output")?)?,
+            Ok(ToolCallItem {
+                id,
+                call_id,
+                tool_name: "local_shell".to_string(),
+                payload: ToolCallPayload::JsonArguments { arguments },
             }
-            .into(),
-        ),
-        "custom_tool_call_output" => Some(
-            ToolResultItem {
-                call_id: item.get("call_id")?.as_str()?.to_string(),
-                tool_name: String::new(),
-                payload: ToolResultPayload::Text {
-                    output: item.get("output")?.as_str()?.to_string(),
+            .into())
+        }
+        "function_call_output" => Ok(ToolResultItem {
+            call_id: required_response_item_string(&item, "call_id", "function_call_output")?,
+            tool_name: String::new(),
+            payload: parse_structured_tool_result_payload(item.get("output").ok_or_else(
+                || {
+                    ApiError::Stream(
+                        "responses function_call_output output item missing output".to_string(),
+                    )
                 },
-            }
-            .into(),
-        ),
-        "tool_call" | "tool_result" | "unknown" => {
-            serde_json::from_value::<TranscriptItem>(item).ok()
+            )?)?,
         }
-        _ => Some(UnknownItem { raw: item }.into()),
+        .into()),
+        "custom_tool_call_output" => Ok(ToolResultItem {
+            call_id: required_response_item_string(&item, "call_id", "custom_tool_call_output")?,
+            tool_name: String::new(),
+            payload: ToolResultPayload::Text {
+                output: required_response_item_string(&item, "output", "custom_tool_call_output")?,
+            },
+        }
+        .into()),
+        "tool_call" | "tool_result" | "unknown" => serde_json::from_value::<TranscriptItem>(item)
+            .map_err(|err| {
+                ApiError::Stream(format!(
+                    "failed to parse responses {item_type} output item: {err}"
+                ))
+            }),
+        _ => Ok(UnknownItem { raw: item }.into()),
     }
 }
 
-fn parse_structured_tool_result_payload(output: &Value) -> Option<ToolResultPayload> {
+fn responses_refusal_error(item: &Value) -> Option<ApiError> {
+    let content = item.get("content")?.as_array()?;
+    let mut has_refusal = false;
+
+    for block in content {
+        if block.get("type").and_then(Value::as_str) != Some("refusal") {
+            continue;
+        }
+        has_refusal = true;
+        if let Some(message) = block
+            .get("refusal")
+            .and_then(Value::as_str)
+            .filter(|message| !message.trim().is_empty())
+        {
+            return Some(ApiError::InvalidRequest {
+                message: message.to_string(),
+            });
+        }
+    }
+
+    has_refusal.then(|| ApiError::InvalidRequest {
+        message: RESPONSES_REFUSAL_MESSAGE.to_string(),
+    })
+}
+
+fn required_response_item_string(
+    item: &Value,
+    field: &str,
+    item_type: &str,
+) -> Result<String, ApiError> {
+    item.get(field)
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .ok_or_else(|| {
+            ApiError::Stream(format!(
+                "responses {item_type} output item missing string {field}"
+            ))
+        })
+}
+
+fn parse_structured_tool_result_payload(output: &Value) -> Result<ToolResultPayload, ApiError> {
     match output {
-        Value::String(content) => Some(ToolResultPayload::Structured {
+        Value::String(content) => Ok(ToolResultPayload::Structured {
             content: content.clone(),
             content_items: None,
             success: None,
         }),
-        Value::Object(map) => Some(ToolResultPayload::Structured {
-            content: map.get("content")?.as_str()?.to_string(),
-            content_items: map
+        Value::Object(map) => {
+            let content = map
+                .get("content")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+                .ok_or_else(|| {
+                    ApiError::Stream(
+                        "responses function_call_output object missing string content".to_string(),
+                    )
+                })?;
+            let content_items = map
                 .get("content_items")
                 .cloned()
                 .map(serde_json::from_value)
                 .transpose()
-                .ok()?,
-            success: map.get("success").and_then(Value::as_bool),
-        }),
-        _ => None,
+                .map_err(|err| {
+                    ApiError::Stream(format!(
+                        "failed to parse responses function_call_output content_items: {err}"
+                    ))
+                })?;
+            Ok(ToolResultPayload::Structured {
+                content,
+                content_items,
+                success: map.get("success").and_then(Value::as_bool),
+            })
+        }
+        _ => Err(ApiError::Stream(
+            "responses function_call_output output must be a string or object".to_string(),
+        )),
     }
 }
 
@@ -534,7 +615,6 @@ pub async fn process_sse(
     telemetry: Option<Arc<dyn SseTelemetry>>,
 ) {
     let mut stream = stream.eventsource();
-    let mut response_error: Option<ApiError> = None;
 
     loop {
         let start = Instant::now();
@@ -550,10 +630,11 @@ pub async fn process_sse(
                 return;
             }
             Ok(None) => {
-                let error = response_error.unwrap_or(ApiError::Stream(
-                    "stream closed before response.completed".into(),
-                ));
-                let _ = tx_event.send(Err(error)).await;
+                let _ = tx_event
+                    .send(Err(ApiError::Stream(
+                        "stream closed before response.completed".into(),
+                    )))
+                    .await;
                 return;
             }
             Err(_) => {
@@ -586,7 +667,8 @@ pub async fn process_sse(
             }
             Ok(None) => {}
             Err(error) => {
-                response_error = Some(error.into_api_error());
+                let _ = tx_event.send(Err(error.into_api_error())).await;
+                return;
             }
         };
     }
@@ -1195,6 +1277,133 @@ mod tests {
         };
         let delay = try_parse_retry_after(&err);
         assert_eq!(delay, Some(Duration::from_secs(35)));
+    }
+
+    #[tokio::test]
+    async fn streaming_refusal_item_is_invalid_request() {
+        let refusal = json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "message",
+                "id": "msg-1",
+                "role": "assistant",
+                "content": [{
+                    "type": "refusal",
+                    "refusal": "I cannot help with that."
+                }]
+            }
+        })
+        .to_string();
+        let sse = format!("event: response.output_item.done\ndata: {refusal}\n\n");
+
+        let events = collect_events(&[sse.as_bytes()]).await;
+        assert_eq!(events.len(), 1);
+        assert_matches!(
+            &events[0],
+            Err(ApiError::InvalidRequest { message }) if message == "I cannot help with that."
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_refusal_added_item_is_invalid_request() {
+        let refusal = json!({
+            "type": "response.output_item.added",
+            "item": {
+                "type": "message",
+                "id": "msg-1",
+                "role": "assistant",
+                "content": [{
+                    "type": "refusal",
+                    "refusal": "I cannot help with that."
+                }]
+            }
+        })
+        .to_string();
+        let sse = format!("event: response.output_item.added\ndata: {refusal}\n\n");
+
+        let events = collect_events(&[sse.as_bytes()]).await;
+        assert_eq!(events.len(), 1);
+        assert_matches!(
+            &events[0],
+            Err(ApiError::InvalidRequest { message }) if message == "I cannot help with that."
+        );
+    }
+
+    #[test]
+    fn non_streaming_refusal_item_is_invalid_request() {
+        let err = parse_completed_response(json!({
+            "id": "resp-1",
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "id": "msg-1",
+                "role": "assistant",
+                "content": [{
+                    "type": "refusal",
+                    "refusal": "I cannot help with that."
+                }]
+            }]
+        }))
+        .expect_err("refusal response should fail");
+
+        assert_matches!(
+            err,
+            ApiError::InvalidRequest { message } if message == "I cannot help with that."
+        );
+    }
+
+    #[test]
+    fn non_streaming_refusal_without_text_uses_fallback_message() {
+        let err = parse_completed_response(json!({
+            "id": "resp-1",
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "id": "msg-1",
+                "role": "assistant",
+                "content": [{"type": "refusal"}]
+            }]
+        }))
+        .expect_err("refusal response should fail");
+
+        assert_matches!(
+            err,
+            ApiError::InvalidRequest { message } if message == RESPONSES_REFUSAL_MESSAGE
+        );
+    }
+
+    #[test]
+    fn non_streaming_malformed_message_item_is_error() {
+        let err = parse_completed_response(json!({
+            "id": "resp-1",
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "unsupported_content"}]
+            }]
+        }))
+        .expect_err("malformed message item should fail");
+
+        assert_matches!(
+            err,
+            ApiError::Stream(message)
+                if message.starts_with("failed to parse responses message output item:")
+        );
+    }
+
+    #[test]
+    fn unknown_response_item_is_preserved() {
+        let item = json!({
+            "type": "future_output_item",
+            "id": "future-1",
+            "payload": {"value": 1}
+        });
+
+        assert_eq!(
+            parse_response_item(item.clone()).expect("unknown item should be preserved"),
+            TranscriptItem::Unknown { raw: item }
+        );
     }
 
     #[test]

@@ -29,6 +29,8 @@ use tracing::debug;
 use tracing::trace;
 
 const FINISH_REASON_DRAIN_TIMEOUT_MS: u64 = 50;
+const CHAT_CONTENT_FILTER_MESSAGE: &str =
+    "chat completion was blocked by the provider content filter";
 
 pub(crate) fn spawn_chat_stream(
     stream_response: StreamResponse,
@@ -230,6 +232,11 @@ pub async fn process_chat_sse<S>(
 
         let mut saw_terminal_finish_reason = false;
         for choice in choices {
+            if let Some(error) = chat_refusal_error(choice) {
+                let _ = tx_event.send(Err(error)).await;
+                return;
+            }
+
             if let Some(delta) = choice.get("delta") {
                 if let Some(reasoning) = delta.get("reasoning") {
                     if let Some(text) = reasoning.as_str() {
@@ -371,6 +378,14 @@ pub async fn process_chat_sse<S>(
                         .await;
                 }
 
+                if let Some(assistant) = assistant_item.take() {
+                    emit_buffered_plan_events(&tx_event, &mut assistant_plan_parser, &assistant)
+                        .await;
+                    let _ = tx_event
+                        .send(Ok(ResponseEvent::OutputItemDone(assistant)))
+                        .await;
+                }
+
                 for index in tool_call_order.drain(..) {
                     let Some(state) = tool_calls.remove(&index) else {
                         continue;
@@ -397,14 +412,6 @@ pub async fn process_chat_sse<S>(
                 tool_call_index_by_id.clear();
                 last_tool_call_index = None;
 
-                if let Some(assistant) = assistant_item.take() {
-                    emit_buffered_plan_events(&tx_event, &mut assistant_plan_parser, &assistant)
-                        .await;
-                    let _ = tx_event
-                        .send(Ok(ResponseEvent::OutputItemDone(assistant)))
-                        .await;
-                }
-
                 saw_terminal_finish_reason = true;
             }
         }
@@ -429,17 +436,39 @@ pub async fn process_chat_sse<S>(
 #[derive(Debug, Deserialize)]
 struct ChatCompletionUsage {
     prompt_tokens: i64,
+    #[serde(default)]
+    prompt_tokens_details: Option<ChatCompletionPromptTokensDetails>,
     completion_tokens: i64,
+    #[serde(default)]
+    completion_tokens_details: Option<ChatCompletionTokensDetails>,
     total_tokens: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionPromptTokensDetails {
+    #[serde(default)]
+    cached_tokens: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionTokensDetails {
+    #[serde(default)]
+    reasoning_tokens: Option<i64>,
 }
 
 impl From<ChatCompletionUsage> for TokenUsage {
     fn from(value: ChatCompletionUsage) -> Self {
         Self {
             input_tokens: value.prompt_tokens,
-            cached_input_tokens: 0,
+            cached_input_tokens: value
+                .prompt_tokens_details
+                .and_then(|details| details.cached_tokens)
+                .unwrap_or(0),
             output_tokens: value.completion_tokens,
-            reasoning_output_tokens: 0,
+            reasoning_output_tokens: value
+                .completion_tokens_details
+                .and_then(|details| details.reasoning_tokens)
+                .unwrap_or(0),
             total_tokens: value.total_tokens,
         }
     }
@@ -460,6 +489,10 @@ pub(crate) fn parse_completed_response(value: Value) -> Result<CompletedResponse
 
     let mut output = Vec::new();
     for choice in choices {
+        if let Some(error) = chat_refusal_error(choice) {
+            return Err(error);
+        }
+
         if choice.get("finish_reason").and_then(Value::as_str) == Some("length") {
             return Err(ApiError::ContextWindowExceeded);
         }
@@ -477,8 +510,6 @@ pub(crate) fn parse_completed_response(value: Value) -> Result<CompletedResponse
             });
         }
 
-        output.extend(completed_tool_calls(message)?);
-
         if let Some(content) = message.get("content")
             && !content.is_null()
         {
@@ -489,6 +520,8 @@ pub(crate) fn parse_completed_response(value: Value) -> Result<CompletedResponse
                 end_turn: None,
             });
         }
+
+        output.extend(completed_tool_calls(message)?);
     }
 
     Ok(CompletedResponse {
@@ -499,6 +532,26 @@ pub(crate) fn parse_completed_response(value: Value) -> Result<CompletedResponse
             .to_string(),
         output,
         token_usage: parse_chat_token_usage(&value),
+    })
+}
+
+fn chat_refusal_error(choice: &Value) -> Option<ApiError> {
+    if let Some(refusal) = choice
+        .get("message")
+        .into_iter()
+        .chain(choice.get("delta"))
+        .filter_map(|message| message.get("refusal").and_then(Value::as_str))
+        .find(|refusal| !refusal.trim().is_empty())
+    {
+        return Some(ApiError::InvalidRequest {
+            message: refusal.to_string(),
+        });
+    }
+
+    (choice.get("finish_reason").and_then(Value::as_str) == Some("content_filter")).then(|| {
+        ApiError::InvalidRequest {
+            message: CHAT_CONTENT_FILTER_MESSAGE.to_string(),
+        }
     })
 }
 
@@ -718,6 +771,24 @@ mod tests {
         let reader = ReaderStream::new(std::io::Cursor::new(body.to_string()))
             .map_err(|err| crate::client::TransportError::Network(err.to_string()));
         collect_events_from_stream(reader, Duration::from_millis(1000)).await
+    }
+
+    async fn collect_event_results(body: &str) -> Vec<Result<ResponseEvent, ApiError>> {
+        let reader = ReaderStream::new(std::io::Cursor::new(body.to_string()))
+            .map_err(|err| crate::client::TransportError::Network(err.to_string()));
+        let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent, ApiError>>(16);
+        tokio::spawn(process_chat_sse(
+            reader,
+            tx,
+            Duration::from_millis(1000),
+            None,
+        ));
+
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event);
+        }
+        events
     }
 
     async fn collect_events_from_open_body(
@@ -1035,12 +1106,12 @@ mod tests {
                 ResponseEvent::OutputItemAdded(TranscriptItem::Message { .. }),
                 ResponseEvent::OutputTextDelta(delta),
                 ResponseEvent::OutputItemDone(TranscriptItem::Reasoning { .. }),
+                ResponseEvent::OutputItemDone(TranscriptItem::Message { .. }),
                 ResponseEvent::OutputItemDone(TranscriptItem::ToolCall {
                     call_id,
                     tool_name: name,
                     ..
                 }),
-                ResponseEvent::OutputItemDone(TranscriptItem::Message { .. }),
                 ResponseEvent::Completed { .. }
             ] if delta == "hi" && call_id == "call_a" && name == "do_a"
         );
@@ -1097,7 +1168,9 @@ mod tests {
             "choices": [],
             "usage": {
                 "prompt_tokens": 5,
+                "prompt_tokens_details": {"cached_tokens": 2},
                 "completion_tokens": 7,
+                "completion_tokens_details": {"reasoning_tokens": 3},
                 "total_tokens": 12
             }
         });
@@ -1126,9 +1199,9 @@ mod tests {
             token_usage,
             &TokenUsage {
                 input_tokens: 5,
-                cached_input_tokens: 0,
+                cached_input_tokens: 2,
                 output_tokens: 7,
-                reasoning_output_tokens: 0,
+                reasoning_output_tokens: 3,
                 total_tokens: 12,
             }
         );
@@ -1199,12 +1272,12 @@ mod tests {
                 ResponseEvent::OutputItemAdded(TranscriptItem::Message { .. }),
                 ResponseEvent::OutputTextDelta(delta),
                 ResponseEvent::OutputItemDone(TranscriptItem::Reasoning { .. }),
+                ResponseEvent::OutputItemDone(TranscriptItem::Message { .. }),
                 ResponseEvent::OutputItemDone(TranscriptItem::ToolCall {
                     call_id,
                     tool_name: name,
                     ..
                 }),
-                ResponseEvent::OutputItemDone(TranscriptItem::Message { .. }),
                 ResponseEvent::Completed { .. }
             ] if delta == "hi" && call_id == "call_a" && name == "do_a"
         );
@@ -1231,7 +1304,9 @@ mod tests {
             }],
             "usage": {
                 "prompt_tokens": 7,
+                "prompt_tokens_details": {"cached_tokens": 2},
                 "completion_tokens": 3,
+                "completion_tokens_details": {"reasoning_tokens": 1},
                 "total_tokens": 10
             }
         }))
@@ -1242,9 +1317,9 @@ mod tests {
             completion.token_usage,
             Some(TokenUsage {
                 input_tokens: 7,
-                cached_input_tokens: 0,
+                cached_input_tokens: 2,
                 output_tokens: 3,
-                reasoning_output_tokens: 0,
+                reasoning_output_tokens: 1,
                 total_tokens: 10,
             })
         );
@@ -1258,20 +1333,20 @@ mod tests {
         );
         assert_matches!(
             &completion.output[1],
+            TranscriptItem::Message { role, content, .. }
+                if role == "assistant"
+                    && content == &vec![ContentItem::OutputText {
+                        text: "I will read it.".to_string(),
+                    }]
+        );
+        assert_matches!(
+            &completion.output[2],
             TranscriptItem::ToolCall {
                 call_id,
                 tool_name,
                 payload: ToolCallPayload::JsonArguments { arguments },
                 ..
             } if call_id == "call-1" && tool_name == "read_file" && arguments == "{\"path\":\"README.md\"}"
-        );
-        assert_matches!(
-            &completion.output[2],
-            TranscriptItem::Message { role, content, .. }
-                if role == "assistant"
-                    && content == &vec![ContentItem::OutputText {
-                        text: "I will read it.".to_string(),
-                    }]
         );
     }
 
@@ -1287,5 +1362,72 @@ mod tests {
         .expect_err("length response should fail");
 
         assert!(matches!(err, ApiError::ContextWindowExceeded));
+    }
+
+    #[test]
+    fn non_streaming_chat_refusal_is_invalid_request() {
+        let err = parse_completed_response(json!({
+            "id": "chat-1",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "refusal": "I cannot help with that."
+                },
+                "finish_reason": "stop"
+            }]
+        }))
+        .expect_err("refusal response should fail");
+
+        assert_matches!(
+            err,
+            ApiError::InvalidRequest { message } if message == "I cannot help with that."
+        );
+    }
+
+    #[test]
+    fn non_streaming_chat_content_filter_is_invalid_request() {
+        let err = parse_completed_response(json!({
+            "id": "chat-1",
+            "choices": [{
+                "message": {"role": "assistant", "content": null},
+                "finish_reason": "content_filter"
+            }]
+        }))
+        .expect_err("content filter response should fail");
+
+        assert_matches!(
+            err,
+            ApiError::InvalidRequest { message } if message == CHAT_CONTENT_FILTER_MESSAGE
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_chat_refusal_is_invalid_request() {
+        let body = concat!(
+            "event: message\n",
+            "data: {\"choices\":[{\"delta\":{\"refusal\":\"I cannot help with that.\"}}]}\n\n"
+        );
+
+        let events = collect_event_results(body).await;
+        assert_matches!(
+            &events[..],
+            [Err(ApiError::InvalidRequest { message })]
+                if message == "I cannot help with that."
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_chat_content_filter_is_invalid_request() {
+        let body = concat!(
+            "event: message\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\n"
+        );
+
+        let events = collect_event_results(body).await;
+        assert_matches!(
+            &events[..],
+            [Err(ApiError::InvalidRequest { message })] if message == CHAT_CONTENT_FILTER_MESSAGE
+        );
     }
 }

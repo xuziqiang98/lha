@@ -98,22 +98,12 @@ impl UsageState {
 
 pub(crate) fn parse_completed_response(value: Value) -> Result<CompletedResponse, ApiError> {
     if value.get("type").and_then(Value::as_str) == Some("error") {
-        let error: ErrorPayload = serde_json::from_value(value).map_err(|err| {
+        let error: MessagesErrorEnvelope = serde_json::from_value(value).map_err(|err| {
             ApiError::Stream(format!(
                 "failed to parse non-streaming messages error: {err}"
             ))
         })?;
-        return Err(match error.kind.as_str() {
-            "invalid_request_error" => ApiError::InvalidRequest {
-                message: error.message,
-            },
-            "rate_limit_error" => ApiError::RateLimit(error.message),
-            "overloaded_error" => ApiError::Retryable {
-                message: error.message,
-                delay: None,
-            },
-            _ => ApiError::Stream(error.message),
-        });
+        return Err(messages_api_error(error.error));
     }
 
     let response_id = value
@@ -187,7 +177,7 @@ pub(crate) fn parse_completed_response(value: Value) -> Result<CompletedResponse
         }
     }
 
-    let mut output = tool_calls;
+    let mut output = Vec::new();
     if !message_content.is_empty() {
         output.push(TranscriptItem::Message {
             id: Some(if response_id.is_empty() {
@@ -200,6 +190,7 @@ pub(crate) fn parse_completed_response(value: Value) -> Result<CompletedResponse
             end_turn: None,
         });
     }
+    output.extend(tool_calls);
 
     Ok(CompletedResponse {
         response_id,
@@ -276,6 +267,25 @@ struct ErrorPayload {
     message: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct MessagesErrorEnvelope {
+    error: ErrorPayload,
+}
+
+fn messages_api_error(error: ErrorPayload) -> ApiError {
+    match error.kind.as_str() {
+        "invalid_request_error" => ApiError::InvalidRequest {
+            message: error.message,
+        },
+        "rate_limit_error" => ApiError::RateLimit(error.message),
+        "overloaded_error" => ApiError::Retryable {
+            message: error.message,
+            delay: None,
+        },
+        _ => ApiError::Stream(error.message),
+    }
+}
+
 fn parse_messages_event(event_name: &str, data: &str) -> Result<MessagesEvent, serde_json::Error> {
     let mut value = serde_json::from_str::<Value>(data)?;
     if let Some(object) = value.as_object_mut()
@@ -299,6 +309,7 @@ pub async fn process_messages_sse(
     let mut assistant_item: Option<TranscriptItem> = None;
     let mut assistant_item_id: Option<String> = None;
     let mut tool_uses: HashMap<usize, ToolUseState> = HashMap::new();
+    let mut completed_tool_calls = Vec::new();
     let mut usage_state = UsageState::default();
     let mut response_id = String::new();
     let mut stop_reason: Option<String> = None;
@@ -318,10 +329,9 @@ pub async fn process_messages_sse(
             }
             Ok(None) => {
                 let _ = tx_event
-                    .send(Ok(ResponseEvent::Completed {
-                        response_id,
-                        token_usage: usage_state.token_usage(),
-                    }))
+                    .send(Err(ApiError::Stream(
+                        "messages stream closed before message_stop".to_string(),
+                    )))
                     .await;
                 return;
             }
@@ -450,18 +460,14 @@ pub async fn process_messages_sse(
                     return;
                 }
 
-                let _ = tx_event
-                    .send(Ok(ResponseEvent::OutputItemDone(
-                        TranscriptItem::ToolCall {
-                            id: None,
-                            call_id,
-                            tool_name: name,
-                            payload: ToolCallPayload::JsonArguments {
-                                arguments: input_json,
-                            },
-                        },
-                    )))
-                    .await;
+                completed_tool_calls.push(TranscriptItem::ToolCall {
+                    id: None,
+                    call_id,
+                    tool_name: name,
+                    payload: ToolCallPayload::JsonArguments {
+                        arguments: input_json,
+                    },
+                });
             }
             "message_delta" => {
                 if let Some(delta) = event.delta
@@ -489,6 +495,11 @@ pub async fn process_messages_sse(
                         .await;
                     return;
                 }
+                for tool_call in completed_tool_calls {
+                    let _ = tx_event
+                        .send(Ok(ResponseEvent::OutputItemDone(tool_call)))
+                        .await;
+                }
                 let _ = tx_event
                     .send(Ok(ResponseEvent::Completed {
                         response_id,
@@ -506,18 +517,7 @@ pub async fn process_messages_sse(
                         .await;
                     return;
                 };
-                let api_error = match error.kind.as_str() {
-                    "invalid_request_error" => ApiError::InvalidRequest {
-                        message: error.message,
-                    },
-                    "rate_limit_error" => ApiError::RateLimit(error.message),
-                    "overloaded_error" => ApiError::Retryable {
-                        message: error.message,
-                        delay: None,
-                    },
-                    _ => ApiError::Stream(error.message),
-                };
-                let _ = tx_event.send(Err(api_error)).await;
+                let _ = tx_event.send(Err(messages_api_error(error))).await;
                 return;
             }
             "ping" => {}
@@ -611,6 +611,7 @@ fn next_assistant_item_id() -> String {
 mod tests {
     use super::*;
     use crate::types::TranscriptItem;
+    use assert_matches::assert_matches;
     use futures::TryStreamExt;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc;
@@ -621,6 +622,17 @@ mod tests {
         let stream = ReaderStream::new(reader)
             .map_err(|err| crate::client::TransportError::Network(err.to_string()));
         Box::pin(stream)
+    }
+
+    async fn collect_event_results(body: &str) -> Vec<Result<ResponseEvent, ApiError>> {
+        let (tx, mut rx) = mpsc::channel(16);
+        process_messages_sse(build_stream(body), tx, Duration::from_secs(1), None).await;
+
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event);
+        }
+        events
     }
 
     #[tokio::test]
@@ -656,13 +668,45 @@ mod tests {
         assert!(matches!(events[2], ResponseEvent::OutputTextDelta(_)));
         assert!(matches!(
             events[3],
-            ResponseEvent::OutputItemDone(TranscriptItem::ToolCall { .. })
+            ResponseEvent::OutputItemDone(TranscriptItem::Message { .. })
         ));
         assert!(matches!(
             events[4],
-            ResponseEvent::OutputItemDone(TranscriptItem::Message { .. })
+            ResponseEvent::OutputItemDone(TranscriptItem::ToolCall { .. })
         ));
         assert!(matches!(events[5], ResponseEvent::Completed { .. }));
+    }
+
+    #[tokio::test]
+    async fn eof_before_message_stop_is_stream_error() {
+        let body = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\"}}\n\n",
+            "event: content_block_start\n",
+            "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"read_file\"}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"src/main.rs\\\"}\"}}\n\n",
+            "event: content_block_stop\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":1}\n\n"
+        );
+
+        let events = collect_event_results(body).await;
+
+        assert_matches!(
+            &events[..],
+            [
+                Ok(ResponseEvent::Created),
+                Err(ApiError::Stream(message)),
+            ] if message == "messages stream closed before message_stop"
+        );
+        assert!(!events.iter().any(|event| {
+            matches!(
+                event,
+                Ok(ResponseEvent::OutputItemDone(
+                    TranscriptItem::ToolCall { .. }
+                )) | Ok(ResponseEvent::Completed { .. })
+            )
+        }));
     }
 
     #[tokio::test]
@@ -1029,21 +1073,21 @@ mod tests {
         assert_eq!(completion.output.len(), 2);
         assert!(matches!(
             &completion.output[0],
-            TranscriptItem::ToolCall {
-                call_id,
-                tool_name,
-                payload: ToolCallPayload::JsonArguments { arguments },
-                ..
-            } if call_id == "toolu-1" && tool_name == "read_file" && arguments == "{\"path\":\"README.md\"}"
-        ));
-        assert!(matches!(
-            &completion.output[1],
             TranscriptItem::Message { id: Some(id), role, content, .. }
                 if id == "msg-1"
                     && role == "assistant"
                     && content == &vec![ContentItem::OutputText {
                         text: "I will inspect it.".to_string(),
                     }]
+        ));
+        assert!(matches!(
+            &completion.output[1],
+            TranscriptItem::ToolCall {
+                call_id,
+                tool_name,
+                payload: ToolCallPayload::JsonArguments { arguments },
+                ..
+            } if call_id == "toolu-1" && tool_name == "read_file" && arguments == "{\"path\":\"README.md\"}"
         ));
     }
 
@@ -1079,6 +1123,57 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "stream error: messages tool_use input did not form a JSON object"
+        );
+    }
+
+    #[test]
+    fn non_streaming_messages_error_envelope_maps_invalid_request() {
+        let err = parse_completed_response(serde_json::json!({
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "bad request"
+            }
+        }))
+        .expect_err("invalid request envelope should fail");
+
+        assert_matches!(
+            err,
+            ApiError::InvalidRequest { message } if message == "bad request"
+        );
+    }
+
+    #[test]
+    fn non_streaming_messages_error_envelope_maps_rate_limit() {
+        let err = parse_completed_response(serde_json::json!({
+            "type": "error",
+            "error": {
+                "type": "rate_limit_error",
+                "message": "slow down"
+            }
+        }))
+        .expect_err("rate limit envelope should fail");
+
+        assert_matches!(err, ApiError::RateLimit(message) if message == "slow down");
+    }
+
+    #[test]
+    fn non_streaming_messages_error_envelope_maps_overloaded() {
+        let err = parse_completed_response(serde_json::json!({
+            "type": "error",
+            "error": {
+                "type": "overloaded_error",
+                "message": "try again"
+            }
+        }))
+        .expect_err("overloaded envelope should fail");
+
+        assert_matches!(
+            err,
+            ApiError::Retryable {
+                message,
+                delay: None
+            } if message == "try again"
         );
     }
 }
