@@ -1,12 +1,15 @@
 use crate::api::auth::AuthProvider;
+use crate::api::common::CompletedResponse;
 use crate::api::common::Prompt as ApiPrompt;
 use crate::api::common::ResponseStream;
+use crate::api::common::with_streaming;
 use crate::api::endpoint::streaming::StreamingClient;
 use crate::api::error::ApiError;
 use crate::api::provider::Provider;
 use crate::api::provider::WireApi;
 use crate::api::requests::MessagesRequest;
 use crate::api::requests::MessagesRequestBuilder;
+use crate::api::sse::messages::parse_completed_response;
 use crate::api::sse::spawn_messages_stream;
 use crate::api::telemetry::SseTelemetry;
 use crate::client::HttpTransport;
@@ -43,6 +46,13 @@ impl<T: HttpTransport, A: AuthProvider> MessagesClient<T, A> {
         self.stream(request.body, request.headers).await
     }
 
+    pub async fn complete_request(
+        &self,
+        request: MessagesRequest,
+    ) -> Result<CompletedResponse, ApiError> {
+        self.complete(request.body, request.headers).await
+    }
+
     pub async fn stream_prompt(
         &self,
         model: &str,
@@ -53,6 +63,18 @@ impl<T: HttpTransport, A: AuthProvider> MessagesClient<T, A> {
                 .parallel_tool_calls(prompt.parallel_tool_calls)
                 .build(self.streaming.provider())?;
         self.stream_request(request).await
+    }
+
+    pub async fn complete_prompt(
+        &self,
+        model: &str,
+        prompt: &ApiPrompt,
+    ) -> Result<CompletedResponse, ApiError> {
+        let request =
+            MessagesRequestBuilder::new(model, &prompt.instructions, &prompt.input, &prompt.tools)
+                .parallel_tool_calls(prompt.parallel_tool_calls)
+                .build(self.streaming.provider())?;
+        self.complete_request(request).await
     }
 
     async fn stream(
@@ -69,12 +91,40 @@ impl<T: HttpTransport, A: AuthProvider> MessagesClient<T, A> {
         self.streaming
             .stream(
                 "messages",
-                body,
+                with_streaming(body, true)?,
                 extra_headers,
                 RequestCompression::None,
                 spawn_messages_stream,
                 None,
             )
             .await
+    }
+
+    async fn complete(
+        &self,
+        body: serde_json::Value,
+        extra_headers: HeaderMap,
+    ) -> Result<CompletedResponse, ApiError> {
+        if self.streaming.provider().wire != WireApi::Messages {
+            return Err(ApiError::Stream(
+                "messages wire api requires MessagesClient".to_string(),
+            ));
+        }
+
+        let response = self
+            .streaming
+            .execute(
+                "messages",
+                with_streaming(body, false)?,
+                extra_headers,
+                RequestCompression::None,
+            )
+            .await?;
+        let body = serde_json::from_slice(&response.body).map_err(|err| {
+            ApiError::Stream(format!(
+                "failed to decode non-streaming messages response body: {err}"
+            ))
+        })?;
+        parse_completed_response(body)
     }
 }

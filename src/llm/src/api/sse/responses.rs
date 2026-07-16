@@ -1,3 +1,4 @@
+use crate::api::common::CompletedResponse;
 use crate::api::common::ResponseEvent;
 use crate::api::common::ResponseStream;
 use crate::api::error::ApiError;
@@ -18,6 +19,7 @@ use crate::types::UnknownItem;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use futures::TryStreamExt;
+use http::HeaderMap;
 use serde::Deserialize;
 use serde_json::Value;
 use std::io::BufRead;
@@ -61,37 +63,43 @@ pub fn spawn_response_stream(
     telemetry: Option<Arc<dyn SseTelemetry>>,
     turn_state: Option<Arc<OnceLock<String>>>,
 ) -> ResponseStream {
-    let models_etag = stream_response
-        .headers
-        .get("X-Models-Etag")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    let reasoning_included = stream_response
-        .headers
-        .get(X_REASONING_INCLUDED_HEADER)
-        .is_some();
-    if let Some(turn_state) = turn_state.as_ref()
-        && let Some(header_value) = stream_response
-            .headers
-            .get("x-codex-turn-state")
-            .and_then(|v| v.to_str().ok())
-    {
-        let _ = turn_state.set(header_value.to_string());
-    }
+    let header_events = response_header_events(&stream_response.headers, turn_state);
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
     tokio::spawn(async move {
-        if let Some(etag) = models_etag {
-            let _ = tx_event.send(Ok(ResponseEvent::ModelsEtag(etag))).await;
-        }
-        if reasoning_included {
-            let _ = tx_event
-                .send(Ok(ResponseEvent::ServerReasoningIncluded(true)))
-                .await;
+        for event in header_events {
+            if tx_event.send(Ok(event)).await.is_err() {
+                return;
+            }
         }
         process_sse(stream_response.bytes, tx_event, idle_timeout, telemetry).await;
     });
 
     ResponseStream { rx_event }
+}
+
+pub(crate) fn response_header_events(
+    headers: &HeaderMap,
+    turn_state: Option<Arc<OnceLock<String>>>,
+) -> Vec<ResponseEvent> {
+    if let Some(turn_state) = turn_state.as_ref()
+        && let Some(header_value) = headers
+            .get("x-codex-turn-state")
+            .and_then(|value| value.to_str().ok())
+    {
+        let _ = turn_state.set(header_value.to_string());
+    }
+
+    let mut events = Vec::new();
+    if let Some(etag) = headers
+        .get("X-Models-Etag")
+        .and_then(|value| value.to_str().ok())
+    {
+        events.push(ResponseEvent::ModelsEtag(etag.to_string()));
+    }
+    if headers.get(X_REASONING_INCLUDED_HEADER).is_some() {
+        events.push(ResponseEvent::ServerReasoningIncluded(true));
+    }
+    events
 }
 
 #[derive(Debug, Deserialize)]
@@ -109,6 +117,19 @@ struct ResponseCompleted {
     id: String,
     #[serde(default)]
     usage: Option<ResponseCompletedUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompletedResponsePayload {
+    id: String,
+    #[serde(default)]
+    output: Vec<Value>,
+    #[serde(default)]
+    usage: Option<ResponseCompletedUsage>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    error: Option<Error>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -230,28 +251,11 @@ pub fn process_responses_event(
         }
         "response.failed" => {
             if let Some(resp_val) = event.response {
-                let mut response_error = ApiError::Stream("response.failed event received".into());
-                if let Some(error) = resp_val.get("error")
-                    && let Ok(error) = serde_json::from_value::<Error>(error.clone())
-                {
-                    if is_context_window_error(&error) {
-                        response_error = ApiError::ContextWindowExceeded;
-                    } else if is_quota_exceeded_error(&error) {
-                        response_error = ApiError::QuotaExceeded;
-                    } else if is_usage_not_included(&error) {
-                        response_error = ApiError::UsageNotIncluded;
-                    } else if is_invalid_prompt_error(&error) {
-                        let message = error
-                            .message
-                            .unwrap_or_else(|| "Invalid request.".to_string());
-                        response_error = ApiError::InvalidRequest { message };
-                    } else {
-                        let delay = try_parse_retry_after(&error);
-                        let message = error.message.unwrap_or_default();
-                        response_error = ApiError::Retryable { message, delay };
-                    }
-                }
-                return Err(ResponsesEventError::Api(response_error));
+                let error = resp_val
+                    .get("error")
+                    .cloned()
+                    .and_then(|error| serde_json::from_value::<Error>(error).ok());
+                return Err(ResponsesEventError::Api(response_failure_error(error)));
             }
 
             return Err(ResponsesEventError::Api(ApiError::Stream(
@@ -321,6 +325,59 @@ pub fn process_responses_event(
     Ok(None)
 }
 
+pub(crate) fn parse_completed_response(value: Value) -> Result<CompletedResponse, ApiError> {
+    let response: CompletedResponsePayload = serde_json::from_value(value).map_err(|err| {
+        ApiError::Stream(format!(
+            "failed to parse non-streaming responses response: {err}"
+        ))
+    })?;
+
+    if response.status.as_deref() == Some("failed") {
+        return Err(response_failure_error(response.error));
+    }
+    if response.status.as_deref() == Some("incomplete") {
+        return Err(ApiError::Stream(
+            "responses response completed with incomplete status".to_string(),
+        ));
+    }
+    if let Some(error) = response.error {
+        return Err(response_failure_error(Some(error)));
+    }
+
+    Ok(CompletedResponse {
+        response_id: response.id,
+        output: response
+            .output
+            .into_iter()
+            .filter_map(parse_response_item)
+            .collect(),
+        token_usage: response.usage.map(Into::into),
+    })
+}
+
+fn response_failure_error(error: Option<Error>) -> ApiError {
+    let mut response_error = ApiError::Stream("response.failed event received".to_string());
+    if let Some(error) = error {
+        if is_context_window_error(&error) {
+            response_error = ApiError::ContextWindowExceeded;
+        } else if is_quota_exceeded_error(&error) {
+            response_error = ApiError::QuotaExceeded;
+        } else if is_usage_not_included(&error) {
+            response_error = ApiError::UsageNotIncluded;
+        } else if is_invalid_prompt_error(&error) {
+            let message = error
+                .message
+                .unwrap_or_else(|| "Invalid request.".to_string());
+            response_error = ApiError::InvalidRequest { message };
+        } else {
+            let delay = try_parse_retry_after(&error);
+            let message = error.message.unwrap_or_default();
+            response_error = ApiError::Retryable { message, delay };
+        }
+    }
+    response_error
+}
+
 fn api_error_from_error_event(error: Error) -> ApiError {
     let message = error
         .message
@@ -336,7 +393,7 @@ fn api_error_from_error_event(error: Error) -> ApiError {
     }
 }
 
-fn parse_response_item(item: Value) -> Option<TranscriptItem> {
+pub(crate) fn parse_response_item(item: Value) -> Option<TranscriptItem> {
     let item_type = item.get("type")?.as_str()?;
     match item_type {
         "message" => serde_json::from_value::<MessageItem>(item)
@@ -1138,5 +1195,87 @@ mod tests {
         };
         let delay = try_parse_retry_after(&err);
         assert_eq!(delay, Some(Duration::from_secs(35)));
+    }
+
+    #[test]
+    fn parses_non_streaming_response_output_and_usage() {
+        let completion = parse_completed_response(json!({
+            "id": "resp-1",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "reasoning",
+                    "id": "reasoning-1",
+                    "summary": [],
+                    "content": [{"type": "reasoning_text", "text": "Because"}]
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc-1",
+                    "call_id": "call-1",
+                    "name": "read_file",
+                    "arguments": "{\"path\":\"README.md\"}"
+                },
+                {
+                    "type": "message",
+                    "id": "msg-1",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Done"}]
+                }
+            ],
+            "usage": {
+                "input_tokens": 10,
+                "input_tokens_details": {"cached_tokens": 3},
+                "output_tokens": 4,
+                "output_tokens_details": {"reasoning_tokens": 2},
+                "total_tokens": 14
+            }
+        }))
+        .expect("completion should parse");
+
+        assert_eq!(completion.response_id, "resp-1");
+        assert_eq!(
+            completion.token_usage,
+            Some(TokenUsage {
+                input_tokens: 10,
+                cached_input_tokens: 3,
+                output_tokens: 4,
+                reasoning_output_tokens: 2,
+                total_tokens: 14,
+            })
+        );
+        assert_eq!(completion.output.len(), 3);
+        assert_matches!(
+            &completion.output[0],
+            TranscriptItem::Reasoning { id, .. } if id == "reasoning-1"
+        );
+        assert_matches!(
+            &completion.output[1],
+            TranscriptItem::ToolCall {
+                call_id,
+                tool_name,
+                payload: ToolCallPayload::JsonArguments { arguments },
+                ..
+            } if call_id == "call-1" && tool_name == "read_file" && arguments == "{\"path\":\"README.md\"}"
+        );
+        assert_matches!(
+            &completion.output[2],
+            TranscriptItem::Message { id: Some(id), role, .. } if id == "msg-1" && role == "assistant"
+        );
+    }
+
+    #[test]
+    fn non_streaming_failed_response_uses_existing_error_mapping() {
+        let err = parse_completed_response(json!({
+            "id": "resp-1",
+            "status": "failed",
+            "error": {
+                "code": "context_length_exceeded",
+                "message": "too long"
+            }
+        }))
+        .expect_err("failed response should return an error");
+
+        assert!(matches!(err, ApiError::ContextWindowExceeded));
     }
 }

@@ -26,6 +26,7 @@ use crate::api::WebsocketTelemetry;
 use crate::api::build_conversation_headers;
 use crate::api::common::Reasoning;
 use crate::api::common::ResponsesWsRequest;
+use crate::api::completion::completed_response_stream;
 use crate::api::create_text_param_for_request;
 use crate::api::error::ApiError;
 use crate::api::requests::responses::Compression;
@@ -49,6 +50,7 @@ use crate::Error;
 use crate::ModelInfo;
 use crate::ReasoningEffort;
 use crate::ReasoningSummary;
+use crate::ResponseDelivery;
 use crate::Result;
 use crate::TokenUsage;
 use crate::TranscriptItem;
@@ -232,6 +234,19 @@ impl LlmClient {
 
 impl LlmClientSession {
     pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
+        self.run_with_delivery(prompt, ResponseDelivery::Streaming)
+            .await
+    }
+
+    pub async fn run_with_delivery(
+        &mut self,
+        prompt: &Prompt,
+        delivery: ResponseDelivery,
+    ) -> Result<ResponseStream> {
+        if delivery == ResponseDelivery::NonStreaming {
+            return self.complete(prompt).await;
+        }
+
         if self.state.endpoint.uses_responses_api() {
             let realtime_streaming_enabled = self.responses_websocket_enabled()
                 && !self.streaming_preference.prefers_http_streaming();
@@ -262,6 +277,18 @@ impl LlmClientSession {
         }
 
         self.stream_messages_api(prompt).await
+    }
+
+    async fn complete(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
+        if self.state.endpoint.uses_responses_api() {
+            return self.complete_responses_api(prompt).await;
+        }
+
+        if self.state.endpoint.uses_chat_completions_api() {
+            return self.complete_chat_completions(prompt).await;
+        }
+
+        self.complete_messages_api(prompt).await
     }
 
     pub(crate) fn try_switch_fallback_transport(&mut self) -> bool {
@@ -574,6 +601,93 @@ impl LlmClientSession {
         }
     }
 
+    async fn complete_chat_completions(&self, prompt: &Prompt) -> Result<ResponseStream> {
+        if prompt.output_schema.is_some() {
+            return Err(Error::UnsupportedOperation(
+                "output_schema is not supported for Chat Completions API".to_string(),
+            ));
+        }
+
+        let instructions = prompt.base_instructions.text.clone();
+        let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
+        let api_prompt = build_api_prompt(prompt, instructions, tools_json);
+        let contains_developer_message = prompt_contains_developer_message(&prompt.input);
+        let session_id = self.state.session_id.clone();
+        let origin_tag = self.state.origin_tag.clone();
+        let api_provider = self.state.endpoint.to_api_provider()?;
+        let api_auth = auth_provider_from_endpoint(&self.state.endpoint)?;
+        let request_provider = api_provider.clone();
+        let request_telemetry = self.build_request_telemetry();
+        let client = ApiChatClient::new(
+            ReqwestTransport::new(self.state.http_client.clone()),
+            api_provider,
+            api_auth,
+        )
+        .with_telemetry(Some(request_telemetry), None);
+
+        let handling = self.developer_role_handling();
+        let request = build_chat_request(
+            &self.state.model_info.slug,
+            &api_prompt,
+            session_id.as_str(),
+            origin_tag.as_deref(),
+            handling,
+            &request_provider,
+        )?;
+        let estimated_input_tokens = estimate_chat_input_tokens_from_request_body(&request.body);
+
+        let (completion, estimated_input_tokens) = match client.complete_request(request).await {
+            Ok(completion) => {
+                if handling == DeveloperRoleHandling::Preserve && contains_developer_message {
+                    self.record_chat_role_supports_developer();
+                }
+                (completion, estimated_input_tokens)
+            }
+            Err(ApiError::Transport(TransportError::Http { status, .. }))
+                if status == StatusCode::UNAUTHORIZED =>
+            {
+                return Err(unauthorized_error(status));
+            }
+            Err(err)
+                if handling == DeveloperRoleHandling::Preserve
+                    && contains_developer_message
+                    && is_unsupported_developer_role_error(&err) =>
+            {
+                info!(
+                    provider = self.state.runtime_config.model_provider_id,
+                    "chat provider rejected developer role; retrying with system"
+                );
+                self.record_chat_role_requires_system();
+                let retry_request = build_chat_request(
+                    &self.state.model_info.slug,
+                    &api_prompt,
+                    session_id.as_str(),
+                    origin_tag.as_deref(),
+                    DeveloperRoleHandling::DowngradeToSystem,
+                    &request_provider,
+                )?;
+                let retry_estimated_input_tokens =
+                    estimate_chat_input_tokens_from_request_body(&retry_request.body);
+                match client.complete_request(retry_request).await {
+                    Ok(completion) => (completion, retry_estimated_input_tokens),
+                    Err(ApiError::Transport(TransportError::Http { status, .. }))
+                        if status == StatusCode::UNAUTHORIZED =>
+                    {
+                        return Err(unauthorized_error(status));
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+            }
+            Err(err) => return Err(err.into()),
+        };
+
+        Ok(map_chat_response_stream(
+            completed_response_stream(completion, Vec::new()),
+            self.state.telemetry.clone(),
+            estimated_input_tokens,
+        ))
+    }
+
     async fn stream_messages_api(&self, prompt: &Prompt) -> Result<ResponseStream> {
         if prompt.output_schema.is_some() {
             return Err(Error::UnsupportedOperation(
@@ -611,6 +725,46 @@ impl LlmClientSession {
         }
     }
 
+    async fn complete_messages_api(&self, prompt: &Prompt) -> Result<ResponseStream> {
+        if prompt.output_schema.is_some() {
+            return Err(Error::UnsupportedOperation(
+                "output_schema is not supported for Messages API".to_string(),
+            ));
+        }
+
+        let api_prompt = self.build_messages_request(prompt)?;
+        let api_provider = self.state.endpoint.to_api_provider()?;
+        let api_auth = auth_provider_from_endpoint(&self.state.endpoint)?;
+        let request = ApiMessagesRequestBuilder::new(
+            &self.state.model_info.slug,
+            &api_prompt.instructions,
+            &api_prompt.input,
+            &api_prompt.tools,
+        )
+        .parallel_tool_calls(api_prompt.parallel_tool_calls)
+        .max_tokens(ANTHROPIC_MESSAGES_MAX_TOKENS)
+        .build(&api_provider)?;
+        let client = ApiMessagesClient::new(
+            ReqwestTransport::new(self.state.http_client.clone()),
+            api_provider,
+            api_auth,
+        )
+        .with_telemetry(Some(self.build_request_telemetry()), None);
+
+        match client.complete_request(request).await {
+            Ok(completion) => Ok(map_response_stream(
+                completed_response_stream(completion, Vec::new()),
+                self.state.telemetry.clone(),
+            )),
+            Err(ApiError::Transport(TransportError::Http { status, .. }))
+                if status == StatusCode::UNAUTHORIZED =>
+            {
+                Err(unauthorized_error(status))
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
     async fn stream_responses_api(&self, prompt: &Prompt) -> Result<ResponseStream> {
         if let Some(path) = &self.state.runtime_config.sse_fixture_path {
             warn!(path, "Streaming from fixture");
@@ -644,6 +798,42 @@ impl LlmClientSession {
                 }
                 Err(err) => Err(err.into()),
             }
+        }
+    }
+
+    async fn complete_responses_api(&self, prompt: &Prompt) -> Result<ResponseStream> {
+        if self.state.runtime_config.sse_fixture_path.is_some() {
+            return Err(Error::UnsupportedOperation(
+                "non-streaming response delivery is incompatible with sse_fixture_path".to_string(),
+            ));
+        }
+
+        let api_prompt = self.build_responses_request(prompt)?;
+        let api_provider = self.state.endpoint.to_api_provider()?;
+        let api_auth = auth_provider_from_endpoint(&self.state.endpoint)?;
+        let compression = self.responses_request_compression();
+        let options = self.build_responses_options(prompt, compression);
+        let client = ApiResponsesClient::new(
+            ReqwestTransport::new(self.state.http_client.clone()),
+            api_provider,
+            api_auth,
+        )
+        .with_telemetry(Some(self.build_request_telemetry()), None);
+
+        match client
+            .complete_prompt_with_events(&self.state.model_info.slug, &api_prompt, options)
+            .await
+        {
+            Ok((completion, prefix_events)) => Ok(map_response_stream(
+                completed_response_stream(completion, prefix_events),
+                self.state.telemetry.clone(),
+            )),
+            Err(ApiError::Transport(TransportError::Http { status, .. }))
+                if status == StatusCode::UNAUTHORIZED =>
+            {
+                Err(unauthorized_error(status))
+            }
+            Err(err) => Err(err.into()),
         }
     }
 
@@ -684,6 +874,10 @@ impl LlmClientSession {
         let request_telemetry: Arc<dyn RequestTelemetry> = telemetry.clone();
         let sse_telemetry: Arc<dyn SseTelemetry> = telemetry;
         (request_telemetry, sse_telemetry)
+    }
+
+    fn build_request_telemetry(&self) -> Arc<dyn RequestTelemetry> {
+        (Arc::new(ApiTelemetry::new(self.state.telemetry.clone()))) as _
     }
 
     fn build_websocket_telemetry(&self) -> Arc<dyn WebsocketTelemetry> {

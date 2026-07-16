@@ -66,6 +66,31 @@ pub enum ResponseEvent {
     ModelsEtag(String),
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ResponseDelivery {
+    #[default]
+    Streaming,
+    NonStreaming,
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompletedResponse {
+    pub response_id: String,
+    pub output: Vec<TranscriptItem>,
+    pub token_usage: Option<TokenUsage>,
+}
+
+pub(crate) fn with_streaming(mut body: Value, streaming: bool) -> Result<Value, ApiError> {
+    let Some(object) = body.as_object_mut() else {
+        return Err(ApiError::InvalidRequest {
+            message: "model request body must be a JSON object".to_string(),
+        });
+    };
+    object.insert("stream".to_string(), Value::Bool(streaming));
+    Ok(body)
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct Reasoning {
     #[serde(skip_serializing_if = "Option::is_none")]

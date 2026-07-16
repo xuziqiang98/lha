@@ -17,6 +17,8 @@ mod tool_json;
 mod transport;
 pub mod types;
 
+pub use api::CompletedResponse;
+pub use api::ResponseDelivery;
 pub use catalog::CatalogRefreshStrategy;
 pub use catalog::fetch_remote_models;
 pub use env::LHA_API_KEY_ENV_VAR;

@@ -54,6 +54,7 @@ A minimal `Cargo.toml` can start with:
 ```toml
 [dependencies]
 anyhow = "1"
+futures = "0.3"
 lha-core = "1"
 lha-llm = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
@@ -90,6 +91,47 @@ The collect-text helpers return `RunCollectTextError`. Match
 `RunCollectTextError::TurnFailed(message)` when you need to distinguish an
 agent-level turn failure from lower-level session or runtime errors.
 
+## Choosing streaming or complete responses
+
+`lha-llm` defaults to streaming generation requests. The direct Responses,
+Chat Completions, and Messages clients retain their `stream_*` methods and also
+expose `complete_request` and `complete_prompt`. The complete methods send
+`"stream": false` and return a provider-neutral `CompletedResponse`:
+
+```rust
+let response = responses_client
+    .complete_prompt("gpt-5", &prompt, lha_llm::api::ResponsesOptions::default())
+    .await?;
+
+println!("response ID: {}", response.response_id);
+for item in response.output {
+    println!("{item:?}");
+}
+```
+
+For the semantic runtime, select delivery per turn without changing
+`RuntimeBuildSpec` or `TurnRequest`:
+
+```rust
+use futures::StreamExt;
+use lha_llm::{ResponseDelivery, SemanticRuntime};
+
+let mut runtime_session = runtime.new_session();
+let mut events = runtime_session
+    .run_turn_with_delivery(&turn_request, ResponseDelivery::NonStreaming)
+    .await?;
+
+while let Some(event) = events.next().await {
+    println!("{:?}", event?);
+}
+```
+
+This still returns `TurnEventStream` so it can feed the same event-processing
+code as streaming. In non-streaming mode, the runtime waits for the complete
+HTTP JSON response, then emits completed items and `TurnEvent::Completed`; it
+does not emit token, reasoning, or proposed-plan deltas. `run_turn()` remains
+the streaming default.
+
 ## Going deeper: sessions, tools, and event streams
 
 ### What you build
@@ -114,6 +156,7 @@ tool, start with:
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
+futures = "0.3"
 lha-core = "1"
 lha-llm = "1"
 reqwest = "0.12"

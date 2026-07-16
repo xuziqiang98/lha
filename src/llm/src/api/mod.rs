@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod common;
+pub(crate) mod completion;
 pub mod endpoint;
 pub mod error;
 mod proposed_plan_parser;
@@ -15,9 +16,11 @@ pub use crate::client::TransportError;
 
 pub use crate::api::auth::AuthProvider;
 pub use crate::api::common::CompactionInput;
+pub use crate::api::common::CompletedResponse;
 pub use crate::api::common::Prompt;
 pub use crate::api::common::ResponseAppendWsRequest;
 pub use crate::api::common::ResponseCreateWsRequest;
+pub use crate::api::common::ResponseDelivery;
 pub use crate::api::common::ResponseEvent;
 pub use crate::api::common::ResponseStream;
 pub use crate::api::common::ResponsesApiRequest;

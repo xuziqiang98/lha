@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 use crate::ModelInfo;
 use crate::ReasoningEffort;
 use crate::ReasoningSummary;
+use crate::ResponseDelivery;
 use crate::Result;
 use crate::TranscriptItem;
 use crate::Verbosity;
@@ -57,6 +58,20 @@ trait PromptRuntime: PromptConversationCompactor + Send + Sync {
 #[async_trait]
 trait PromptRuntimeSession: Send {
     async fn run_turn(&mut self, input: &Prompt) -> Result<ResponseStream>;
+
+    async fn run_turn_with_delivery(
+        &mut self,
+        input: &Prompt,
+        delivery: ResponseDelivery,
+    ) -> Result<ResponseStream> {
+        match delivery {
+            ResponseDelivery::Streaming => self.run_turn(input).await,
+            ResponseDelivery::NonStreaming => Err(Error::UnsupportedOperation(
+                "non-streaming response delivery is not supported by this runtime".to_string(),
+            )),
+        }
+    }
+
     fn try_switch_fallback_transport(&mut self) -> bool;
 }
 
@@ -79,6 +94,19 @@ pub trait SemanticRuntime: SemanticConversationCompactor + Send + Sync {
 #[async_trait]
 pub trait SemanticRuntimeSession: Send {
     async fn run_turn(&mut self, input: &TurnRequest) -> Result<TurnEventStream>;
+
+    async fn run_turn_with_delivery(
+        &mut self,
+        input: &TurnRequest,
+        delivery: ResponseDelivery,
+    ) -> Result<TurnEventStream> {
+        match delivery {
+            ResponseDelivery::Streaming => self.run_turn(input).await,
+            ResponseDelivery::NonStreaming => Err(Error::UnsupportedOperation(
+                "non-streaming response delivery is not supported by this runtime".to_string(),
+            )),
+        }
+    }
 }
 
 pub struct RuntimeBuildSpec {
@@ -350,6 +378,14 @@ impl PromptRuntimeSession for DefaultPromptRuntimeSession {
         self.inner.stream(input).await
     }
 
+    async fn run_turn_with_delivery(
+        &mut self,
+        input: &Prompt,
+        delivery: ResponseDelivery,
+    ) -> Result<ResponseStream> {
+        self.inner.run_with_delivery(input, delivery).await
+    }
+
     fn try_switch_fallback_transport(&mut self) -> bool {
         self.inner.try_switch_fallback_transport()
     }
@@ -401,6 +437,15 @@ struct PromptRuntimeSessionAdapter {
 #[async_trait]
 impl SemanticRuntimeSession for PromptRuntimeSessionAdapter {
     async fn run_turn(&mut self, input: &TurnRequest) -> Result<TurnEventStream> {
+        self.run_turn_with_delivery(input, ResponseDelivery::Streaming)
+            .await
+    }
+
+    async fn run_turn_with_delivery(
+        &mut self,
+        input: &TurnRequest,
+        delivery: ResponseDelivery,
+    ) -> Result<TurnEventStream> {
         let prompt = input.to_prompt();
         let inner = Arc::clone(&self.inner);
         let stream_retry_limit = self.stream_retry_limit;
@@ -412,20 +457,21 @@ impl SemanticRuntimeSession for PromptRuntimeSessionAdapter {
             loop {
                 let response_stream = {
                     let mut session = inner.lock().await;
-                    session.run_turn(&prompt).await
+                    session.run_turn_with_delivery(&prompt, delivery).await
                 };
 
                 let stream = match response_stream {
                     Ok(stream) => stream,
                     Err(err) => {
-                        if handle_stream_failure(
-                            &inner,
-                            &tx_event,
-                            stream_retry_limit,
-                            &mut retries,
-                            &err,
-                        )
-                        .await
+                        if delivery == ResponseDelivery::Streaming
+                            && handle_stream_failure(
+                                &inner,
+                                &tx_event,
+                                stream_retry_limit,
+                                &mut retries,
+                                &err,
+                            )
+                            .await
                         {
                             continue;
                         }
@@ -445,14 +491,15 @@ impl SemanticRuntimeSession for PromptRuntimeSessionAdapter {
                             }
                         }
                         Err(err) => {
-                            if handle_stream_failure(
-                                &inner,
-                                &tx_event,
-                                stream_retry_limit,
-                                &mut retries,
-                                &err,
-                            )
-                            .await
+                            if delivery == ResponseDelivery::Streaming
+                                && handle_stream_failure(
+                                    &inner,
+                                    &tx_event,
+                                    stream_retry_limit,
+                                    &mut retries,
+                                    &err,
+                                )
+                                .await
                             {
                                 break;
                             }
@@ -467,7 +514,14 @@ impl SemanticRuntimeSession for PromptRuntimeSessionAdapter {
                 }
 
                 let err = Error::Stream("stream closed before response.completed".to_string());
-                if handle_stream_failure(&inner, &tx_event, stream_retry_limit, &mut retries, &err)
+                if delivery == ResponseDelivery::Streaming
+                    && handle_stream_failure(
+                        &inner,
+                        &tx_event,
+                        stream_retry_limit,
+                        &mut retries,
+                        &err,
+                    )
                     .await
                 {
                     continue;
@@ -631,5 +685,30 @@ mod tests {
         );
         assert_eq!(spec.endpoint.env_key.as_deref(), Some(LHA_API_KEY_ENV_VAR));
         assert_eq!(spec.model_info, ModelInfo::minimal("test-model"));
+    }
+
+    struct StreamingOnlySession;
+
+    #[async_trait::async_trait]
+    impl SemanticRuntimeSession for StreamingOnlySession {
+        async fn run_turn(&mut self, _input: &TurnRequest) -> Result<TurnEventStream> {
+            panic!("streaming run_turn should not be called for a non-streaming request");
+        }
+    }
+
+    #[tokio::test]
+    async fn custom_runtime_defaults_non_streaming_delivery_to_unsupported() {
+        let mut session = StreamingOnlySession;
+        let result = session
+            .run_turn_with_delivery(&TurnRequest::default(), ResponseDelivery::NonStreaming)
+            .await;
+        let Err(err) = result else {
+            panic!("custom runtime should reject non-streaming delivery by default");
+        };
+
+        assert_eq!(
+            err.to_string(),
+            "unsupported operation: non-streaming response delivery is not supported by this runtime"
+        );
     }
 }

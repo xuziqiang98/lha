@@ -1,3 +1,4 @@
+use crate::api::common::CompletedResponse;
 use crate::api::common::ResponseEvent;
 use crate::api::common::ResponseStream;
 use crate::api::error::ApiError;
@@ -15,6 +16,7 @@ use eventsource_stream::Eventsource;
 use futures::Stream;
 use futures::StreamExt;
 use serde::Deserialize;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -447,6 +449,135 @@ fn parse_chat_token_usage(value: &serde_json::Value) -> Option<TokenUsage> {
     serde_json::from_value::<ChatCompletionUsage>(value.get("usage")?.clone())
         .ok()
         .map(Into::into)
+}
+
+pub(crate) fn parse_completed_response(value: Value) -> Result<CompletedResponse, ApiError> {
+    let Some(choices) = value.get("choices").and_then(Value::as_array) else {
+        return Err(ApiError::Stream(
+            "chat completion response missing choices".to_string(),
+        ));
+    };
+
+    let mut output = Vec::new();
+    for choice in choices {
+        if choice.get("finish_reason").and_then(Value::as_str) == Some("length") {
+            return Err(ApiError::ContextWindowExceeded);
+        }
+
+        let Some(message) = choice.get("message") else {
+            continue;
+        };
+
+        if let Some(text) = completed_reasoning_text(message) {
+            output.push(TranscriptItem::Reasoning {
+                id: String::new(),
+                summary: Vec::new(),
+                content: Some(vec![ReasoningContentItem::ReasoningText { text }]),
+                encrypted_content: None,
+            });
+        }
+
+        output.extend(completed_tool_calls(message)?);
+
+        if let Some(content) = message.get("content")
+            && !content.is_null()
+        {
+            output.push(TranscriptItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: completed_message_content(content),
+                end_turn: None,
+            });
+        }
+    }
+
+    Ok(CompletedResponse {
+        response_id: value
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        output,
+        token_usage: parse_chat_token_usage(&value),
+    })
+}
+
+fn completed_reasoning_text(message: &Value) -> Option<String> {
+    let reasoning = message.get("reasoning")?;
+    reasoning
+        .as_str()
+        .map(ToString::to_string)
+        .or_else(|| {
+            reasoning
+                .get("text")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
+        .or_else(|| {
+            reasoning
+                .get("content")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
+}
+
+fn completed_message_content(content: &Value) -> Vec<ContentItem> {
+    match content {
+        Value::String(text) => vec![ContentItem::OutputText { text: text.clone() }],
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| {
+                item.as_str()
+                    .or_else(|| item.get("text").and_then(Value::as_str))
+                    .map(|text| ContentItem::OutputText {
+                        text: text.to_string(),
+                    })
+            })
+            .collect(),
+        Value::Null => Vec::new(),
+        _ => Vec::new(),
+    }
+}
+
+fn completed_tool_calls(message: &Value) -> Result<Vec<TranscriptItem>, ApiError> {
+    let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+
+    tool_calls
+        .iter()
+        .enumerate()
+        .map(|(index, tool_call)| {
+            let function = tool_call.get("function").ok_or_else(|| {
+                ApiError::Stream("chat completion tool call missing function".to_string())
+            })?;
+            let name = function
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| {
+                    ApiError::Stream("chat completion tool call missing function name".to_string())
+                })?
+                .to_string();
+            let arguments = function
+                .get("arguments")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let call_id = tool_call
+                .get("id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+                .unwrap_or_else(|| format!("tool-call-{index}"));
+
+            Ok(TranscriptItem::ToolCall {
+                id: None,
+                call_id,
+                tool_name: name,
+                payload: ToolCallPayload::JsonArguments { arguments },
+            })
+        })
+        .collect()
 }
 
 async fn append_assistant_text(
@@ -1077,5 +1208,84 @@ mod tests {
                 ResponseEvent::Completed { .. }
             ] if delta == "hi" && call_id == "call_a" && name == "do_a"
         );
+    }
+
+    #[test]
+    fn parses_non_streaming_chat_response_with_reasoning_and_tool_call() {
+        let completion = parse_completed_response(json!({
+            "id": "chat-1",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "reasoning": "Need a file.",
+                    "content": [{"text": "I will read it."}],
+                    "tool_calls": [{
+                        "id": "call-1",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": "{\"path\":\"README.md\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {
+                "prompt_tokens": 7,
+                "completion_tokens": 3,
+                "total_tokens": 10
+            }
+        }))
+        .expect("completion should parse");
+
+        assert_eq!(completion.response_id, "chat-1");
+        assert_eq!(
+            completion.token_usage,
+            Some(TokenUsage {
+                input_tokens: 7,
+                cached_input_tokens: 0,
+                output_tokens: 3,
+                reasoning_output_tokens: 0,
+                total_tokens: 10,
+            })
+        );
+        assert_eq!(completion.output.len(), 3);
+        assert_matches!(
+            &completion.output[0],
+            TranscriptItem::Reasoning { content: Some(content), .. }
+                if content == &vec![ReasoningContentItem::ReasoningText {
+                    text: "Need a file.".to_string(),
+                }]
+        );
+        assert_matches!(
+            &completion.output[1],
+            TranscriptItem::ToolCall {
+                call_id,
+                tool_name,
+                payload: ToolCallPayload::JsonArguments { arguments },
+                ..
+            } if call_id == "call-1" && tool_name == "read_file" && arguments == "{\"path\":\"README.md\"}"
+        );
+        assert_matches!(
+            &completion.output[2],
+            TranscriptItem::Message { role, content, .. }
+                if role == "assistant"
+                    && content == &vec![ContentItem::OutputText {
+                        text: "I will read it.".to_string(),
+                    }]
+        );
+    }
+
+    #[test]
+    fn non_streaming_chat_length_response_is_context_window_error() {
+        let err = parse_completed_response(json!({
+            "id": "chat-1",
+            "choices": [{
+                "message": {"role": "assistant", "content": "partial"},
+                "finish_reason": "length"
+            }]
+        }))
+        .expect_err("length response should fail");
+
+        assert!(matches!(err, ApiError::ContextWindowExceeded));
     }
 }

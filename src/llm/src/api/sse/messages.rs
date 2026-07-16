@@ -1,3 +1,4 @@
+use crate::api::common::CompletedResponse;
 use crate::api::common::ResponseEvent;
 use crate::api::common::ResponseStream;
 use crate::api::error::ApiError;
@@ -93,6 +94,118 @@ impl UsageState {
             total_tokens,
         })
     }
+}
+
+pub(crate) fn parse_completed_response(value: Value) -> Result<CompletedResponse, ApiError> {
+    if value.get("type").and_then(Value::as_str) == Some("error") {
+        let error: ErrorPayload = serde_json::from_value(value).map_err(|err| {
+            ApiError::Stream(format!(
+                "failed to parse non-streaming messages error: {err}"
+            ))
+        })?;
+        return Err(match error.kind.as_str() {
+            "invalid_request_error" => ApiError::InvalidRequest {
+                message: error.message,
+            },
+            "rate_limit_error" => ApiError::RateLimit(error.message),
+            "overloaded_error" => ApiError::Retryable {
+                message: error.message,
+                delay: None,
+            },
+            _ => ApiError::Stream(error.message),
+        });
+    }
+
+    let response_id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let mut usage_state = UsageState::default();
+    if let Some(usage) = value.get("usage") {
+        let usage = serde_json::from_value::<UsagePayload>(usage.clone()).map_err(|err| {
+            ApiError::Stream(format!(
+                "failed to parse non-streaming messages usage: {err}"
+            ))
+        })?;
+        usage_state.apply(usage);
+    }
+
+    if value.get("stop_reason").and_then(Value::as_str) == Some("max_tokens") {
+        return Err(ApiError::Stream(
+            "messages response reached max_tokens limit".to_string(),
+        ));
+    }
+
+    let content_blocks = value
+        .get("content")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ApiError::Stream("messages response missing content".to_string()))?;
+    let mut tool_calls = Vec::new();
+    let mut message_content = Vec::new();
+
+    for block in content_blocks {
+        match block.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                if let Some(text) = block.get("text").and_then(Value::as_str) {
+                    message_content.push(ContentItem::OutputText {
+                        text: text.to_string(),
+                    });
+                }
+            }
+            Some("tool_use") => {
+                let name = block
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .filter(|name| !name.is_empty())
+                    .ok_or_else(|| ApiError::Stream("messages tool_use missing name".to_string()))?
+                    .to_string();
+                let call_id = block
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| ApiError::Stream("messages tool_use missing id".to_string()))?
+                    .to_string();
+                let input = block
+                    .get("input")
+                    .filter(|input| input.is_object())
+                    .ok_or_else(|| {
+                        ApiError::Stream(
+                            "messages tool_use input did not form a JSON object".to_string(),
+                        )
+                    })?;
+                tool_calls.push(TranscriptItem::ToolCall {
+                    id: None,
+                    call_id,
+                    tool_name: name,
+                    payload: ToolCallPayload::JsonArguments {
+                        arguments: input.to_string(),
+                    },
+                });
+            }
+            _ => {}
+        }
+    }
+
+    let mut output = tool_calls;
+    if !message_content.is_empty() {
+        output.push(TranscriptItem::Message {
+            id: Some(if response_id.is_empty() {
+                next_assistant_item_id()
+            } else {
+                response_id.clone()
+            }),
+            role: "assistant".to_string(),
+            content: message_content,
+            end_turn: None,
+        });
+    }
+
+    Ok(CompletedResponse {
+        response_id,
+        output,
+        token_usage: usage_state.token_usage(),
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -874,5 +987,98 @@ mod tests {
                 ResponseEvent::ProposedPlanDone(text) if text == "- Step 1\n"
             )
         }));
+    }
+
+    #[test]
+    fn parses_non_streaming_messages_response_with_cache_usage_and_tool_call() {
+        let completion = parse_completed_response(serde_json::json!({
+            "id": "msg-1",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "I will inspect it."
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu-1",
+                    "name": "read_file",
+                    "input": {"path": "README.md"}
+                }
+            ],
+            "stop_reason": "tool_use",
+            "usage": {
+                "input_tokens": 10,
+                "cache_creation_input_tokens": 2,
+                "cache_read_input_tokens": 3,
+                "output_tokens": 4
+            }
+        }))
+        .expect("completion should parse");
+
+        assert_eq!(completion.response_id, "msg-1");
+        assert_eq!(
+            completion.token_usage,
+            Some(TokenUsage {
+                input_tokens: 15,
+                cached_input_tokens: 3,
+                output_tokens: 4,
+                reasoning_output_tokens: 0,
+                total_tokens: 19,
+            })
+        );
+        assert_eq!(completion.output.len(), 2);
+        assert!(matches!(
+            &completion.output[0],
+            TranscriptItem::ToolCall {
+                call_id,
+                tool_name,
+                payload: ToolCallPayload::JsonArguments { arguments },
+                ..
+            } if call_id == "toolu-1" && tool_name == "read_file" && arguments == "{\"path\":\"README.md\"}"
+        ));
+        assert!(matches!(
+            &completion.output[1],
+            TranscriptItem::Message { id: Some(id), role, content, .. }
+                if id == "msg-1"
+                    && role == "assistant"
+                    && content == &vec![ContentItem::OutputText {
+                        text: "I will inspect it.".to_string(),
+                    }]
+        ));
+    }
+
+    #[test]
+    fn non_streaming_messages_max_tokens_is_error() {
+        let err = parse_completed_response(serde_json::json!({
+            "id": "msg-1",
+            "content": [{"type": "text", "text": "partial"}],
+            "stop_reason": "max_tokens"
+        }))
+        .expect_err("max_tokens response should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "stream error: messages response reached max_tokens limit"
+        );
+    }
+
+    #[test]
+    fn non_streaming_messages_rejects_non_object_tool_input() {
+        let err = parse_completed_response(serde_json::json!({
+            "id": "msg-1",
+            "content": [{
+                "type": "tool_use",
+                "id": "toolu-1",
+                "name": "read_file",
+                "input": "README.md"
+            }],
+            "stop_reason": "tool_use"
+        }))
+        .expect_err("non-object tool input should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "stream error: messages tool_use input did not form a JSON object"
+        );
     }
 }

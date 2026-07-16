@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -37,12 +38,21 @@ fn assert_path_ends_with(requests: &[Request], suffix: &str) {
 #[derive(Debug, Default, Clone)]
 struct RecordingState {
     stream_requests: Arc<Mutex<Vec<Request>>>,
+    execute_requests: Arc<Mutex<Vec<Request>>>,
 }
 
 impl RecordingState {
-    fn record(&self, req: Request) {
+    fn record_stream(&self, req: Request) {
         let mut guard = self
             .stream_requests
+            .lock()
+            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"));
+        guard.push(req);
+    }
+
+    fn record_execute(&self, req: Request) {
+        let mut guard = self
+            .execute_requests
             .lock()
             .unwrap_or_else(|err| panic!("mutex poisoned: {err}"));
         guard.push(req);
@@ -55,27 +65,62 @@ impl RecordingState {
             .unwrap_or_else(|err| panic!("mutex poisoned: {err}"));
         std::mem::take(&mut *guard)
     }
+
+    fn take_execute_requests(&self) -> Vec<Request> {
+        let mut guard = self
+            .execute_requests
+            .lock()
+            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"));
+        std::mem::take(&mut *guard)
+    }
 }
 
 #[derive(Clone)]
 struct RecordingTransport {
     state: RecordingState,
+    execute_response: Response,
 }
 
 impl RecordingTransport {
     fn new(state: RecordingState) -> Self {
-        Self { state }
+        Self::with_execute_body(
+            state,
+            serde_json::json!({
+                "id": "resp-1",
+                "output": [],
+            }),
+        )
+    }
+
+    fn with_execute_body(state: RecordingState, body: Value) -> Self {
+        Self::with_execute_body_and_headers(state, body, HeaderMap::new())
+    }
+
+    fn with_execute_body_and_headers(
+        state: RecordingState,
+        body: Value,
+        headers: HeaderMap,
+    ) -> Self {
+        Self {
+            state,
+            execute_response: Response {
+                status: StatusCode::OK,
+                headers,
+                body: Bytes::from(body.to_string()),
+            },
+        }
     }
 }
 
 #[async_trait]
 impl HttpTransport for RecordingTransport {
-    async fn execute(&self, _req: Request) -> Result<Response, TransportError> {
-        Err(TransportError::Build("execute should not run".to_string()))
+    async fn execute(&self, req: Request) -> Result<Response, TransportError> {
+        self.state.record_execute(req);
+        Ok(self.execute_response.clone())
     }
 
     async fn stream(&self, req: Request) -> Result<StreamResponse, TransportError> {
-        self.state.record(req);
+        self.state.record_stream(req);
 
         let stream = futures::stream::iter(Vec::<Result<Bytes, TransportError>>::new());
         Ok(StreamResponse {
@@ -187,6 +232,57 @@ data: {"id":"resp-1","output":[{"type":"message","role":"assistant","content":[{
             headers: HeaderMap::new(),
             bytes: Box::pin(stream),
         })
+    }
+}
+
+#[derive(Clone)]
+struct FlakyExecuteTransport {
+    state: Arc<Mutex<i64>>,
+}
+
+impl FlakyExecuteTransport {
+    fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    fn attempts(&self) -> i64 {
+        *self
+            .state
+            .lock()
+            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"))
+    }
+}
+
+#[async_trait]
+impl HttpTransport for FlakyExecuteTransport {
+    async fn execute(&self, _req: Request) -> Result<Response, TransportError> {
+        let mut attempts = self
+            .state
+            .lock()
+            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"));
+        *attempts += 1;
+
+        if *attempts == 1 {
+            return Err(TransportError::Network("first attempt fails".to_string()));
+        }
+
+        Ok(Response {
+            status: StatusCode::OK,
+            headers: HeaderMap::new(),
+            body: Bytes::from(
+                serde_json::json!({
+                    "id": "resp-1",
+                    "output": []
+                })
+                .to_string(),
+            ),
+        })
+    }
+
+    async fn stream(&self, _req: Request) -> Result<StreamResponse, TransportError> {
+        Err(TransportError::Build("stream should not run".to_string()))
     }
 }
 
@@ -325,6 +421,154 @@ async fn streaming_client_adds_auth_headers() -> Result<()> {
         accept_header.unwrap().to_str().ok(),
         Some("text/event-stream")
     );
+    assert_eq!(
+        req.body
+            .as_ref()
+            .and_then(|body| body.get("stream"))
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn non_streaming_responses_client_uses_execute_and_forces_stream_false() -> Result<()> {
+    let state = RecordingState::default();
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(
+        "x-codex-turn-state",
+        http::HeaderValue::from_static("next-turn-state"),
+    );
+    let transport = RecordingTransport::with_execute_body_and_headers(
+        state.clone(),
+        serde_json::json!({
+            "id": "resp-1",
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hi"}]
+            }]
+        }),
+        response_headers,
+    );
+    let client = ResponsesClient::new(
+        transport,
+        provider("openai", WireApi::Responses),
+        StaticAuth::new("secret-token"),
+    );
+
+    let turn_state = Arc::new(OnceLock::new());
+    let response = client
+        .complete_request(
+            lha_llm::api::ResponsesRequest {
+                body: serde_json::json!({ "model": "gpt-test", "stream": true }),
+                headers: HeaderMap::new(),
+                compression: Compression::Zstd,
+            },
+            Some(Arc::clone(&turn_state)),
+        )
+        .await?;
+
+    assert_eq!(response.response_id, "resp-1");
+    assert_eq!(
+        turn_state.get().map(String::as_str),
+        Some("next-turn-state")
+    );
+    assert!(state.take_stream_requests().is_empty());
+    let requests = state.take_execute_requests();
+    assert_path_ends_with(&requests, "/responses");
+    let request = &requests[0];
+    assert_eq!(
+        request
+            .body
+            .as_ref()
+            .and_then(|body| body.get("stream"))
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        request.compression,
+        lha_llm::client::RequestCompression::Zstd
+    );
+    assert!(request.headers.get(http::header::ACCEPT).is_none());
+    assert_eq!(
+        request
+            .headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|header| header.to_str().ok()),
+        Some("Bearer secret-token")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn non_streaming_chat_client_uses_execute_and_forces_stream_false() -> Result<()> {
+    let state = RecordingState::default();
+    let transport = RecordingTransport::with_execute_body(
+        state.clone(),
+        serde_json::json!({
+            "id": "chat-1",
+            "choices": [{
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop"
+            }]
+        }),
+    );
+    let client = ChatClient::new(transport, provider("openai", WireApi::Chat), NoAuth);
+
+    let response = client
+        .complete_request(lha_llm::api::ChatRequest {
+            body: serde_json::json!({ "model": "gpt-test", "stream": true }),
+            headers: HeaderMap::new(),
+        })
+        .await?;
+
+    assert_eq!(response.response_id, "chat-1");
+    let requests = state.take_execute_requests();
+    assert_path_ends_with(&requests, "/chat/completions");
+    assert_eq!(
+        requests[0]
+            .body
+            .as_ref()
+            .and_then(|body| body.get("stream"))
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn non_streaming_messages_client_uses_execute_and_forces_stream_false() -> Result<()> {
+    let state = RecordingState::default();
+    let transport = RecordingTransport::with_execute_body(
+        state.clone(),
+        serde_json::json!({
+            "id": "msg-1",
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 3, "output_tokens": 1}
+        }),
+    );
+    let client = MessagesClient::new(transport, provider("anthropic", WireApi::Messages), NoAuth);
+
+    let response = client
+        .complete_request(lha_llm::api::MessagesRequest {
+            body: serde_json::json!({ "model": "claude-test", "stream": true }),
+            headers: HeaderMap::new(),
+        })
+        .await?;
+
+    assert_eq!(response.response_id, "msg-1");
+    let requests = state.take_execute_requests();
+    assert_path_ends_with(&requests, "/messages");
+    assert_eq!(
+        requests[0]
+            .body
+            .as_ref()
+            .and_then(|body| body.get("stream"))
+            .and_then(Value::as_bool),
+        Some(false)
+    );
     Ok(())
 }
 
@@ -355,6 +599,29 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
     let options = ResponsesOptions::default();
 
     let _stream = client.stream_prompt("gpt-test", &prompt, options).await?;
+    assert_eq!(transport.attempts(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn non_streaming_client_retries_on_transport_error() -> Result<()> {
+    let transport = FlakyExecuteTransport::new();
+    let mut provider = provider("openai", WireApi::Responses);
+    provider.retry.max_attempts = 2;
+    let client = ResponsesClient::new(transport.clone(), provider, NoAuth);
+
+    let response = client
+        .complete_request(
+            lha_llm::api::ResponsesRequest {
+                body: serde_json::json!({ "model": "gpt-test" }),
+                headers: HeaderMap::new(),
+                compression: Compression::None,
+            },
+            None,
+        )
+        .await?;
+
+    assert_eq!(response.response_id, "resp-1");
     assert_eq!(transport.attempts(), 2);
     Ok(())
 }

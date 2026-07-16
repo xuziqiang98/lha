@@ -8,6 +8,7 @@ use crate::api::telemetry::run_with_request_telemetry;
 use crate::client::HttpTransport;
 use crate::client::RequestCompression;
 use crate::client::RequestTelemetry;
+use crate::client::Response;
 use crate::client::StreamResponse;
 use http::HeaderMap;
 use http::Method;
@@ -91,5 +92,30 @@ impl<T: HttpTransport, A: AuthProvider> StreamingClient<T, A> {
             self.sse_telemetry.clone(),
             turn_state,
         ))
+    }
+
+    pub(crate) async fn execute(
+        &self,
+        path: &str,
+        body: Value,
+        extra_headers: HeaderMap,
+        compression: RequestCompression,
+    ) -> Result<Response, ApiError> {
+        let builder = || {
+            let mut req = self.provider.build_request(Method::POST, path);
+            req.headers.extend(extra_headers.clone());
+            req.body = Some(body.clone());
+            req.compression = compression;
+            add_auth_headers(&self.auth, self.provider.wire.clone(), req)
+        };
+
+        run_with_request_telemetry(
+            self.provider.retry.to_policy(),
+            self.request_telemetry.clone(),
+            builder,
+            |req| self.transport.execute(req),
+        )
+        .await
+        .map_err(Into::into)
     }
 }

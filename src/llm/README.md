@@ -18,6 +18,9 @@ generic transport in `lha_llm::client`.
   idle settings.
 - Parses SSE streams into `ResponseEvent`/`ResponseStream`, including
   rate-limit snapshots and API-specific error mapping.
+- Defaults generation requests to streaming. `ResponsesClient`, `ChatClient`,
+  and `MessagesClient` also provide `complete_request` and `complete_prompt`
+  for true non-streaming HTTP requests that return `CompletedResponse`.
 
 ## Client module
 
@@ -36,6 +39,26 @@ retries, and streaming primitives without endpoint-specific awareness.
 tool descriptors, turn requests, and turn events. The runtime layer exposes
 semantic sessions that can stream model output without depending on LHA product
 state or UI code.
+
+## Response delivery
+
+`SemanticRuntimeSession::run_turn` remains streaming by default. Use
+`run_turn_with_delivery(..., ResponseDelivery::NonStreaming)` when one turn
+must use a complete HTTP response instead:
+
+```rust
+use lha_llm::{ResponseDelivery, SemanticRuntime};
+
+let mut session = runtime.new_session();
+let events = session
+    .run_turn_with_delivery(&request, ResponseDelivery::NonStreaming)
+    .await?;
+```
+
+The semantic runtime still returns `TurnEventStream` in either mode so it
+remains compatible with `lha-core`. In non-streaming mode, events are emitted
+only after the provider returns its complete JSON response; it emits completed
+items and the terminal event, not token deltas.
 
 ## Use with lha-core
 
