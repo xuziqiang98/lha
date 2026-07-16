@@ -6,7 +6,7 @@ license.workspace = true
 name = "lha-llm"
 readme = "README.md"
 repository.workspace = true
-version = "1.0.4"
+version = "1.0.5"
 
 [lib]
 doctest = false

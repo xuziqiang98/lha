@@ -19,7 +19,7 @@ homepage = "https://github.com/xuziqiang98/lha"
 [workspace.dependencies]
 # Internal
 lha-core = { path = "src/core", version = "1.0.1" }
-lha-llm = { path = "src/llm", version = "1.0.4" }
+lha-llm = { path = "src/llm", version = "1.0.5" }
 
 # External
 allocative = "0.3.3"
