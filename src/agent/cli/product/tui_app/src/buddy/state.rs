@@ -167,9 +167,11 @@ impl BuddyState {
             .filter(|reaction| reaction.received_at.elapsed() < REACTION_SHOW)
     }
 
-    pub(crate) fn reaction_fading(&self) -> bool {
-        self.visible_reaction()
-            .is_some_and(|reaction| reaction.received_at.elapsed() >= REACTION_FADE_START)
+    pub(crate) fn reaction_fading(&self, animations_enabled: bool) -> bool {
+        animations_enabled
+            && self
+                .visible_reaction()
+                .is_some_and(|reaction| reaction.received_at.elapsed() >= REACTION_FADE_START)
     }
 
     pub(crate) fn animation_mode(&self) -> BuddyAnimationMode {
@@ -215,10 +217,13 @@ impl BuddyState {
         }
     }
 
-    pub(crate) fn pet_heart_frame(&self) -> Option<&'static str> {
+    pub(crate) fn pet_heart_frame(&self, animations_enabled: bool) -> Option<&'static str> {
         let started_at = self.pet_started_at?;
         if started_at.elapsed() >= PET_BURST {
             return None;
+        }
+        if !animations_enabled {
+            return Some(HEART_FRAMES[0]);
         }
         let tick = (started_at.elapsed().as_millis() / 500) as usize;
         Some(HEART_FRAMES[tick % HEART_FRAMES.len()])
@@ -254,6 +259,19 @@ mod tests {
     fn sprite_frame_stays_static_when_animations_disabled() {
         let state = visible_buddy_state();
         assert_eq!(state.sprite_frame(3, false), (0, false));
+    }
+
+    #[test]
+    fn transient_buddy_effects_stay_static_when_animations_disabled() {
+        let mut state = visible_buddy_state();
+        state.set_reaction("hi".to_string());
+        state.reaction.as_mut().expect("reaction").received_at =
+            Instant::now() - REACTION_FADE_START;
+        state.pet_started_at = Some(Instant::now() - Duration::from_millis(600));
+
+        assert!(!state.reaction_fading(false));
+        assert!(state.reaction_fading(true));
+        assert_eq!(state.pet_heart_frame(false), Some(HEART_FRAMES[0]));
     }
 
     #[test]

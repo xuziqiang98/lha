@@ -61,7 +61,7 @@ pub(crate) fn render_buddy(
             bubble_area,
             buf,
             &reaction.text,
-            state.reaction_fading(),
+            state.reaction_fading(animations_enabled),
             sprite_color,
         );
         sprite_area
@@ -74,7 +74,7 @@ pub(crate) fn render_buddy(
     let (frame, blink) = state.sprite_frame(frame_count, animations_enabled);
     let sprite = sprites::render_sprite(buddy.species, buddy.eye, buddy.hat, blink, frame);
     let mut lines: Vec<Line<'static>> = Vec::new();
-    if let Some(hearts) = state.pet_heart_frame() {
+    if let Some(hearts) = state.pet_heart_frame(animations_enabled) {
         lines.push(centered_line(
             hearts.to_string(),
             sprite_column_area.width,

@@ -503,17 +503,14 @@ pub(crate) struct AgentMessageCell {
 #[derive(Debug)]
 enum AgentMessageContent {
     RenderedLines(Vec<Line<'static>>),
-    Markdown {
-        source: String,
-        visible_rendered_lines: Option<usize>,
-    },
+    Markdown(String),
+    StreamingMarkdown(String),
 }
 
 #[derive(Debug, Clone)]
 struct AgentMessageLinesCache {
     width: u16,
     revision: u64,
-    visible_rendered_lines: Option<usize>,
     lines: Vec<Line<'static>>,
 }
 
@@ -529,10 +526,7 @@ impl AgentMessageCell {
 
     pub(crate) fn new_markdown(source: String, is_first_line: bool) -> Self {
         Self {
-            content: AgentMessageContent::Markdown {
-                source,
-                visible_rendered_lines: None,
-            },
+            content: AgentMessageContent::Markdown(source),
             is_first_line,
             revision: 0,
             lines_cache: Mutex::new(None),
@@ -541,10 +535,7 @@ impl AgentMessageCell {
 
     pub(crate) fn new_streaming_markdown(is_first_line: bool) -> Self {
         Self {
-            content: AgentMessageContent::Markdown {
-                source: String::new(),
-                visible_rendered_lines: Some(0),
-            },
+            content: AgentMessageContent::StreamingMarkdown(String::new()),
             is_first_line,
             revision: 0,
             lines_cache: Mutex::new(None),
@@ -552,74 +543,38 @@ impl AgentMessageCell {
     }
 
     pub(crate) fn is_streaming_markdown(&self) -> bool {
-        matches!(
-            &self.content,
-            AgentMessageContent::Markdown {
-                visible_rendered_lines: Some(_),
-                ..
-            }
-        )
+        matches!(&self.content, AgentMessageContent::StreamingMarkdown(_))
     }
 
-    pub(crate) fn set_markdown_stream_state(
-        &mut self,
-        source: String,
-        visible_lines: usize,
-    ) -> bool {
-        let AgentMessageContent::Markdown {
-            source: current_source,
-            visible_rendered_lines: current_visible_lines,
-        } = &mut self.content
-        else {
+    pub(crate) fn set_streaming_markdown(&mut self, source: String) -> bool {
+        let AgentMessageContent::StreamingMarkdown(current_source) = &mut self.content else {
             return false;
         };
 
-        let changed = *current_source != source || *current_visible_lines != Some(visible_lines);
-        if changed {
-            *current_source = source;
-            *current_visible_lines = Some(visible_lines);
-            self.revision = self.revision.wrapping_add(1);
-            self.clear_lines_cache();
-        }
-        changed
-    }
-
-    pub(crate) fn set_visible_rendered_lines(&mut self, visible_lines: usize) -> bool {
-        let AgentMessageContent::Markdown {
-            visible_rendered_lines,
-            ..
-        } = &mut self.content
-        else {
-            return false;
-        };
-
-        if *visible_rendered_lines == Some(visible_lines) {
+        if *current_source == source {
             return false;
         }
 
-        *visible_rendered_lines = Some(visible_lines);
+        *current_source = source;
         self.revision = self.revision.wrapping_add(1);
         self.clear_lines_cache();
         true
     }
 
     pub(crate) fn show_all_markdown(&mut self, source: String) -> bool {
-        let AgentMessageContent::Markdown {
-            source: current_source,
-            visible_rendered_lines,
-        } = &mut self.content
-        else {
-            return false;
+        let changed = match &self.content {
+            AgentMessageContent::StreamingMarkdown(_) => true,
+            AgentMessageContent::Markdown(current_source) => current_source != &source,
+            AgentMessageContent::RenderedLines(_) => return false,
         };
-
-        let changed = *current_source != source || visible_rendered_lines.is_some();
-        if changed {
-            *current_source = source;
-            *visible_rendered_lines = None;
-            self.revision = self.revision.wrapping_add(1);
-            self.clear_lines_cache();
+        if !changed {
+            return false;
         }
-        changed
+
+        self.content = AgentMessageContent::Markdown(source);
+        self.revision = self.revision.wrapping_add(1);
+        self.clear_lines_cache();
+        true
     }
 
     fn clear_lines_cache(&self) {
@@ -628,17 +583,11 @@ impl AgentMessageCell {
         }
     }
 
-    fn markdown_lines(
-        &self,
-        source: &str,
-        visible_rendered_lines: Option<usize>,
-        width: u16,
-    ) -> Vec<Line<'static>> {
+    fn markdown_lines(&self, source: &str, width: u16) -> Vec<Line<'static>> {
         if let Ok(cache) = self.lines_cache.lock()
             && let Some(cache) = cache.as_ref()
             && cache.width == width
             && cache.revision == self.revision
-            && cache.visible_rendered_lines == visible_rendered_lines
         {
             return cache.lines.clone();
         }
@@ -654,16 +603,12 @@ impl AgentMessageCell {
             Some((width as usize).saturating_sub(2).max(1)),
             &mut lines,
         );
-        if let Some(visible_rendered_lines) = visible_rendered_lines {
-            lines.truncate(visible_rendered_lines);
-        }
         let wrapped = self.wrap_agent_lines(&lines, width);
 
         if let Ok(mut cache) = self.lines_cache.lock() {
             *cache = Some(AgentMessageLinesCache {
                 width,
                 revision: self.revision,
-                visible_rendered_lines,
                 lines: wrapped.clone(),
             });
         }
@@ -689,10 +634,8 @@ impl HistoryCell for AgentMessageCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         match &self.content {
             AgentMessageContent::RenderedLines(lines) => self.wrap_agent_lines(lines, width),
-            AgentMessageContent::Markdown {
-                source,
-                visible_rendered_lines,
-            } => self.markdown_lines(source, *visible_rendered_lines, width),
+            AgentMessageContent::Markdown(source)
+            | AgentMessageContent::StreamingMarkdown(source) => self.markdown_lines(source, width),
         }
     }
 
@@ -2463,7 +2406,6 @@ enum ProposedPlanStreamContent {
     RenderedLines(Vec<Line<'static>>),
     Markdown {
         source: String,
-        visible_rendered_lines: Option<usize>,
         include_trailing_gap: bool,
     },
 }
@@ -2472,7 +2414,6 @@ enum ProposedPlanStreamContent {
 struct ProposedPlanStreamLinesCache {
     width: u16,
     revision: u64,
-    visible_rendered_lines: Option<usize>,
     include_trailing_gap: bool,
     lines: Vec<Line<'static>>,
 }
@@ -2510,7 +2451,6 @@ impl ProposedPlanStreamCell {
         Self {
             content: ProposedPlanStreamContent::Markdown {
                 source: String::new(),
-                visible_rendered_lines: Some(0),
                 include_trailing_gap: false,
             },
             is_stream_continuation: false,
@@ -2519,11 +2459,10 @@ impl ProposedPlanStreamCell {
         }
     }
 
-    pub(crate) fn from_stream_state(source: String, visible_lines: usize) -> Self {
+    pub(crate) fn from_stream_source(source: String) -> Self {
         Self {
             content: ProposedPlanStreamContent::Markdown {
                 source,
-                visible_rendered_lines: Some(visible_lines),
                 include_trailing_gap: false,
             },
             is_stream_continuation: false,
@@ -2535,18 +2474,15 @@ impl ProposedPlanStreamCell {
     pub(crate) fn show_all_markdown(&mut self, source: String) -> bool {
         let ProposedPlanStreamContent::Markdown {
             source: current_source,
-            visible_rendered_lines,
             include_trailing_gap,
         } = &mut self.content
         else {
             return false;
         };
 
-        let changed =
-            *current_source != source || visible_rendered_lines.is_some() || !*include_trailing_gap;
+        let changed = *current_source != source || !*include_trailing_gap;
         if changed {
             *current_source = source;
-            *visible_rendered_lines = None;
             *include_trailing_gap = true;
             self.revision = self.revision.wrapping_add(1);
             self.clear_lines_cache();
@@ -2563,7 +2499,6 @@ impl ProposedPlanStreamCell {
     fn markdown_lines(
         &self,
         source: &str,
-        visible_rendered_lines: Option<usize>,
         include_trailing_gap: bool,
         width: u16,
     ) -> Vec<Line<'static>> {
@@ -2571,7 +2506,6 @@ impl ProposedPlanStreamCell {
             && let Some(cache) = cache.as_ref()
             && cache.width == width
             && cache.revision == self.revision
-            && cache.visible_rendered_lines == visible_rendered_lines
             && cache.include_trailing_gap == include_trailing_gap
         {
             return cache.lines.clone();
@@ -2589,9 +2523,6 @@ impl ProposedPlanStreamCell {
         let wrap_width = width.saturating_sub(4).max(1) as usize;
         let mut body: Vec<Line<'static>> = Vec::new();
         append_markdown(&source, Some(wrap_width), &mut body);
-        if let Some(visible_rendered_lines) = visible_rendered_lines {
-            body.truncate(visible_rendered_lines);
-        }
 
         let plan_lines = prefix_proposed_plan_body_lines(body);
         lines.extend(style_proposed_plan_body_lines(plan_lines));
@@ -2603,7 +2534,6 @@ impl ProposedPlanStreamCell {
             *cache = Some(ProposedPlanStreamLinesCache {
                 width,
                 revision: self.revision,
-                visible_rendered_lines,
                 include_trailing_gap,
                 lines: lines.clone(),
             });
@@ -2619,14 +2549,8 @@ impl HistoryCell for ProposedPlanStreamCell {
             ProposedPlanStreamContent::RenderedLines(lines) => lines.clone(),
             ProposedPlanStreamContent::Markdown {
                 source,
-                visible_rendered_lines,
                 include_trailing_gap,
-            } => self.markdown_lines(
-                source,
-                *visible_rendered_lines,
-                *include_trailing_gap,
-                width,
-            ),
+            } => self.markdown_lines(source, *include_trailing_gap, width),
         }
     }
 

@@ -74,8 +74,6 @@ mod line_truncation;
 pub mod live_wrap;
 mod markdown;
 mod markdown_render;
-#[cfg(test)]
-mod markdown_stream;
 mod mcp_tools_modal;
 mod model_migration;
 mod model_selection_modal;
@@ -363,13 +361,18 @@ pub async fn run_main(
 
 async fn run_ratatui_app(
     cli: Cli,
-    initial_config: Config,
+    mut initial_config: Config,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     cloud_requirements: CloudRequirementsLoader,
     feedback: crate::product::feedback::CodexFeedback,
 ) -> color_eyre::Result<AppExitInfo> {
     color_eyre::install()?;
+    let motion_policy =
+        tui::MotionPolicy::for_environment(&tui::TerminalEnvironment::from_process());
+    initial_config.animations = motion_policy.effective_animations(initial_config.animations);
+    let stderr_log_path =
+        crate::product::agent::config::log_dir(&initial_config)?.join("lha-tui.log");
 
     // Forward panic reports through tracing so they appear in the UI status
     // line, but do not swallow the default/color-eyre panic handler.
@@ -382,11 +385,16 @@ async fn run_ratatui_app(
     }));
     let use_mouse_capture = resolve_mouse_capture(&cli, &initial_config);
     let mut terminal = tui::init(use_mouse_capture)?;
+    // Create this before `Tui` so error unwinding drops `Tui` first and restores stderr before
+    // the terminal restore guard emits any diagnostics.
+    let mut terminal_restore_guard = TerminalRestoreGuard::new();
     terminal.clear()?;
 
-    let mut tui = Tui::new(terminal, use_mouse_capture);
+    let mut tui = Tui::new(terminal, use_mouse_capture, motion_policy);
+    if let Err(err) = tui.redirect_stderr_to(&stderr_log_path) {
+        tracing::warn!("failed to redirect TUI stderr to the log: {err}");
+    }
     tui.enter_alt_screen()?;
-    let mut terminal_restore_guard = TerminalRestoreGuard::new();
 
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&initial_config);
@@ -397,6 +405,7 @@ async fn run_ratatui_app(
 
     let mut missing_session_exit = |id_str: &str, action: &str| {
         error!("Error finding conversation path: {id_str}");
+        tui.suspend_stderr();
         terminal_restore_guard.restore_silently();
         session_log::log_session_end();
         let _ = tui.terminal.clear();
@@ -457,6 +466,7 @@ async fn run_ratatui_app(
             .await?
             {
                 resume_picker::SessionSelection::Exit => {
+                    tui.suspend_stderr();
                     terminal_restore_guard.restore_silently();
                     session_log::log_session_end();
                     return Ok(AppExitInfo {
@@ -516,6 +526,7 @@ async fn run_ratatui_app(
         .await?
         {
             resume_picker::SessionSelection::Exit => {
+                tui.suspend_stderr();
                 terminal_restore_guard.restore_silently();
                 session_log::log_session_end();
                 return Ok(AppExitInfo {
@@ -548,7 +559,7 @@ async fn run_ratatui_app(
         None => None,
     };
 
-    let config = match &session_selection {
+    let mut config = match &session_selection {
         resume_picker::SessionSelection::Resume(_) | resume_picker::SessionSelection::Fork(_) => {
             load_config_or_exit_with_fallback_cwd(
                 cli_kv_overrides.clone(),
@@ -560,6 +571,7 @@ async fn run_ratatui_app(
         }
         _ => config,
     };
+    config.animations = motion_policy.effective_animations(config.animations);
     tui.set_mouse_capture_enabled(resolve_mouse_capture(&cli, &config))?;
     let active_profile = config.active_profile.clone();
     let show_provider_popup_on_startup = config.provider_config_required;
@@ -585,6 +597,7 @@ async fn run_ratatui_app(
     )
     .await;
 
+    tui.suspend_stderr();
     terminal_restore_guard.restore_silently();
     // Mark the end of the recorded session.
     session_log::log_session_end();

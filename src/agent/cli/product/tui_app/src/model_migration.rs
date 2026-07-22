@@ -4,7 +4,7 @@ use crate::product::tui_app::render::Insets;
 use crate::product::tui_app::render::renderable::ColumnRenderable;
 use crate::product::tui_app::render::renderable::Renderable;
 use crate::product::tui_app::render::renderable::RenderableExt as _;
-use crate::product::tui_app::selection_list::selection_option_row;
+use crate::product::tui_app::selection_list::compact_selection_option_row;
 use crate::product::tui_app::tui::FrameRequester;
 use crate::product::tui_app::tui::Tui;
 use crate::product::tui_app::tui::TuiEvent;
@@ -337,7 +337,7 @@ impl ModelMigrationScreen {
         column.push(Line::from(""));
 
         for (idx, option) in MigrationMenuOption::all().into_iter().enumerate() {
-            column.push(selection_option_row(
+            column.push(compact_selection_option_row(
                 idx,
                 option.label().to_string(),
                 self.highlighted_option == option,

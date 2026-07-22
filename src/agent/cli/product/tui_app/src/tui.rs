@@ -3,16 +3,17 @@ use std::future::Future;
 use std::io::IsTerminal;
 use std::io::Result;
 use std::io::Stdout;
+use std::io::Write;
 use std::io::stdin;
 use std::io::stdout;
 use std::panic;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use crossterm::Command;
-use crossterm::SynchronizedUpdate;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
 use crossterm::event::DisableMouseCapture;
@@ -24,12 +25,15 @@ use crossterm::event::KeyboardEnhancementFlags;
 use crossterm::event::MouseEvent;
 use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
+use crossterm::terminal::BeginSynchronizedUpdate;
+use crossterm::terminal::EndSynchronizedUpdate;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::backend::Backend;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::execute;
+use ratatui::crossterm::queue;
 use ratatui::crossterm::terminal::disable_raw_mode;
 use ratatui::crossterm::terminal::enable_raw_mode;
 use tokio::sync::broadcast;
@@ -51,6 +55,14 @@ mod frame_rate_limiter;
 mod frame_requester;
 #[cfg(unix)]
 mod job_control;
+mod motion_policy;
+mod stderr_guard;
+
+pub(crate) use motion_policy::MotionPolicy;
+pub(crate) use motion_policy::TerminalEnvironment;
+use stderr_guard::TuiStderrGuard;
+
+type SharedStderrGuard = Arc<Mutex<Option<TuiStderrGuard>>>;
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
@@ -205,6 +217,7 @@ pub fn init(use_mouse_capture: bool) -> Result<Terminal> {
 fn set_panic_hook() {
     let hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
+        let _ = execute!(stdout(), EndSynchronizedUpdate);
         let _ = restore(); // ignore any errors as we are already failing
         hook(panic_info);
     }));
@@ -226,6 +239,7 @@ pub struct Tui {
     alt_saved_viewport: Option<ratatui::layout::Rect>,
     #[cfg(unix)]
     suspend_context: SuspendContext,
+    stderr_guard: SharedStderrGuard,
     // True when the fullscreen alternate screen is active.
     alt_screen_active: Arc<AtomicBool>,
     // True when terminal/tab is focused; updated internally from crossterm events
@@ -236,10 +250,29 @@ pub struct Tui {
     mouse_capture_bypass_active: bool,
 }
 
+impl Drop for Tui {
+    fn drop(&mut self) {
+        let guard = self
+            .stderr_guard
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        drop(guard);
+    }
+}
+
 impl Tui {
-    pub fn new(terminal: Terminal, mouse_capture_enabled: bool) -> Self {
+    pub fn new(
+        terminal: Terminal,
+        mouse_capture_enabled: bool,
+        motion_policy: MotionPolicy,
+    ) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
-        let frame_requester = FrameRequester::new(draw_tx.clone());
+        let frame_requester = FrameRequester::with_min_frame_interval(
+            draw_tx.clone(),
+            motion_policy.min_frame_interval(),
+        );
+        let stderr_guard = Arc::new(Mutex::new(None));
 
         // Detect keyboard enhancement support before any EventStream is created so the
         // crossterm poller can acquire its lock without contention.
@@ -254,7 +287,8 @@ impl Tui {
             terminal,
             alt_saved_viewport: None,
             #[cfg(unix)]
-            suspend_context: SuspendContext::new(),
+            suspend_context: SuspendContext::new(stderr_guard.clone()),
+            stderr_guard,
             alt_screen_active: Arc::new(AtomicBool::new(false)),
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
@@ -266,6 +300,39 @@ impl Tui {
 
     pub fn set_notification_method(&mut self, method: NotificationMethod) {
         self.notification_backend = Some(detect_backend(method));
+    }
+
+    pub(crate) fn redirect_stderr_to(&mut self, path: &std::path::Path) -> Result<()> {
+        let guard = TuiStderrGuard::redirect_to(path)?;
+        *self
+            .stderr_guard
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(guard);
+        Ok(())
+    }
+
+    pub(crate) fn suspend_stderr(&self) {
+        let mut guard = self
+            .stderr_guard
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(guard) = guard.as_mut()
+            && let Err(err) = guard.suspend()
+        {
+            tracing::warn!("failed to restore stderr for external terminal use: {err}");
+        }
+    }
+
+    fn resume_stderr(&self) {
+        let mut guard = self
+            .stderr_guard
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(guard) = guard.as_mut()
+            && let Err(err) = guard.resume()
+        {
+            tracing::warn!("failed to redirect stderr back to the TUI log: {err}");
+        }
     }
 
     pub fn frame_requester(&self) -> FrameRequester {
@@ -344,6 +411,9 @@ impl Tui {
     {
         // Pause crossterm events to avoid stdin conflicts with external program `f`.
         self.pause_events();
+        // An external program must inherit the user's original stderr even when the TUI is
+        // running inline and therefore never leaves the alternate screen.
+        self.suspend_stderr();
 
         // Leave alt screen if active to avoid conflicts with external program `f`.
         let was_alt_screen = self.is_alt_screen_active();
@@ -365,6 +435,11 @@ impl Tui {
 
         if was_alt_screen {
             let _ = self.enter_alt_screen();
+        } else {
+            if let Err(err) = self.terminal.clear() {
+                tracing::warn!("failed to clear inline viewport after external program: {err}");
+            }
+            self.resume_stderr();
         }
 
         self.resume_events();
@@ -378,15 +453,17 @@ impl Tui {
             return false;
         }
 
-        let Some(backend) = self.notification_backend.as_mut() else {
+        let Some(notification_backend) = self.notification_backend.as_mut() else {
             return false;
         };
 
         let message = message.as_ref().to_string();
-        match backend.notify(&message) {
+        // Notifications are serialized through the same backend writer as frame output. OSC 9
+        // and BEL do not move the drawing cursor, so they remain out-of-band from frame diffs.
+        match notification_backend.notify(&message, self.terminal.backend_mut()) {
             Ok(()) => true,
             Err(err) => {
-                let method = backend.method();
+                let method = notification_backend.method();
                 tracing::warn!(
                     error = %err,
                     method = %method,
@@ -437,11 +514,13 @@ impl Tui {
         }
         self.alt_screen_active.store(true, Ordering::Relaxed);
         self.mouse_capture_bypass_active = false;
+        self.resume_stderr();
         Ok(())
     }
 
     /// Leave alternate screen and restore the previously saved viewport, if any.
     pub fn leave_alt_screen(&mut self) -> Result<()> {
+        self.suspend_stderr();
         if self.mouse_capture_enabled {
             let _ = execute!(self.terminal.backend_mut(), DisableMouseCapture);
         }
@@ -455,7 +534,10 @@ impl Tui {
         Ok(())
     }
 
-    fn update_viewport(terminal: &mut Terminal, height: u16) -> Result<bool> {
+    fn update_viewport<B>(terminal: &mut CustomTerminal<B>, height: u16) -> Result<()>
+    where
+        B: Backend + Write,
+    {
         let size = terminal.size()?;
 
         let mut area = terminal.viewport_area;
@@ -475,7 +557,7 @@ impl Tui {
             terminal.clear_area(area)?;
         }
 
-        Ok(false)
+        Ok(())
     }
 
     pub fn draw(
@@ -483,38 +565,248 @@ impl Tui {
         height: u16,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
     ) -> Result<()> {
-        if self.frame_requester.take_risky_row_repair_request() {
-            self.terminal.request_visible_risky_row_repaint();
-        }
-
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
         // in the synchronized update.
         #[cfg(unix)]
         let mut prepared_resume = self
             .suspend_context
             .prepare_resume_action(&mut self.terminal, &mut self.alt_saved_viewport);
+        #[cfg(unix)]
+        let resume_stderr_after_draw = prepared_resume.is_some();
+        #[cfg(unix)]
+        let suspend_context = self.suspend_context.clone();
 
-        stdout().sync_update(|_| {
+        let draw_result = synchronized_terminal_update(&mut self.terminal, |terminal| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
-                prepared.apply(&mut self.terminal)?;
+                prepared.apply(terminal)?;
             }
 
-            let terminal = &mut self.terminal;
-            let needs_full_repaint = Self::update_viewport(terminal, height)?;
-            if needs_full_repaint {
-                terminal.invalidate_viewport();
-            }
+            Self::update_viewport(terminal, height)?;
             let area = terminal.viewport_area;
 
             // Update the cursor row so Ctrl-Z can place the cursor correctly before suspending.
             #[cfg(unix)]
-            self.suspend_context
-                .set_cursor_y(area.bottom().saturating_sub(1));
+            suspend_context.set_cursor_y(area.bottom().saturating_sub(1));
 
-            terminal.draw(|frame| {
+            terminal.try_draw_unflushed(|frame| {
                 draw_fn(frame);
+                Result::Ok(())
             })
-        })?
+        });
+
+        #[cfg(unix)]
+        if resume_stderr_after_draw {
+            self.resume_stderr();
+        }
+        draw_result
+    }
+}
+
+fn synchronized_terminal_update<B>(
+    terminal: &mut CustomTerminal<B>,
+    update: impl FnOnce(&mut CustomTerminal<B>) -> Result<()>,
+) -> Result<()>
+where
+    B: Backend + Write,
+{
+    queue!(terminal.backend_mut(), BeginSynchronizedUpdate)?;
+    let update_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| update(terminal)));
+    let end_result = queue!(terminal.backend_mut(), EndSynchronizedUpdate);
+    let flush_result = Backend::flush(terminal.backend_mut());
+    let output_result = end_result.and(flush_result);
+
+    match update_result {
+        Ok(Err(err)) => Err(err),
+        Ok(Ok(())) => terminal.complete_frame(output_result),
+        Err(payload) => {
+            let _ = output_result;
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::product::tui_app::test_backend::AuditedVT100Backend;
+    use pretty_assertions::assert_eq;
+    use ratatui::layout::Rect;
+    use ratatui::style::Style;
+
+    fn command_bytes(command: impl crossterm::Command) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        queue!(&mut bytes, command).expect("queue command");
+        bytes
+    }
+
+    fn byte_index(haystack: &[u8], needle: &[u8]) -> usize {
+        haystack
+            .windows(needle.len())
+            .position(|window| window == needle)
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing {:?} in {:?}",
+                    String::from_utf8_lossy(needle),
+                    String::from_utf8_lossy(haystack)
+                )
+            })
+    }
+
+    #[test]
+    fn synchronized_update_uses_one_backend_and_always_ends() {
+        let backend = AuditedVT100Backend::new(20, 2);
+        let mut terminal = CustomTerminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 20, 2));
+
+        synchronized_terminal_update(&mut terminal, |terminal| {
+            terminal.try_draw_unflushed(|frame| {
+                frame
+                    .buffer_mut()
+                    .set_string(0, 0, "frame", Style::default());
+                Result::Ok(())
+            })
+        })
+        .expect("synchronized draw");
+
+        let frame = terminal.backend().last_frame().expect("audited frame");
+        let begin = command_bytes(BeginSynchronizedUpdate);
+        let end = command_bytes(EndSynchronizedUpdate);
+        let begin_index = byte_index(&frame.raw_bytes, &begin);
+        let text_index = byte_index(&frame.raw_bytes, b"frame");
+        let end_index = byte_index(&frame.raw_bytes, &end);
+        assert!(begin_index < text_index && text_index < end_index);
+
+        terminal.backend_mut().clear_frames();
+        terminal.backend_mut().fail_next_draw();
+        let result = synchronized_terminal_update(&mut terminal, |terminal| {
+            terminal.try_draw_unflushed(|frame| {
+                frame
+                    .buffer_mut()
+                    .set_string(0, 0, "failed", Style::default());
+                Result::Ok(())
+            })
+        });
+        assert_eq!(
+            result.expect_err("draw should fail").to_string(),
+            "injected draw failure"
+        );
+
+        let failed = terminal
+            .backend()
+            .last_frame()
+            .expect("failed draw should still flush END");
+        assert!(byte_index(&failed.raw_bytes, &begin) < byte_index(&failed.raw_bytes, &end));
+
+        terminal.backend_mut().clear_frames();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            synchronized_terminal_update(&mut terminal, |_terminal| -> Result<()> {
+                panic!("injected render panic");
+            })
+        }));
+        assert!(panic.is_err());
+
+        let panicked = terminal
+            .backend()
+            .last_frame()
+            .expect("panicked draw should still flush END");
+        assert!(byte_index(&panicked.raw_bytes, &begin) < byte_index(&panicked.raw_bytes, &end));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn synchronized_resume_uses_one_backend_flush() {
+        let backend = AuditedVT100Backend::new(20, 2);
+        let mut terminal = CustomTerminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 20, 2));
+
+        synchronized_terminal_update(&mut terminal, |terminal| {
+            job_control::PreparedResumeAction::RestoreAltScreen {
+                use_mouse_capture: false,
+            }
+            .apply(terminal)?;
+            terminal.try_draw_unflushed(|frame| {
+                frame
+                    .buffer_mut()
+                    .set_string(0, 0, "resumed", Style::default());
+                Result::Ok(())
+            })
+        })
+        .expect("synchronized resumed draw");
+
+        assert_eq!(terminal.backend().frames().len(), 1);
+        let frame = terminal.backend().last_frame().expect("resumed frame");
+        let begin = command_bytes(BeginSynchronizedUpdate);
+        let end = command_bytes(EndSynchronizedUpdate);
+        let begin_index = byte_index(&frame.raw_bytes, &begin);
+        let text_index = byte_index(&frame.raw_bytes, b"resumed");
+        let end_index = byte_index(&frame.raw_bytes, &end);
+        assert!(begin_index < text_index && text_index < end_index);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resume_alt_screen_clears_before_first_draw() {
+        let backend = AuditedVT100Backend::new(20, 2);
+        let mut terminal = CustomTerminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 20, 2));
+        terminal
+            .draw(|frame| {
+                frame
+                    .buffer_mut()
+                    .set_string(0, 0, "restored", Style::default());
+            })
+            .expect("initial draw");
+        terminal.backend_mut().clear_frames();
+
+        job_control::PreparedResumeAction::RestoreAltScreen {
+            use_mouse_capture: false,
+        }
+        .apply(&mut terminal)
+        .expect("prepare resumed alternate screen");
+        terminal
+            .draw(|frame| {
+                frame
+                    .buffer_mut()
+                    .set_string(0, 0, "restored", Style::default());
+            })
+            .expect("first resumed draw");
+
+        let frame = terminal.backend().last_frame().expect("resumed frame");
+        let clear_index = byte_index(&frame.raw_bytes, b"\x1b[K");
+        let text_index = byte_index(&frame.raw_bytes, b"restored");
+        assert!(clear_index < text_index, "{}", frame.escaped_ansi());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resume_inline_screen_clears_before_first_draw() {
+        let backend = AuditedVT100Backend::new(20, 2);
+        let mut terminal = CustomTerminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 20, 2));
+        terminal
+            .draw(|frame| {
+                frame
+                    .buffer_mut()
+                    .set_string(0, 0, "restored", Style::default());
+            })
+            .expect("initial draw");
+        terminal.backend_mut().clear_frames();
+
+        job_control::PreparedResumeAction::RestoreInlineScreen
+            .apply(&mut terminal)
+            .expect("prepare resumed inline screen");
+        terminal
+            .draw(|frame| {
+                frame
+                    .buffer_mut()
+                    .set_string(0, 0, "restored", Style::default());
+            })
+            .expect("first resumed draw");
+
+        let frame = terminal.backend().last_frame().expect("resumed frame");
+        let clear_index = byte_index(&frame.raw_bytes, b"\x1b[K");
+        let text_index = byte_index(&frame.raw_bytes, b"restored");
+        assert!(clear_index < text_index, "{}", frame.escaped_ansi());
     }
 }

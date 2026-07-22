@@ -1,4 +1,5 @@
 use std::io::Result;
+use std::io::Write;
 use std::io::stdout;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -14,13 +15,16 @@ use crossterm::event::EnableMouseCapture;
 use crossterm::event::KeyCode;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
+use ratatui::backend::Backend;
 use ratatui::crossterm::execute;
+use ratatui::crossterm::queue;
 use ratatui::layout::Rect;
 
+use crate::product::tui_app::custom_terminal::Terminal as CustomTerminal;
 use crate::product::tui_app::key_hint;
 
 use super::DisableAlternateScroll;
-use super::Terminal;
+use super::SharedStderrGuard;
 
 pub const SUSPEND_KEY: key_hint::KeyBinding = key_hint::ctrl(KeyCode::Char('z'));
 
@@ -44,13 +48,15 @@ pub struct SuspendContext {
     resume_pending: Arc<Mutex<Option<ResumeAction>>>,
     /// Cursor row used to place the cursor before yielding during suspend.
     suspend_cursor_y: Arc<AtomicU16>,
+    stderr_guard: SharedStderrGuard,
 }
 
 impl SuspendContext {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(stderr_guard: SharedStderrGuard) -> Self {
         Self {
             resume_pending: Arc::new(Mutex::new(None)),
             suspend_cursor_y: Arc::new(AtomicU16::new(0)),
+            stderr_guard,
         }
     }
 
@@ -64,6 +70,17 @@ impl SuspendContext {
         alt_screen_active: &Arc<AtomicBool>,
         use_mouse_capture: bool,
     ) -> Result<()> {
+        {
+            let mut guard = self
+                .stderr_guard
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if let Some(guard) = guard.as_mut()
+                && let Err(err) = guard.suspend()
+            {
+                tracing::warn!("failed to restore stderr before suspending the TUI: {err}");
+            }
+        }
         if alt_screen_active.load(Ordering::Relaxed) {
             // Leave alt-screen so the terminal returns to the normal buffer while suspended.
             if use_mouse_capture {
@@ -72,6 +89,8 @@ impl SuspendContext {
             let _ = execute!(stdout(), DisableAlternateScroll);
             let _ = execute!(stdout(), LeaveAlternateScreen);
             self.set_resume_action(ResumeAction::RestoreAlt { use_mouse_capture });
+        } else {
+            self.set_resume_action(ResumeAction::RestoreInline);
         }
         let y = self.suspend_cursor_y.load(Ordering::Relaxed);
         let _ = execute!(stdout(), MoveTo(0, y), Show);
@@ -80,11 +99,14 @@ impl SuspendContext {
 
     /// Consume the pending resume intent and precompute any alternate-screen restoration needed
     /// post-resume. Returns `None` when there was no pending suspend intent.
-    pub(crate) fn prepare_resume_action(
+    pub(crate) fn prepare_resume_action<B>(
         &self,
-        _terminal: &mut Terminal,
+        _terminal: &mut CustomTerminal<B>,
         alt_saved_viewport: &mut Option<Rect>,
-    ) -> Option<PreparedResumeAction> {
+    ) -> Option<PreparedResumeAction>
+    where
+        B: Backend + Write,
+    {
         let action = self.take_resume_action()?;
         match action {
             ResumeAction::RestoreAlt { use_mouse_capture } => {
@@ -95,6 +117,7 @@ impl SuspendContext {
                 }
                 Some(PreparedResumeAction::RestoreAltScreen { use_mouse_capture })
             }
+            ResumeAction::RestoreInline => Some(PreparedResumeAction::RestoreInlineScreen),
         }
     }
 
@@ -125,6 +148,8 @@ impl SuspendContext {
 pub(crate) enum ResumeAction {
     /// Re-enter the alt screen and restore the fullscreen TUI.
     RestoreAlt { use_mouse_capture: bool },
+    /// Restore the inline viewport after resuming.
+    RestoreInline,
 }
 
 /// Describes the terminal change to apply when resuming from suspend during the synchronized draw.
@@ -132,21 +157,27 @@ pub(crate) enum ResumeAction {
 pub(crate) enum PreparedResumeAction {
     /// Re-enter the alt screen and reset the viewport to the terminal dimensions.
     RestoreAltScreen { use_mouse_capture: bool },
+    /// Clear and redraw the existing inline viewport.
+    RestoreInlineScreen,
 }
 
 impl PreparedResumeAction {
-    pub(crate) fn apply(self, terminal: &mut Terminal) -> Result<()> {
+    pub(crate) fn apply<B>(self, terminal: &mut CustomTerminal<B>) -> Result<()>
+    where
+        B: Backend + Write,
+    {
         match self {
             PreparedResumeAction::RestoreAltScreen { use_mouse_capture } => {
-                execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                queue!(terminal.backend_mut(), EnterAlternateScreen)?;
                 if use_mouse_capture {
-                    execute!(terminal.backend_mut(), EnableMouseCapture)?;
+                    queue!(terminal.backend_mut(), EnableMouseCapture)?;
                 }
                 if let Ok(size) = terminal.size() {
                     terminal.set_viewport_area(Rect::new(0, 0, size.width, size.height));
                     terminal.clear()?;
                 }
             }
+            PreparedResumeAction::RestoreInlineScreen => terminal.clear()?,
         }
         Ok(())
     }

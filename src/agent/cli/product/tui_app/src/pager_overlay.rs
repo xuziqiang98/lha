@@ -478,10 +478,8 @@ impl TranscriptOverlay {
         transcript_cells: Vec<Arc<dyn HistoryCell>>,
         clipboard_config: ClipboardTextConfig,
     ) -> Self {
-        let mut view = TranscriptView::new(transcript_cells, TranscriptRenderMode::Transcript);
-        view.request_terminal_repaint_settle();
         Self {
-            view,
+            view: TranscriptView::new(transcript_cells, TranscriptRenderMode::Transcript),
             mouse_scroll: MouseScrollState::default(),
             highlight_cell: None,
             selection_snapshot: None,
@@ -590,20 +588,6 @@ impl TranscriptOverlay {
         render_overlay_bottom_bar(top, content_area, buf, &self.view);
         self.render_hints(bottom, buf);
     }
-
-    pub(crate) fn prepare_terminal_repaint_for_width(
-        &mut self,
-        area_width: u16,
-        frame_requester: &tui::FrameRequester,
-    ) -> bool {
-        self.view
-            .prepare_terminal_repaint_for_width(area_width.max(1));
-        let needs_repaint = self.view.take_terminal_repaint_request();
-        if self.view.has_pending_terminal_repaint() {
-            frame_requester.schedule_frame();
-        }
-        needs_repaint
-    }
 }
 
 impl TranscriptOverlay {
@@ -668,14 +652,6 @@ impl TranscriptOverlay {
                 Ok(())
             }
             TuiEvent::Draw => {
-                let frame_requester = tui.frame_requester();
-                if prepare_transcript_overlay_terminal_repaint(
-                    self,
-                    tui.terminal.viewport_area.width,
-                    &frame_requester,
-                ) {
-                    tui.terminal.invalidate_viewport();
-                }
                 tui.draw(u16::MAX, |frame| {
                     self.render(frame.area(), frame.buffer);
                 })?;
@@ -687,14 +663,6 @@ impl TranscriptOverlay {
     pub(crate) fn is_done(&self) -> bool {
         self.is_done
     }
-}
-
-pub(crate) fn prepare_transcript_overlay_terminal_repaint(
-    overlay: &mut TranscriptOverlay,
-    terminal_width: u16,
-    frame_requester: &tui::FrameRequester,
-) -> bool {
-    overlay.prepare_terminal_repaint_for_width(terminal_width, frame_requester)
 }
 
 fn transcript_scroll_key(key_event: KeyEvent) -> Option<TranscriptScroll> {
@@ -848,7 +816,6 @@ mod tests {
     use super::*;
     use crate::product::agent::protocol::ExecCommandSource;
     use crate::product::agent::protocol::ReviewDecision;
-    use crate::product::tui_app::transcript_view::TRANSCRIPT_VIEWPORT_REPAIR_FRAMES;
     use crate::product::tui_app::transcript_view::TranscriptLiveTailSource;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
@@ -909,9 +876,6 @@ mod tests {
 - **可扩展性：好**。支持 Chat Completions、Responses、Messages，多 provider、工具、MCP、event stream，这些都适合长远演进。\n\
 - **最小使用体验：一般**。我们只是发一句 `hello`，最后还是写了 `ModelInfo`、`RuntimeBuildSpec`、事件消费循环等一百多行。\n\
 - **文档方向：对**。`docs/sdk-building-agents.md` 讲得完整，但它更像“完整 SDK 教程”，不是“5 分钟起步”。";
-    const FOLLOW_UP_CJK_ORDER_TEXT: &str = "也就是说同一轮 follow-up 仍然发：";
-    const FOLLOW_UP_CJK_STALE_ORDER_TEXT: &str = "也就是说同一 follow轮-up 仍然发：";
-
     fn assert_cjk_transcript_word_order(rendered: &str, context: &str) {
         assert!(
             rendered.contains("长远演进。"),
@@ -933,60 +897,6 @@ mod tests {
             !rendered.contains("长远演进-。"),
             "{context} rendered list marker on the previous CJK line: {rendered:?}"
         );
-    }
-
-    fn assert_follow_up_cjk_order(rendered: &str, context: &str) {
-        assert!(
-            rendered.contains(FOLLOW_UP_CJK_ORDER_TEXT),
-            "{context} missing correct follow-up text: {rendered:?}"
-        );
-        assert!(
-            !rendered.contains(FOLLOW_UP_CJK_STALE_ORDER_TEXT),
-            "{context} rendered known follow-up stale order: {rendered:?}"
-        );
-    }
-
-    fn render_transcript_overlay_to_vt100_screen(
-        overlay: &mut TranscriptOverlay,
-        terminal: &mut crate::product::tui_app::custom_terminal::Terminal<
-            crate::product::tui_app::test_backend::VT100Backend,
-        >,
-        frame_requester: &tui::FrameRequester,
-    ) -> String {
-        let width = terminal.backend().vt100().screen().size().1;
-        if overlay.prepare_terminal_repaint_for_width(width, frame_requester) {
-            terminal.invalidate_viewport();
-        }
-        terminal
-            .draw(|frame| overlay.render(frame.area(), frame.buffer_mut()))
-            .expect("draw transcript overlay");
-        terminal.backend().vt100().screen().contents()
-    }
-
-    fn corrupt_vt100_row(
-        terminal: &mut crate::product::tui_app::custom_terminal::Terminal<
-            crate::product::tui_app::test_backend::VT100Backend,
-        >,
-        y: u16,
-        text: &str,
-    ) {
-        let backend = terminal.backend_mut();
-        crossterm::queue!(
-            backend,
-            crossterm::cursor::MoveTo(0, y),
-            crossterm::terminal::Clear(crossterm::terminal::ClearType::UntilNewLine),
-            crossterm::style::Print(text)
-        )
-        .expect("corrupt VT100 row");
-        std::io::Write::flush(backend).expect("flush corrupted VT100 row");
-    }
-
-    fn screen_row_containing(contents: &str, needle: &str) -> u16 {
-        contents
-            .lines()
-            .position(|line| line.contains(needle))
-            .and_then(|row| u16::try_from(row).ok())
-            .unwrap_or_else(|| panic!("screen should contain {needle:?}: {contents:?}"))
     }
 
     #[test]
@@ -1237,80 +1147,6 @@ mod tests {
 
         let screen = terminal.backend().vt100().screen().contents();
         assert_cjk_transcript_word_order(&screen, "transcript overlay CJK VT100 screen");
-    }
-
-    #[test]
-    fn follow_up_transcript_overlay_viewport_repaint_repairs_vt100_order() {
-        let cell: Arc<dyn HistoryCell> = Arc::new(history_cell::AgentMessageCell::new_markdown(
-            FOLLOW_UP_CJK_ORDER_TEXT.to_string(),
-            true,
-        ));
-        let mut overlay = TranscriptOverlay::new(vec![cell]);
-        let width = 120;
-        let height = 12;
-        let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
-            crate::product::tui_app::test_backend::VT100Backend::new(width, height),
-        )
-        .expect("terminal");
-        terminal.set_viewport_area(Rect::new(0, 0, width, height));
-        let (frame_requester, _frame_rx) = tui::FrameRequester::test_with_receiver();
-
-        let screen = render_transcript_overlay_to_vt100_screen(
-            &mut overlay,
-            &mut terminal,
-            &frame_requester,
-        );
-        assert_follow_up_cjk_order(&screen, "follow-up initial transcript overlay screen");
-        let row = screen_row_containing(&screen, FOLLOW_UP_CJK_ORDER_TEXT);
-        corrupt_vt100_row(&mut terminal, row, FOLLOW_UP_CJK_STALE_ORDER_TEXT);
-        let corrupted_screen = terminal.backend().vt100().screen().contents();
-        assert!(
-            corrupted_screen.contains(FOLLOW_UP_CJK_STALE_ORDER_TEXT),
-            "test setup should corrupt follow-up overlay row: {corrupted_screen:?}"
-        );
-
-        let repaired_screen = render_transcript_overlay_to_vt100_screen(
-            &mut overlay,
-            &mut terminal,
-            &frame_requester,
-        );
-        assert_follow_up_cjk_order(
-            &repaired_screen,
-            "follow-up repaired transcript overlay screen",
-        );
-    }
-
-    #[test]
-    fn transcript_overlay_repaint_helper_consumes_initial_budget_and_schedules_tail() {
-        let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
-            lines: vec![Line::from("plain transcript")],
-        })]);
-        let (frame_requester, mut frame_rx) = tui::FrameRequester::test_with_receiver();
-
-        for frame in 0..TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
-            assert!(
-                prepare_transcript_overlay_terminal_repaint(&mut overlay, 80, &frame_requester,),
-                "expected overlay repaint budget on frame {frame}"
-            );
-            if frame + 1 < TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
-                assert!(
-                    frame_rx.try_recv().is_ok(),
-                    "pending overlay repaint should schedule the next frame"
-                );
-            } else {
-                assert!(
-                    frame_rx.try_recv().is_err(),
-                    "exhausted overlay repaint budget should not schedule another frame"
-                );
-            }
-        }
-
-        assert!(!prepare_transcript_overlay_terminal_repaint(
-            &mut overlay,
-            80,
-            &frame_requester,
-        ));
-        assert!(frame_rx.try_recv().is_err());
     }
 
     #[test]

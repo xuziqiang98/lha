@@ -372,7 +372,9 @@ mod tests {
             draw_rx,
             terminal_focused,
             #[cfg(unix)]
-            crate::product::tui_app::tui::job_control::SuspendContext::new(),
+            crate::product::tui_app::tui::job_control::SuspendContext::new(Arc::new(
+                std::sync::Mutex::new(None),
+            )),
             #[cfg(unix)]
             Arc::new(AtomicBool::new(false)),
             #[cfg(unix)]

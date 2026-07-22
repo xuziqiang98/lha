@@ -166,6 +166,8 @@ fn write_text_with_osc52(text: &str, tmux_mode: Osc52TmuxMode) -> Result<(), Str
         text,
         resolve_osc52_tmux_mode(std::env::var_os("TMUX").is_some(), tmux_mode),
     )?;
+    // TUI callers invoke this synchronously on the event loop. OSC 52 does not move the drawing
+    // cursor, so it stays out-of-band from synchronized frame diffs without racing another draw.
     stdout
         .write_all(sequence.as_bytes())
         .and_then(|()| stdout.flush())

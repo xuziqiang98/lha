@@ -101,25 +101,23 @@ use crate::product::tui_app::history_cell::UserHistoryCell;
 use crate::product::tui_app::sidebar::SidebarWidget;
 use crate::product::tui_app::status_indicator_widget::StatusDetailsCapitalization;
 use crate::product::tui_app::style::proposed_plan_style;
+use crate::product::tui_app::test_backend::AuditedVT100Backend;
 use crate::product::tui_app::test_backend::VT100Backend;
+use crate::product::tui_app::test_backend::analyze_buffer_frame;
+use crate::product::tui_app::test_backend::assert_vt100_grid_matches_buffer;
 use crate::product::tui_app::transcript_selection::TranscriptSelectionPoint;
-use crate::product::tui_app::transcript_view::TRANSCRIPT_VIEWPORT_REPAIR_FRAMES;
 use crate::product::tui_app::transcript_view::TranscriptRenderMode;
 use crate::product::tui_app::transcript_view::TranscriptView;
 use crate::product::tui_app::tui::FrameRequester;
 use crate::product::utils_absolute_path::AbsolutePathBuf;
 use crate::product::utils_sleep_inhibitor::SleepInhibitor;
 use assert_matches::assert_matches;
-use crossterm::cursor::MoveTo;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use crossterm::event::MouseButton;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
-use crossterm::style::Print;
-use crossterm::terminal::Clear;
-use crossterm::terminal::ClearType;
 use dirs::home_dir;
 use insta::assert_snapshot;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
@@ -523,7 +521,7 @@ async fn active_cell_live_tail_respects_render_mode() {
 }
 
 #[tokio::test]
-async fn assistant_delta_without_newline_stays_hidden_until_finalize() {
+async fn assistant_delta_stays_hidden_until_display_tick() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.on_agent_message_delta("partial answer".to_string());
@@ -546,6 +544,13 @@ async fn assistant_delta_without_newline_stays_hidden_until_finalize() {
     assert!(!rendered.contains("partial answer"));
     assert!(drain_insert_history(&mut rx).is_empty());
 
+    chat.on_commit_tick();
+    let visible = chat
+        .transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+        .map(|tail| lines_to_single_string(&tail.lines))
+        .unwrap_or_default();
+    assert!(visible.contains("partial answer"));
+
     chat.flush_answer_stream_with_separator();
     let cells = drain_insert_history(&mut rx);
     let rendered = cells
@@ -556,7 +561,68 @@ async fn assistant_delta_without_newline_stays_hidden_until_finalize() {
 }
 
 #[tokio::test]
-async fn assistant_stream_exposes_only_completed_lines_before_finalize() {
+async fn first_answer_delta_defers_predecessor_flush_until_display_tick() {
+    let (frame_requester, mut frame_rx) = FrameRequester::test_with_receiver();
+    let (mut chat, mut rx, _op_rx) =
+        make_chatwidget_manual_with_frame_requester(None, frame_requester).await;
+    while frame_rx.try_recv().is_ok() {}
+    chat.active_cell = Some(Box::new(SplitActiveCell));
+
+    chat.on_agent_message_delta("partial answer".to_string());
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(frame_rx.try_recv().is_err());
+    assert!(
+        chat.active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<SplitActiveCell>())
+    );
+
+    chat.on_commit_tick();
+
+    let history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(history.contains("wide"), "{history:?}");
+    assert!(frame_rx.try_recv().is_ok());
+}
+
+#[tokio::test]
+async fn first_plan_delta_defers_predecessor_flush_until_display_tick() {
+    let (frame_requester, mut frame_rx) = FrameRequester::test_with_receiver();
+    let (mut chat, mut rx, _op_rx) =
+        make_chatwidget_manual_with_frame_requester(Some("gpt-5"), frame_requester).await;
+    while frame_rx.try_recv().is_ok() {}
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+    while frame_rx.try_recv().is_ok() {}
+    chat.active_cell = Some(Box::new(SplitActiveCell));
+
+    chat.on_plan_delta("- Step 1\n".to_string());
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(frame_rx.try_recv().is_err());
+    assert!(
+        chat.active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<SplitActiveCell>())
+    );
+
+    chat.on_commit_tick();
+
+    let history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(history.contains("wide"), "{history:?}");
+    assert!(frame_rx.try_recv().is_ok());
+}
+
+#[tokio::test]
+async fn assistant_stream_commits_all_pending_source_on_display_tick() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.on_agent_message_delta("one\ntwo\npartial".to_string());
@@ -567,7 +633,7 @@ async fn assistant_stream_exposes_only_completed_lines_before_finalize() {
         .unwrap_or_default();
     assert!(before_finalize.contains("one"));
     assert!(before_finalize.contains("two"));
-    assert!(!before_finalize.contains("partial"));
+    assert!(before_finalize.contains("partial"));
 
     assert!(drain_insert_history(&mut rx).is_empty());
 
@@ -577,6 +643,153 @@ async fn assistant_stream_exposes_only_completed_lines_before_finalize() {
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
     assert!(after_finalize.contains("partial"));
+}
+
+#[tokio::test]
+async fn streaming_display_tick_coalesces_pending_deltas_without_idle_redraw() {
+    let (frame_requester, mut frame_rx) = FrameRequester::test_with_receiver();
+    let (mut chat, _rx, _op_rx) =
+        make_chatwidget_manual_with_frame_requester(None, frame_requester).await;
+    while frame_rx.try_recv().is_ok() {}
+
+    chat.on_agent_message_delta("先说明：".to_string());
+    chat.on_agent_message_delta("`crates.io` 发布条件。".to_string());
+    assert!(frame_rx.try_recv().is_err());
+    assert!(
+        chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+            .is_none()
+    );
+
+    chat.on_commit_tick();
+    assert!(frame_rx.try_recv().is_ok());
+    let visible = chat
+        .transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+        .map(|tail| lines_to_single_string(&tail.lines))
+        .unwrap_or_default();
+    assert!(visible.contains("先说明：crates.io 发布条件。"));
+
+    chat.on_commit_tick();
+    assert!(frame_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn streaming_cjk_deltas_only_touch_live_tail_rows() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let width = 80;
+    let height = 14;
+    chat.insert_transcript_cell(Arc::new(AgentMessageCell::new_markdown(
+        "稳定中文回答不会被后续状态动画重写。".to_string(),
+        true,
+    )));
+    chat.on_task_started();
+
+    let backend = AuditedVT100Backend::new(width, height);
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(backend)
+        .expect("audited terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    render_chat_to_audited_terminal(&chat, &mut terminal);
+    let before = terminal.last_frame_buffer().clone();
+
+    terminal.backend_mut().clear_frames();
+    chat.on_agent_message_delta("新增流式中文 tail".to_string());
+    chat.on_commit_tick();
+    render_chat_to_audited_terminal(&chat, &mut terminal);
+    let after = terminal.last_frame_buffer().clone();
+
+    assert_sparse_frame("streaming CJK display tick", &before, &after, &terminal);
+}
+
+#[tokio::test]
+async fn finalizing_stream_does_not_repaint_stable_rows() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let width = 80;
+    let height = 14;
+    chat.insert_transcript_cell(Arc::new(AgentMessageCell::new_markdown(
+        "稳定中文历史行".to_string(),
+        true,
+    )));
+    chat.on_task_started();
+    chat.on_agent_message_delta("流式最终回答".to_string());
+    chat.on_commit_tick();
+
+    let backend = AuditedVT100Backend::new(width, height);
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(backend)
+        .expect("audited terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    render_chat_to_audited_terminal(&chat, &mut terminal);
+    let before = terminal.last_frame_buffer().clone();
+    let _ = drain_events(&mut rx);
+
+    chat.flush_answer_stream_with_separator();
+    for event in drain_events(&mut rx) {
+        if let Some(cell) = into_insert_history_cell(event) {
+            chat.insert_transcript_cell(Arc::from(cell));
+        }
+    }
+    terminal.backend_mut().clear_frames();
+    render_chat_to_audited_terminal(&chat, &mut terminal);
+    let after = terminal.last_frame_buffer().clone();
+
+    assert_sparse_frame("stream finalization", &before, &after, &terminal);
+    let frame = terminal.backend().last_frame().expect("finalize frame");
+    assert_eq!(frame.stats.printed_columns, 0, "{}", frame.escaped_ansi());
+    assert!(
+        frame.stats.erase_line_rows.is_empty(),
+        "{}",
+        frame.escaped_ansi()
+    );
+    assert_eq!(
+        frame.stats.erase_display_count,
+        0,
+        "{}",
+        frame.escaped_ansi()
+    );
+}
+
+#[tokio::test]
+async fn insert_history_then_next_frame_keeps_buffer_mapping() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let width = 80;
+    let height = 12;
+    chat.insert_transcript_cell(Arc::new(AgentMessageCell::new_markdown(
+        "第一条稳定历史".to_string(),
+        true,
+    )));
+
+    let backend = AuditedVT100Backend::new(width, height);
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(backend)
+        .expect("audited terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    render_chat_to_audited_terminal(&chat, &mut terminal);
+    let before = terminal.last_frame_buffer().clone();
+
+    chat.insert_transcript_cell(Arc::new(AgentMessageCell::new_markdown(
+        "第二条新增历史".to_string(),
+        true,
+    )));
+    terminal.backend_mut().clear_frames();
+    render_chat_to_audited_terminal(&chat, &mut terminal);
+    let after = terminal.last_frame_buffer().clone();
+    assert_sparse_frame("ordinary history insertion", &before, &after, &terminal);
+
+    terminal.backend_mut().clear_frames();
+    render_chat_to_audited_terminal(&chat, &mut terminal);
+    let no_op = terminal
+        .backend()
+        .last_frame()
+        .expect("post-insert no-op frame");
+    assert_eq!(no_op.stats.printed_columns, 0, "{}", no_op.escaped_ansi());
+    assert!(
+        no_op.stats.erase_line_rows.is_empty(),
+        "{}",
+        no_op.escaped_ansi()
+    );
+    assert_eq!(
+        no_op.stats.erase_display_count,
+        0,
+        "{}",
+        no_op.escaped_ansi()
+    );
 }
 
 #[tokio::test]
@@ -2675,8 +2888,10 @@ async fn make_chatwidget_manual_inner_with_otel(
         token_info: None,
         input_slimming: None,
         stream_controller: None,
+        answer_stream_display_started: false,
         pending_streamed_agent_message_echo: None,
         plan_stream_controller: None,
+        plan_stream_display_started: false,
         plan_stream_revision: 0,
         answer_stream_started_this_turn: false,
         running_commands: HashMap::new(),
@@ -2862,8 +3077,10 @@ async fn make_chatwidget_manual_with_frame_requester(
         token_info: None,
         input_slimming: None,
         stream_controller: None,
+        answer_stream_display_started: false,
         pending_streamed_agent_message_echo: None,
         plan_stream_controller: None,
+        plan_stream_display_started: false,
         plan_stream_revision: 0,
         answer_stream_started_this_turn: false,
         running_commands: HashMap::new(),
@@ -2999,21 +3216,13 @@ pub(crate) async fn make_chatwidget_manual_with_sender() -> (
     (widget, app_event_tx, rx, op_rx)
 }
 
-fn into_insert_history_cell_with_viewport_repaint(
-    event: AppEvent,
-) -> Option<(Box<dyn HistoryCell>, bool)> {
+fn into_insert_history_cell(event: AppEvent) -> Option<Box<dyn HistoryCell>> {
     match event {
         AppEvent::InsertHistoryCell(cell) | AppEvent::InsertThreadHistoryCell { cell, .. } => {
-            Some((cell, false))
+            Some(cell)
         }
-        AppEvent::InsertHistoryCellWithViewportRepaint(cell)
-        | AppEvent::InsertThreadHistoryCellWithViewportRepaint { cell, .. } => Some((cell, true)),
         _ => None,
     }
-}
-
-fn into_insert_history_cell(event: AppEvent) -> Option<Box<dyn HistoryCell>> {
-    into_insert_history_cell_with_viewport_repaint(event).map(|(cell, _)| cell)
 }
 
 fn drain_insert_history(
@@ -3283,120 +3492,62 @@ fn assert_cjk_transcript_word_order(rendered: &str, context: &str) {
     );
 }
 
-fn assert_small_screen_final_answer_order(rendered: &str, context: &str, needle: &str) {
-    assert!(
-        rendered.contains(needle),
-        "{context} missing final answer needle: {rendered:?}"
-    );
-    let workflow_idx = rendered
-        .find("workflow_output")
-        .unwrap_or_else(|| panic!("{context} missing workflow_output marker: {rendered:?}"));
-    let git_idx = rendered
-        .find("git diff --check")
-        .unwrap_or_else(|| panic!("{context} missing git diff --check marker: {rendered:?}"));
-    assert!(
-        workflow_idx < git_idx,
-        "{context} reordered workflow/git markers: {rendered:?}"
-    );
-    assert!(
-        !rendered.contains("git diffcheck"),
-        "{context} rendered known git diff corruption: {rendered:?}"
-    );
-}
-
-const FOLLOW_UP_CJK_ORDER_TEXT: &str = "也就是说同一轮 follow-up 仍然发：";
-const FOLLOW_UP_CJK_STALE_ORDER_TEXT: &str = "也就是说同一 follow轮-up 仍然发：";
-const SESSION_MODEL_NAME_ORDER_TEXT: &str =
-    "方案取舍也清楚了：只给 gpt-5.6-sol 模型卡补工具名是局部修补";
-const SESSION_MODEL_NAME_STALE_ORDER_TEXT: &str =
-    "方案取舍也清楚了：只给 g-5.pt6-sol 模型卡补工具名是局部修补";
-const CURRENT_SESSION_PLAN_TEXT: &str = concat!(
-    "不能简单在两种实现之间来回切换。更合理的修复是：\n\n",
-    "- 纯 fg/bg/modifier 动画继续只更新动画行。\n",
-    "- composer 文本、状态语义文本或布局发生真实变化时，触发一次风险行修复。\n",
-    "- 保留三帧预算，用于 Ctrl+T 打开、风险内容插入和宽度变化等一次性转换。\n",
-    "- 同时保留两个回归测试：\n",
-    "  - 样式动画不能持续重画 CJK 行。\n",
-    "  - 预算耗尽后，后续语义更新仍能修复 gpt-5.6-sol。\n",
-);
-
-fn assert_follow_up_cjk_order(rendered: &str, context: &str) {
-    assert!(
-        rendered.contains(FOLLOW_UP_CJK_ORDER_TEXT),
-        "{context} missing correct follow-up text: {rendered:?}"
-    );
-    assert!(
-        !rendered.contains(FOLLOW_UP_CJK_STALE_ORDER_TEXT),
-        "{context} rendered known follow-up stale order: {rendered:?}"
-    );
-}
-
-fn assert_current_session_plan_order(rendered: &str, context: &str) {
-    let compact: String = rendered.chars().filter(|ch| !ch.is_whitespace()).collect();
-    for expected in [
-        "不能简单在两种实现之间来回切换。更合理的修复是：",
-        "-composer文本、状态语义文本或布局发生真实变化时，触发一次风险行修复。",
-        "-同时保留两个回归测试：",
-        "-样式动画不能持续重画CJK行。",
-        "-预算耗尽后，后续语义更新仍能修复gpt-5.6-sol。",
-    ] {
-        assert!(
-            compact.contains(expected),
-            "{context} missing correct session plan text {expected:?}: {rendered:?}"
-        );
-    }
-    for stale in [
-        "来回切换更合理。",
-        "发生真实时，变化触发",
-        "同时保留两个回归：测试-",
-        "g-5.pt6-sol",
-    ] {
-        assert!(
-            !compact.contains(stale),
-            "{context} retained stale session plan text {stale:?}: {rendered:?}"
-        );
-    }
-}
-
 fn render_chat_to_vt100_screen(
     chat: &ChatWidget,
     terminal: &mut crate::product::tui_app::custom_terminal::Terminal<VT100Backend>,
 ) -> String {
-    let width = terminal.backend().vt100().screen().size().1;
-    if chat.prepare_transcript_terminal_repaint(width) {
-        terminal.invalidate_viewport();
-    }
-    if chat.frame_requester().take_risky_row_repair_request() {
-        terminal.request_visible_risky_row_repaint();
-    }
     terminal
         .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
         .expect("draw chat widget");
     terminal.backend().vt100().screen().contents()
 }
 
-fn corrupt_vt100_row(
-    terminal: &mut crate::product::tui_app::custom_terminal::Terminal<VT100Backend>,
-    y: u16,
-    text: &str,
+fn render_chat_to_audited_terminal(
+    chat: &ChatWidget,
+    terminal: &mut crate::product::tui_app::custom_terminal::Terminal<AuditedVT100Backend>,
 ) {
-    let backend = terminal.backend_mut();
-    crossterm::queue!(
-        backend,
-        MoveTo(0, y),
-        Clear(ClearType::UntilNewLine),
-        Print(text)
-    )
-    .expect("corrupt VT100 row");
-    backend.flush().expect("flush corrupted VT100 row");
+    terminal
+        .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
+        .expect("draw audited chat widget");
 }
 
-fn screen_row_containing(contents: &str, needle: &str) -> u16 {
-    contents
-        .lines()
-        .position(|line| line.contains(needle))
-        .and_then(|row| u16::try_from(row).ok())
-        .unwrap_or_else(|| panic!("screen should contain {needle:?}: {contents:?}"))
+fn assert_sparse_frame(
+    stage: &str,
+    before: &Buffer,
+    after: &Buffer,
+    terminal: &crate::product::tui_app::custom_terminal::Terminal<AuditedVT100Backend>,
+) {
+    let frame = terminal
+        .backend()
+        .last_frame()
+        .unwrap_or_else(|| panic!("{stage}: missing audited frame"));
+    let audit = analyze_buffer_frame(before, after, frame);
+    let diagnostic = audit.diagnostic(stage, frame);
+
+    assert!(audit.stable_rows_touched.is_empty(), "{diagnostic}");
+    assert!(audit.stable_cjk_rows_touched.is_empty(), "{diagnostic}");
+    assert!(frame.stats.erase_line_rows.is_empty(), "{diagnostic}");
+    assert_eq!(frame.stats.erase_display_count, 0, "{diagnostic}");
+    assert!(audit.row_write_amplification <= 1.0, "{diagnostic}");
+    assert!(
+        frame
+            .stats
+            .printed_columns_by_row
+            .values()
+            .all(|columns| *columns <= usize::from(after.area.width)),
+        "{diagnostic}"
+    );
+    assert!(!frame.stats.invalid_utf8, "{diagnostic}");
+    assert!(
+        !terminal
+            .backend()
+            .vt100()
+            .screen()
+            .contents()
+            .contains('\u{fffd}'),
+        "{diagnostic}"
+    );
+    assert_vt100_grid_matches_buffer(stage, after, terminal.backend().vt100(), &diagnostic);
 }
 
 fn buffer_to_string(buf: &Buffer) -> String {
@@ -5110,6 +5261,7 @@ async fn pending_proposed_plan_live_tail_background_fills_rendered_row() {
 
     chat.on_task_started();
     chat.on_plan_delta("- Step 1\n".to_string());
+    chat.on_commit_tick();
 
     let area = Rect::new(0, 0, 80, 18);
     let mut buf = Buffer::empty(area);
@@ -5370,6 +5522,12 @@ async fn streamed_proposed_plan_is_not_inserted_before_completion() {
     chat.on_plan_delta(format!("{source}\n"));
 
     assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(
+        chat.transcript_live_tail_for_mode(32, TranscriptRenderMode::Display)
+            .is_none(),
+        "provider deltas must stay hidden until the display clock commits them"
+    );
+    chat.on_commit_tick();
     let tail = chat
         .transcript_live_tail_for_mode(32, TranscriptRenderMode::Display)
         .expect("expected proposed plan live tail before completion");
@@ -5392,6 +5550,7 @@ async fn streamed_answer_and_proposed_plan_share_live_tail_before_completion() {
     chat.on_task_started();
     chat.on_agent_message_delta("Intro\n".to_string());
     chat.on_plan_delta("- Step 1\n".to_string());
+    chat.on_commit_tick();
 
     assert!(drain_insert_history(&mut rx).is_empty());
     let tail = chat
@@ -5425,6 +5584,38 @@ async fn streamed_answer_and_proposed_plan_share_live_tail_before_completion() {
 }
 
 #[tokio::test]
+async fn completing_proposed_plan_commits_unshown_tail_immediately() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+
+    let plan = "- Step 1\n- Step 2\n";
+    chat.on_plan_delta(plan.to_string());
+    assert!(
+        chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+            .is_none()
+    );
+
+    chat.on_plan_item_completed(plan.to_string());
+
+    let tail = chat
+        .transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+        .expect("completed plan should commit its pending display tail");
+    let rendered = lines_to_single_string(&tail.lines);
+    assert!(
+        rendered.contains("Step 1") && rendered.contains("Step 2"),
+        "expected complete plan tail, got {rendered:?}"
+    );
+    assert!(
+        drain_events(&mut rx)
+            .iter()
+            .any(|event| matches!(event, AppEvent::StopCommitAnimation))
+    );
+}
+
+#[tokio::test]
 async fn completing_pending_proposed_plan_stops_commit_animation() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::Identities, true);
@@ -5436,6 +5627,7 @@ async fn completing_pending_proposed_plan_stops_commit_animation() {
     chat.on_task_started();
     let plan = "- Step 1\n- Step 2\n- Step 3\n";
     chat.on_plan_delta(plan.to_string());
+    chat.on_commit_tick();
     assert!(
         chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
             .is_some(),
@@ -5493,6 +5685,7 @@ async fn finalize_turn_clears_pending_proposed_plan_live_tail() {
 
     chat.on_task_started();
     chat.on_plan_delta("- Step 1\n- Step 2\n".to_string());
+    chat.on_commit_tick();
 
     assert!(
         chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
@@ -5549,6 +5742,7 @@ async fn finalize_turn_clears_pending_plan_stream_but_keeps_latest_completed_pla
     chat.on_plan_item_completed(completed_plan.to_string());
     chat.on_task_started();
     chat.on_plan_delta("# Pending Replacement\n- Step 1\n".to_string());
+    chat.on_commit_tick();
 
     assert!(chat.plan_stream_controller.is_some());
     assert!(chat.plan_item_active);
@@ -5597,6 +5791,7 @@ async fn flushing_answer_stream_keeps_plan_animation_running() {
     chat.on_task_started();
     chat.on_agent_message_delta("Intro\n".to_string());
     chat.on_plan_delta("- Step 1\n- Step 2\n".to_string());
+    chat.on_commit_tick();
     let _ = drain_events(&mut rx);
 
     chat.flush_answer_stream_with_separator();
@@ -5642,7 +5837,7 @@ async fn flushing_answer_stream_keeps_plan_animation_running() {
 }
 
 #[tokio::test]
-async fn streamed_proposed_plan_reveals_completed_lines_incrementally() {
+async fn streamed_proposed_plan_commits_all_pending_deltas_per_tick() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::Identities, true);
     let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
@@ -5652,6 +5847,11 @@ async fn streamed_proposed_plan_reveals_completed_lines_incrementally() {
 
     chat.on_task_started();
     chat.on_plan_delta("- Step 1\n".to_string());
+    assert!(
+        chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+            .is_none()
+    );
+    chat.on_commit_tick();
     let tail = chat
         .transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
         .expect("expected proposed plan live tail after first line");
@@ -5662,6 +5862,11 @@ async fn streamed_proposed_plan_reveals_completed_lines_incrementally() {
     );
 
     chat.on_plan_delta("- Step 2\n".to_string());
+    let before_tick = chat
+        .transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+        .expect("expected committed first plan delta");
+    assert!(!lines_to_single_string(&before_tick.lines).contains("Step 2"));
+    chat.on_commit_tick();
     let tail = chat
         .transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
         .expect("expected proposed plan live tail after second line");
@@ -12281,7 +12486,8 @@ async fn final_agent_message_preserves_screenshot_cjk_ascii_order() {
         "rewrapped screenshot CJK/ASCII VT100 screen",
     );
     let compact_narrow: String = narrow_screen
-        .chars()
+        .lines()
+        .flat_map(|line| line.split('│').next().unwrap_or(line).chars())
         .filter(|ch| !ch.is_whitespace() && *ch != '│')
         .collect();
     assert!(
@@ -12477,23 +12683,14 @@ async fn streamed_agent_message_preserves_cjk_transcript_word_order() {
 
     let mut saw_committed_answer = false;
     for event in drain_events(&mut rx) {
-        if let Some((cell, repaint_viewport)) =
-            into_insert_history_cell_with_viewport_repaint(event)
-        {
+        if let Some(cell) = into_insert_history_cell(event) {
             let rendered = lines_to_single_string(&cell.display_lines(width));
             if cell.as_any().is::<AgentMessageCell>() {
                 saw_committed_answer = true;
-                assert!(
-                    repaint_viewport,
-                    "streamed CJK final answer should request viewport repaint"
-                );
                 assert_cjk_transcript_word_order(&rendered, "streamed CJK committed cell");
             }
             let cell: Arc<dyn HistoryCell> = Arc::from(cell);
             chat.insert_transcript_cell(cell);
-            if repaint_viewport {
-                terminal.invalidate_viewport();
-            }
         }
     }
     assert!(
@@ -12506,227 +12703,7 @@ async fn streamed_agent_message_preserves_cjk_transcript_word_order() {
 }
 
 #[tokio::test]
-async fn live_tail_completion_repaint_repairs_screenshot_cjk_ascii_divergence() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let width = 180;
-    let height = 36;
-    chat.last_rendered_width.set(Some(usize::from(width)));
-    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
-        VT100Backend::new(width, height),
-    )
-    .expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
-
-    chat.handle_codex_event(Event {
-        id: "screenshot-live-turn".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            model_context_window: None,
-            identity_kind: IdentityKind::Nobody,
-        }),
-    });
-
-    for delta in [
-        "我看了 `papers/template.tex` 和原始 `docs/input-slimming.md`，你的三个疑问都成立。\n\n",
-        "- `R_t=B(H_t)` 里的 `B`：原始文档里定义了，`B` 是 runtime 的 build-request 过程，所以读者会卡住。\n",
-        "- 是否有必要区分 `R_t` 和 `H_t`：有必要。input slimming 实际改写的是 request 层面的 `R_t`，不是直接改写整个 agent 状态 `H_t`。\n",
-        "- `\\tilde{R}_t` 和 `X_\\tau` 的关系：现在确实跳跃，需要把单步 request。input slimming 过渡到整条 trajectory。\n",
-    ] {
-        chat.handle_codex_event(Event {
-            id: "screenshot-live-delta".into(),
-            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-                delta: delta.to_string(),
-            }),
-        });
-        chat.on_commit_tick();
-        let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-        assert!(
-            !screen.contains("requestinput slimming。"),
-            "live tail rendered known request/input corruption: {screen:?}"
-        );
-    }
-
-    let mut live_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    for _ in 0..8 {
-        if live_screen.contains("request。input slimming") {
-            break;
-        }
-        chat.on_commit_tick();
-        live_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    }
-    assert_screenshot_cjk_ascii_order(&live_screen, "screenshot CJK/ASCII live tail");
-    let template_row = screen_row_containing(&live_screen, "papers/template.tex");
-    let stale_row = "我看了 papers/template了.tex 和原始 docs/input-slimming.md";
-    corrupt_vt100_row(&mut terminal, template_row, stale_row);
-    let corrupted_screen = terminal.backend().vt100().screen().contents();
-    assert!(
-        corrupted_screen.contains("papers/template了.tex"),
-        "test setup should corrupt screenshot VT100 row: {corrupted_screen:?}"
-    );
-
-    chat.handle_codex_event(Event {
-        id: "screenshot-live-complete".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            last_agent_message: None,
-        }),
-    });
-
-    let mut saw_committed_answer = false;
-    for event in drain_events(&mut rx) {
-        if let Some((cell, repaint_viewport)) =
-            into_insert_history_cell_with_viewport_repaint(event)
-        {
-            let rendered = lines_to_single_string(&cell.display_lines(width));
-            if cell.as_any().is::<AgentMessageCell>() {
-                saw_committed_answer = true;
-                assert!(
-                    repaint_viewport,
-                    "screenshot CJK final answer should request viewport repaint"
-                );
-                assert_screenshot_cjk_ascii_order(&rendered, "screenshot CJK/ASCII committed cell");
-            }
-            let cell: Arc<dyn HistoryCell> = Arc::from(cell);
-            chat.insert_transcript_cell(cell);
-            if repaint_viewport {
-                terminal.invalidate_viewport();
-            }
-        }
-    }
-    assert!(
-        saw_committed_answer,
-        "expected screenshot CJK/ASCII answer to flush into history"
-    );
-
-    let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    assert_screenshot_cjk_ascii_order(&screen, "screenshot CJK/ASCII repaired VT100 screen");
-}
-
-#[tokio::test]
-async fn live_tail_completion_repaints_cybergym_fuzzer_cjk_ascii_divergence() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let width = 200;
-    let height = 80;
-    chat.last_rendered_width.set(Some(usize::from(width)));
-    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
-        VT100Backend::new(width, height),
-    )
-    .expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
-
-    chat.handle_codex_event(Event {
-        id: "cybergym-fuzzer-live-turn".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            model_context_window: None,
-            identity_kind: IdentityKind::Nobody,
-        }),
-    });
-
-    for delta in CYBERGYM_FUZZER_CJK_ASCII_ORDER_TEXT.split_inclusive('\n') {
-        chat.handle_codex_event(Event {
-            id: "cybergym-fuzzer-live-delta".into(),
-            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-                delta: delta.to_string(),
-            }),
-        });
-        chat.on_commit_tick();
-    }
-
-    let mut live_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    for _ in 0..128 {
-        if live_screen.contains("“目标程序 + fuzz harness”的组合体") {
-            break;
-        }
-        chat.on_commit_tick();
-        live_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    }
-    assert!(
-        live_screen.contains("“目标程序 + fuzz harness”的组合体"),
-        "expected CyberGym fuzzer live tail to show target/harness phrase: {live_screen:?}"
-    );
-    assert!(
-        !live_screen.contains("fuzz”的 harness组合体"),
-        "live tail rendered known CyberGym fuzzer corruption: {live_screen:?}"
-    );
-
-    let target_row = screen_row_containing(&live_screen, "fuzz harness");
-    corrupt_vt100_row(
-        &mut terminal,
-        target_row,
-        "所以 cybergym-server-data/.../out/<fuzzer> 本身就是“目标程序 + fuzz”的 harness组合体。",
-    );
-    let corrupted_screen = terminal.backend().vt100().screen().contents();
-    assert!(
-        corrupted_screen.contains("fuzz”的 harness组合体"),
-        "test setup should corrupt CyberGym fuzzer VT100 row: {corrupted_screen:?}"
-    );
-
-    chat.handle_codex_event(Event {
-        id: "cybergym-fuzzer-live-complete".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            last_agent_message: None,
-        }),
-    });
-
-    let mut saw_committed_answer = false;
-    for event in drain_events(&mut rx) {
-        if let Some((cell, repaint_viewport)) =
-            into_insert_history_cell_with_viewport_repaint(event)
-        {
-            let rendered = lines_to_single_string(&cell.display_lines(width));
-            if cell.as_any().is::<AgentMessageCell>() {
-                saw_committed_answer = true;
-                assert_cybergym_fuzzer_cjk_ascii_order(&rendered, "CyberGym fuzzer committed cell");
-            }
-            let cell: Arc<dyn HistoryCell> = Arc::from(cell);
-            chat.insert_transcript_cell(cell);
-            if repaint_viewport {
-                terminal.invalidate_viewport();
-            }
-        }
-    }
-    assert!(
-        saw_committed_answer,
-        "expected CyberGym fuzzer answer to flush into history"
-    );
-
-    let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    assert_cybergym_fuzzer_cjk_ascii_order(&screen, "CyberGym fuzzer repaired VT100 screen");
-    let next_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    assert_cybergym_fuzzer_cjk_ascii_order(&next_screen, "CyberGym fuzzer next VT100 frame");
-}
-
-#[tokio::test]
-async fn transcript_terminal_repaint_signal_is_bounded_for_unchanged_frame() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    let width = 180;
-    chat.last_rendered_width.set(Some(usize::from(width)));
-
-    chat.handle_codex_event(Event {
-        id: "one-shot-turn".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            model_context_window: None,
-            identity_kind: IdentityKind::Nobody,
-        }),
-    });
-    chat.handle_codex_event(Event {
-        id: "one-shot-delta".into(),
-        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-            delta: "request。input slimming 不是直接改写整个 agent 状态\n".to_string(),
-        }),
-    });
-    chat.on_commit_tick();
-
-    assert!(
-        !chat.prepare_transcript_terminal_repaint(width),
-        "new live tail should use normal diff repaint instead of terminal repair"
-    );
-    assert!(
-        !chat.prepare_transcript_terminal_repaint(width),
-        "unchanged live tail should not force terminal repaints"
-    );
-}
-
-#[tokio::test]
-async fn non_streamed_agent_message_turn_complete_separator_requests_viewport_repaint() {
+async fn non_streamed_agent_message_turn_complete_separator_uses_ordinary_history_insertion() {
     let cfg = test_config().await;
     let model = "gpt-5";
     let otel_manager = test_otel_manager_with_runtime_reader(&cfg, model);
@@ -12744,17 +12721,12 @@ async fn non_streamed_agent_message_turn_complete_separator_requests_viewport_re
 
     let mut saw_separator = false;
     for event in drain_events(&mut rx) {
-        let Some((cell, repaint_viewport)) = into_insert_history_cell_with_viewport_repaint(event)
-        else {
+        let Some(cell) = into_insert_history_cell(event) else {
             continue;
         };
         let rendered = lines_to_single_string(&cell.display_lines(120));
         if rendered.contains("Inference:") {
             saw_separator = true;
-            assert!(
-                repaint_viewport,
-                "turn-complete runtime separator should request viewport repaint: {rendered:?}"
-            );
         }
     }
 
@@ -12765,7 +12737,7 @@ async fn non_streamed_agent_message_turn_complete_separator_requests_viewport_re
 }
 
 #[tokio::test]
-async fn review_exit_explanation_requests_viewport_repaint() {
+async fn review_exit_explanation_uses_ordinary_history_insertion() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let explanation = "Review comment:\nFormatting the potential body\n\
         Preserve saved default mining workflows on resume.";
@@ -12785,24 +12757,15 @@ async fn review_exit_explanation_requests_viewport_repaint() {
     let mut saw_explanation = false;
     let mut saw_finished_banner = false;
     for event in drain_events(&mut rx) {
-        let Some((cell, repaint_viewport)) = into_insert_history_cell_with_viewport_repaint(event)
-        else {
+        let Some(cell) = into_insert_history_cell(event) else {
             continue;
         };
         let rendered = lines_to_single_string(&cell.display_lines(100));
         if cell.as_any().is::<AgentMessageCell>() && rendered.contains("Review comment:") {
             saw_explanation = true;
-            assert!(
-                repaint_viewport,
-                "review explanation should request viewport repaint: {rendered:?}"
-            );
         }
         if rendered.contains("<< Code review finished >>") {
             saw_finished_banner = true;
-            assert!(
-                !repaint_viewport,
-                "review finished banner should keep ordinary history insertion"
-            );
         }
     }
 
@@ -13054,8 +13017,7 @@ async fn review_reasoning_summary_before_review_output_is_not_visible() {
     let mut saw_explanation = false;
     let mut saw_finished_banner = false;
     for event in drain_events(&mut rx) {
-        let Some((cell, repaint_viewport)) = into_insert_history_cell_with_viewport_repaint(event)
-        else {
+        let Some(cell) = into_insert_history_cell(event) else {
             continue;
         };
         let rendered = lines_to_single_string(&cell.display_lines(120));
@@ -13063,17 +13025,9 @@ async fn review_reasoning_summary_before_review_output_is_not_visible() {
 
         if rendered.contains("No discrete correctness issues") {
             saw_explanation = true;
-            assert!(
-                repaint_viewport,
-                "review explanation should request viewport repaint: {rendered:?}"
-            );
         }
         if rendered.contains("<< Code review finished >>") {
             saw_finished_banner = true;
-            assert!(
-                !repaint_viewport,
-                "review finished banner should keep ordinary history insertion"
-            );
         }
     }
 
@@ -13158,12 +13112,11 @@ async fn review_reasoning_delta_without_final_is_discarded_on_exit() {
 }
 
 #[tokio::test]
-async fn hidden_reasoning_deltas_do_not_request_risky_row_repair() {
+async fn hidden_reasoning_deltas_request_only_ordinary_frames() {
     let (frame_requester, mut frame_rx) = FrameRequester::test_with_receiver();
     let (mut chat, _rx, _op_rx) =
-        make_chatwidget_manual_with_frame_requester(None, frame_requester.clone()).await;
+        make_chatwidget_manual_with_frame_requester(None, frame_requester).await;
     while frame_rx.try_recv().is_ok() {}
-    let _ = frame_requester.take_risky_row_repair_request();
     chat.unified_exec_wait_streak = Some(UnifiedExecWaitStreak::new(
         "hidden-process".to_string(),
         Some("sleep 5".to_string()),
@@ -13184,45 +13137,7 @@ async fn hidden_reasoning_deltas_do_not_request_risky_row_repair() {
             frame_rx.try_recv().is_ok(),
             "hidden reasoning should still request an ordinary frame"
         );
-        assert!(
-            !frame_requester.take_risky_row_repair_request(),
-            "hidden reasoning delta requested a risky-row repair"
-        );
     }
-}
-
-#[tokio::test]
-async fn repeated_reasoning_header_requests_only_one_risky_row_repair() {
-    let (frame_requester, mut frame_rx) = FrameRequester::test_with_receiver();
-    let (mut chat, _rx, _op_rx) =
-        make_chatwidget_manual_with_frame_requester(None, frame_requester.clone()).await;
-    chat.bottom_pane.ensure_status_indicator();
-    while frame_rx.try_recv().is_ok() {}
-    let _ = frame_requester.take_risky_row_repair_request();
-
-    chat.handle_codex_event(Event {
-        id: "reasoning-header-first".into(),
-        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: "**Inspecting code**".into(),
-        }),
-    });
-    assert!(frame_requester.take_risky_row_repair_request());
-    while frame_rx.try_recv().is_ok() {}
-
-    chat.handle_codex_event(Event {
-        id: "reasoning-header-same".into(),
-        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: " while reading more files".into(),
-        }),
-    });
-    assert!(
-        frame_rx.try_recv().is_ok(),
-        "same reasoning header should still request an ordinary frame"
-    );
-    assert!(
-        !frame_requester.take_risky_row_repair_request(),
-        "unchanged reasoning header requested another risky-row repair"
-    );
 }
 
 #[tokio::test]
@@ -13408,753 +13323,6 @@ fn reasoning_presentation_keeps_multiple_inline_bold_spans() {
             latest_status_title: None,
             transcript_markdown: "**First detail** and **second detail** stay visible.".to_string(),
         }
-    );
-}
-
-#[tokio::test]
-async fn turn_complete_separator_viewport_repaint_repairs_review_vt100_screen_divergence() {
-    let cfg = test_config().await;
-    let model = "gpt-5";
-    let otel_manager = test_otel_manager_with_runtime_reader(&cfg, model);
-    let (mut chat, mut rx, _op_rx) =
-        make_chatwidget_manual_inner_with_otel(Some(model), Some(otel_manager.clone())).await;
-    let width = 120;
-    let height = 48;
-    chat.last_rendered_width.set(Some(usize::from(width)));
-    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
-        VT100Backend::new(width, height),
-    )
-    .expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
-
-    let review_text = "Review comment:\nFormatting the potential body\n\
-        For resumed runs, default_cybergym_mining_workflows() must preserve the saved config.";
-    let review_needle = "default_cybergym_mining_workflows()";
-
-    chat.on_task_started();
-    record_test_runtime_metrics(&otel_manager);
-    chat.on_agent_message(review_text.to_string());
-
-    for event in drain_events(&mut rx) {
-        if let Some((cell, repaint_viewport)) =
-            into_insert_history_cell_with_viewport_repaint(event)
-        {
-            let cell: Arc<dyn HistoryCell> = Arc::from(cell);
-            chat.insert_transcript_cell(cell);
-            if repaint_viewport {
-                terminal.invalidate_viewport();
-            }
-        }
-    }
-
-    let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    let review_row = screen_row_containing(&screen, review_needle);
-    let stale_row = "STALE prompt/status overlap default_cybergym_mining_workflows()";
-    corrupt_vt100_row(&mut terminal, review_row, stale_row);
-    let corrupted_screen = terminal.backend().vt100().screen().contents();
-    assert!(
-        corrupted_screen.contains(stale_row),
-        "test setup should corrupt review VT100 row: {corrupted_screen:?}"
-    );
-
-    chat.on_task_complete(None, false);
-
-    let mut saw_separator_repaint = false;
-    for event in drain_events(&mut rx) {
-        if let Some((cell, repaint_viewport)) =
-            into_insert_history_cell_with_viewport_repaint(event)
-        {
-            let rendered = lines_to_single_string(&cell.display_lines(width));
-            if rendered.contains("Inference:") {
-                saw_separator_repaint = true;
-                assert!(
-                    repaint_viewport,
-                    "turn-complete separator should request viewport repaint"
-                );
-            }
-            let cell: Arc<dyn HistoryCell> = Arc::from(cell);
-            chat.insert_transcript_cell(cell);
-            if repaint_viewport {
-                terminal.invalidate_viewport();
-            }
-        }
-    }
-    assert!(
-        saw_separator_repaint,
-        "expected turn-complete runtime separator repaint event"
-    );
-
-    let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    assert!(
-        screen.contains(review_needle),
-        "viewport repaint should restore review text: {screen:?}"
-    );
-    assert!(
-        !screen.contains(stale_row),
-        "viewport repaint kept stale review corruption: {screen:?}"
-    );
-}
-
-#[tokio::test]
-async fn streamed_answer_finalize_requests_viewport_repaint_for_cjk_text() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.last_rendered_width.set(Some(120));
-
-    chat.handle_codex_event(Event {
-        id: "cjk-repaint-turn".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            model_context_window: None,
-            identity_kind: IdentityKind::Nobody,
-        }),
-    });
-
-    for delta in [
-        "我按工具输出理解：看到的",
-        "“大",
-        "工具输出”",
-        "细节已经保留。\n",
-    ] {
-        chat.handle_codex_event(Event {
-            id: "cjk-repaint-delta".into(),
-            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-                delta: delta.to_string(),
-            }),
-        });
-        chat.on_commit_tick();
-    }
-
-    chat.handle_codex_event(Event {
-        id: "cjk-repaint-complete".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            last_agent_message: None,
-        }),
-    });
-
-    let mut saw_committed_answer = false;
-    let mut saw_repaint_request = false;
-    for event in drain_events(&mut rx) {
-        if let Some((cell, repaint_viewport)) =
-            into_insert_history_cell_with_viewport_repaint(event)
-        {
-            let rendered = lines_to_single_string(&cell.display_lines(120));
-            if cell.as_any().is::<AgentMessageCell>() {
-                saw_committed_answer = true;
-                saw_repaint_request |= repaint_viewport;
-                assert!(
-                    rendered.contains("看到的“大工具输出”细节"),
-                    "committed answer should preserve CJK quote order: {rendered:?}"
-                );
-            }
-        }
-    }
-
-    assert!(
-        saw_committed_answer,
-        "expected streamed answer to flush into history"
-    );
-    assert!(
-        saw_repaint_request,
-        "expected streamed answer finalize to request viewport repaint"
-    );
-}
-
-#[tokio::test]
-async fn streamed_answer_viewport_repaint_repairs_cjk_vt100_screen_divergence() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let width = 120;
-    let height = 48;
-    chat.last_rendered_width.set(Some(usize::from(width)));
-    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
-        VT100Backend::new(width, height),
-    )
-    .expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
-
-    chat.handle_codex_event(Event {
-        id: "cjk-vt100-turn".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            model_context_window: None,
-            identity_kind: IdentityKind::Nobody,
-        }),
-    });
-
-    for delta in ["看到的", "“大", "工具输出”", "细节\n"] {
-        chat.handle_codex_event(Event {
-            id: "cjk-vt100-delta".into(),
-            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-                delta: delta.to_string(),
-            }),
-        });
-        chat.on_commit_tick();
-        let _ = render_chat_to_vt100_screen(&chat, &mut terminal);
-    }
-
-    let live_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    let live_row = screen_row_containing(&live_screen, "看到的“大工具输出”细节");
-    corrupt_vt100_row(&mut terminal, live_row, "看到的工具输出”细“大节");
-    let corrupted_screen = terminal.backend().vt100().screen().contents();
-    assert!(
-        corrupted_screen.contains("看到的工具输出”细“大节"),
-        "test setup should corrupt streamed VT100 row: {corrupted_screen:?}"
-    );
-
-    chat.handle_codex_event(Event {
-        id: "cjk-vt100-complete".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            last_agent_message: None,
-        }),
-    });
-
-    let mut saw_committed_answer = false;
-    for event in drain_events(&mut rx) {
-        if let Some((cell, repaint_viewport)) =
-            into_insert_history_cell_with_viewport_repaint(event)
-        {
-            let rendered = lines_to_single_string(&cell.display_lines(width));
-            if cell.as_any().is::<AgentMessageCell>() {
-                saw_committed_answer = true;
-                assert!(
-                    repaint_viewport,
-                    "streamed final answer should request viewport repaint"
-                );
-                assert!(
-                    rendered.contains("看到的“大工具输出”细节"),
-                    "streamed committed cell should preserve CJK quote order: {rendered:?}"
-                );
-            }
-            let cell: Arc<dyn HistoryCell> = Arc::from(cell);
-            chat.insert_transcript_cell(cell);
-            if repaint_viewport {
-                terminal.invalidate_viewport();
-            }
-        }
-    }
-    assert!(
-        saw_committed_answer,
-        "expected streamed answer to flush into history"
-    );
-
-    let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    assert!(
-        screen.contains("看到的“大工具输出”细节"),
-        "viewport repaint should restore correct CJK quote order: {screen:?}"
-    );
-    assert!(
-        !screen.contains("工具输出”细“大节"),
-        "viewport repaint kept stale CJK corruption: {screen:?}"
-    );
-}
-
-#[tokio::test]
-async fn follow_up_main_transcript_viewport_repaint_repairs_vt100_order() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    let width = 120;
-    let height = 24;
-    chat.last_rendered_width.set(Some(usize::from(width)));
-    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
-        VT100Backend::new(width, height),
-    )
-    .expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
-
-    chat.insert_transcript_cell(Arc::new(AgentMessageCell::new_markdown(
-        FOLLOW_UP_CJK_ORDER_TEXT.to_string(),
-        true,
-    )));
-
-    let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    assert_follow_up_cjk_order(&screen, "follow-up initial main transcript screen");
-    let row = screen_row_containing(&screen, FOLLOW_UP_CJK_ORDER_TEXT);
-    corrupt_vt100_row(&mut terminal, row, FOLLOW_UP_CJK_STALE_ORDER_TEXT);
-    let corrupted_screen = terminal.backend().vt100().screen().contents();
-    assert!(
-        corrupted_screen.contains(FOLLOW_UP_CJK_STALE_ORDER_TEXT),
-        "test setup should corrupt follow-up VT100 row: {corrupted_screen:?}"
-    );
-
-    let repaired_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    assert_follow_up_cjk_order(
-        &repaired_screen,
-        "follow-up repaired main transcript screen",
-    );
-}
-
-#[tokio::test]
-async fn viewport_repaint_budget_exhaustion_keeps_unchanged_cjk_rows_incremental() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    let width = 120;
-    let height = 24;
-    chat.last_rendered_width.set(Some(usize::from(width)));
-    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
-        VT100Backend::new(width, height),
-    )
-    .expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
-
-    chat.insert_transcript_cell(Arc::new(AgentMessageCell::new_markdown(
-        FOLLOW_UP_CJK_ORDER_TEXT.to_string(),
-        true,
-    )));
-
-    let mut screen = String::new();
-    for _ in 0..TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
-        screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-        assert_follow_up_cjk_order(&screen, "follow-up budget frame");
-    }
-    let row = screen_row_containing(&screen, FOLLOW_UP_CJK_ORDER_TEXT);
-    corrupt_vt100_row(&mut terminal, row, FOLLOW_UP_CJK_STALE_ORDER_TEXT);
-    let corrupted_screen = terminal.backend().vt100().screen().contents();
-    assert!(
-        corrupted_screen.contains(FOLLOW_UP_CJK_STALE_ORDER_TEXT),
-        "test setup should corrupt exhausted follow-up VT100 row: {corrupted_screen:?}"
-    );
-
-    let unchanged_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    assert!(
-        unchanged_screen.contains(FOLLOW_UP_CJK_STALE_ORDER_TEXT),
-        "exhausted budget should not repair unchanged CJK row every frame: {unchanged_screen:?}"
-    );
-}
-
-#[tokio::test]
-async fn session_model_name_order_is_repaired_by_same_height_composer_update() {
-    let (mut chat, _rx, _op_rx) =
-        make_chatwidget_manual_with_frame_requester(None, FrameRequester::test_dummy()).await;
-    let width = 120;
-    let height = 24;
-    chat.last_rendered_width.set(Some(usize::from(width)));
-    chat.bottom_pane
-        .set_composer_text("draft one".to_string(), Vec::new(), Vec::new());
-    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
-        VT100Backend::new(width, height),
-    )
-    .expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
-
-    chat.insert_transcript_cell(Arc::new(AgentMessageCell::new_markdown(
-        SESSION_MODEL_NAME_ORDER_TEXT.to_string(),
-        true,
-    )));
-
-    let mut screen = String::new();
-    for _ in 0..TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
-        screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    }
-    let initial_bottom_pane_height = chat.bottom_pane.desired_height(width);
-    let row = screen_row_containing(&screen, SESSION_MODEL_NAME_ORDER_TEXT);
-    corrupt_vt100_row(&mut terminal, row, SESSION_MODEL_NAME_STALE_ORDER_TEXT);
-
-    let idle_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    assert!(
-        idle_screen.contains(SESSION_MODEL_NAME_STALE_ORDER_TEXT),
-        "idle frame should keep the exhausted viewport incremental: {idle_screen:?}"
-    );
-
-    chat.bottom_pane
-        .set_composer_text("draft two".to_string(), Vec::new(), Vec::new());
-    assert_eq!(
-        chat.bottom_pane.desired_height(width),
-        initial_bottom_pane_height,
-        "composer update must not move the transcript viewport"
-    );
-    let repaired_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    let repaired_row = screen_row_containing(&repaired_screen, SESSION_MODEL_NAME_ORDER_TEXT);
-    assert_eq!(
-        repaired_row, row,
-        "same-height composer update should leave the transcript row in place"
-    );
-    assert!(
-        !repaired_screen.contains(SESSION_MODEL_NAME_STALE_ORDER_TEXT),
-        "composer semantic update kept stale model-name order: {repaired_screen:?}"
-    );
-}
-
-#[tokio::test]
-async fn semantic_status_update_repairs_model_name_after_repaint_budget_exhaustion() {
-    let (mut chat, _rx, _op_rx) =
-        make_chatwidget_manual_with_frame_requester(None, FrameRequester::test_dummy()).await;
-    let width = 120;
-    let height = 24;
-    chat.last_rendered_width.set(Some(usize::from(width)));
-    chat.bottom_pane.ensure_status_indicator();
-    chat.set_status_header("Working".to_string());
-    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
-        VT100Backend::new(width, height),
-    )
-    .expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
-
-    chat.insert_transcript_cell(Arc::new(AgentMessageCell::new_markdown(
-        SESSION_MODEL_NAME_ORDER_TEXT.to_string(),
-        true,
-    )));
-
-    let mut screen = String::new();
-    for _ in 0..TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
-        screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    }
-    let initial_bottom_pane_height = chat.bottom_pane.desired_height(width);
-    let row = screen_row_containing(&screen, SESSION_MODEL_NAME_ORDER_TEXT);
-    corrupt_vt100_row(&mut terminal, row, SESSION_MODEL_NAME_STALE_ORDER_TEXT);
-
-    chat.set_status_header("Running tests".to_string());
-    assert_eq!(
-        chat.bottom_pane.desired_height(width),
-        initial_bottom_pane_height,
-        "one-line status update should keep the transcript row in place"
-    );
-    let repaired_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    assert_eq!(
-        screen_row_containing(&repaired_screen, SESSION_MODEL_NAME_ORDER_TEXT),
-        row,
-        "status update should not move the repaired transcript row"
-    );
-    assert!(
-        !repaired_screen.contains(SESSION_MODEL_NAME_STALE_ORDER_TEXT),
-        "status semantic update kept stale model-name order: {repaired_screen:?}"
-    );
-}
-
-#[tokio::test]
-async fn hidden_reasoning_deltas_do_not_repaint_stale_cjk_rows() {
-    let (mut chat, _rx, _op_rx) =
-        make_chatwidget_manual_with_frame_requester(None, FrameRequester::test_dummy()).await;
-    let width = 120;
-    let height = 24;
-    chat.last_rendered_width.set(Some(usize::from(width)));
-    chat.bottom_pane.ensure_status_indicator();
-    chat.set_status_header("Working".to_string());
-    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
-        VT100Backend::new(width, height),
-    )
-    .expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
-
-    chat.insert_transcript_cell(Arc::new(AgentMessageCell::new_markdown(
-        SESSION_MODEL_NAME_ORDER_TEXT.to_string(),
-        true,
-    )));
-
-    let mut screen = String::new();
-    for _ in 0..TRANSCRIPT_VIEWPORT_REPAIR_FRAMES {
-        screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    }
-    let row = screen_row_containing(&screen, SESSION_MODEL_NAME_ORDER_TEXT);
-    corrupt_vt100_row(&mut terminal, row, SESSION_MODEL_NAME_STALE_ORDER_TEXT);
-    chat.unified_exec_wait_streak = Some(UnifiedExecWaitStreak::new(
-        "hidden-process".to_string(),
-        Some("sleep 5".to_string()),
-    ));
-
-    for (index, delta) in ["hidden reasoning one", " hidden reasoning two"]
-        .into_iter()
-        .enumerate()
-    {
-        chat.handle_codex_event(Event {
-            id: format!("hidden-physical-reasoning-{index}"),
-            msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-                delta: delta.to_string(),
-            }),
-        });
-        let hidden_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-        assert!(
-            hidden_screen.contains(SESSION_MODEL_NAME_STALE_ORDER_TEXT),
-            "hidden reasoning delta repainted a stale risky row: {hidden_screen:?}"
-        );
-    }
-
-    chat.set_status_header("Running tests".to_string());
-    let repaired_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    assert!(
-        repaired_screen.contains(SESSION_MODEL_NAME_ORDER_TEXT),
-        "semantic status update did not restore the model name: {repaired_screen:?}"
-    );
-    assert!(
-        !repaired_screen.contains(SESSION_MODEL_NAME_STALE_ORDER_TEXT),
-        "semantic status update kept the stale model name: {repaired_screen:?}"
-    );
-}
-
-#[tokio::test]
-async fn current_session_plan_order_is_repaired_by_later_streaming_update() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let width = 100;
-    let height = 36;
-    chat.last_rendered_width.set(Some(usize::from(width)));
-    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
-        VT100Backend::new(width, height),
-    )
-    .expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
-
-    chat.handle_codex_event(Event {
-        id: "current-session-plan-turn".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            model_context_window: None,
-            identity_kind: IdentityKind::Nobody,
-        }),
-    });
-
-    let initial_deltas = [
-        "不能简单在两种实现之间来回切换。更合理",
-        "的修复是：\n\n- 纯 fg/bg/modifier 动画继续只更新动画行。\n",
-        "- composer 文本、状态语义文本或布局发生真实",
-        "变化时，触发一次风险行修复。\n",
-        "- 保留三帧预算，用于 Ctrl+T 打开、风险内容插入和宽度变化等一次性转换。\n",
-    ];
-    let later_deltas = [
-        "- 同时保留两个回归",
-        "测试：\n  - 样式动画不能持续重画 CJK 行。\n",
-        "  - 预算耗尽后，后续语义更新仍能修复 gpt-5.6-sol。\n",
-    ];
-    let streamed_source = initial_deltas
-        .iter()
-        .chain(later_deltas.iter())
-        .copied()
-        .collect::<String>();
-    assert_eq!(streamed_source, CURRENT_SESSION_PLAN_TEXT);
-
-    for delta in initial_deltas {
-        chat.handle_codex_event(Event {
-            id: "current-session-plan-delta".into(),
-            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-                delta: delta.to_string(),
-            }),
-        });
-        for _ in 0..16 {
-            chat.on_commit_tick();
-        }
-        let _ = render_chat_to_vt100_screen(&chat, &mut terminal);
-    }
-
-    let partial_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    let first_row = screen_row_containing(
-        &partial_screen,
-        "不能简单在两种实现之间来回切换。更合理的修复是：",
-    );
-    corrupt_vt100_row(
-        &mut terminal,
-        first_row,
-        "不能简单在两种实现之间来回切换更合理。",
-    );
-    assert!(
-        terminal
-            .backend()
-            .vt100()
-            .screen()
-            .contents()
-            .contains("来回切换更合理。"),
-        "test setup should corrupt the current session plan row"
-    );
-
-    for (index, delta) in later_deltas.into_iter().enumerate() {
-        chat.handle_codex_event(Event {
-            id: "current-session-plan-later-delta".into(),
-            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-                delta: delta.to_string(),
-            }),
-        });
-        for _ in 0..16 {
-            chat.on_commit_tick();
-        }
-        let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-        if index == 0 {
-            assert!(
-                screen.contains("来回切换更合理。"),
-                "an incomplete buffered chunk should not trigger risky-row repair: {screen:?}"
-            );
-        } else {
-            assert!(
-                !screen.contains("来回切换更合理。"),
-                "visible streaming semantic update should repair the stale first row: {screen:?}"
-            );
-        }
-    }
-
-    let live_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    assert_current_session_plan_order(&live_screen, "current session live plan");
-
-    chat.handle_codex_event(Event {
-        id: "current-session-plan-complete".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            last_agent_message: None,
-        }),
-    });
-    for event in drain_events(&mut rx) {
-        if let Some((cell, repaint_viewport)) =
-            into_insert_history_cell_with_viewport_repaint(event)
-        {
-            let cell: Arc<dyn HistoryCell> = Arc::from(cell);
-            chat.insert_transcript_cell(cell);
-            if repaint_viewport {
-                terminal.invalidate_viewport();
-            }
-        }
-    }
-
-    let completed_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
-    assert_current_session_plan_order(&completed_screen, "current session completed plan");
-}
-
-#[tokio::test]
-async fn small_screen_final_answer_repaint_clears_stale_blank_rows() {
-    let source = "最终回答包含 saved workflow_output 和 git diff --check\n";
-    let needle = "最终回答包含 saved workflow_output 和 git diff --check";
-
-    let (mut small_chat, mut small_rx, _small_op_rx) = make_chatwidget_manual(None).await;
-    let small_width = 80;
-    let small_height = 8;
-    small_chat
-        .last_rendered_width
-        .set(Some(usize::from(small_width)));
-    let mut small_terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
-        VT100Backend::new(small_width, small_height),
-    )
-    .expect("small terminal");
-    small_terminal.set_viewport_area(Rect::new(0, 0, small_width, small_height));
-
-    small_chat.handle_codex_event(Event {
-        id: "small-final-turn".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            model_context_window: None,
-            identity_kind: IdentityKind::Nobody,
-        }),
-    });
-
-    let mut small_live_screen = String::new();
-    for delta in [
-        "最终回答包含 ",
-        "saved workflow_output ",
-        "和 git diff --check\n",
-    ] {
-        small_chat.handle_codex_event(Event {
-            id: "small-final-delta".into(),
-            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-                delta: delta.to_string(),
-            }),
-        });
-        small_chat.on_commit_tick();
-        small_live_screen = render_chat_to_vt100_screen(&small_chat, &mut small_terminal);
-        assert!(
-            !small_live_screen.contains("git diffcheck"),
-            "small live screen rendered known git diff corruption: {small_live_screen:?}"
-        );
-    }
-    assert_small_screen_final_answer_order(&small_live_screen, "small live screen", needle);
-
-    let stale_row = "STALE small-screen live row";
-    corrupt_vt100_row(&mut small_terminal, 0, stale_row);
-    let corrupted_screen = small_terminal.backend().vt100().screen().contents();
-    assert!(
-        corrupted_screen.contains(stale_row),
-        "test setup should corrupt small-screen blank row: {corrupted_screen:?}"
-    );
-
-    small_chat.handle_codex_event(Event {
-        id: "small-final-complete".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            last_agent_message: None,
-        }),
-    });
-
-    let mut saw_final_answer_repaint = false;
-    for event in drain_events(&mut small_rx) {
-        if let Some((cell, repaint_viewport)) =
-            into_insert_history_cell_with_viewport_repaint(event)
-        {
-            let rendered = lines_to_single_string(&cell.display_lines(small_width));
-            if cell.as_any().is::<AgentMessageCell>() && rendered.contains(needle) {
-                saw_final_answer_repaint = true;
-                assert!(
-                    repaint_viewport,
-                    "small final answer should request viewport repaint: {rendered:?}"
-                );
-            }
-            let cell: Arc<dyn HistoryCell> = Arc::from(cell);
-            small_chat.insert_transcript_cell(cell);
-            if repaint_viewport {
-                small_terminal.invalidate_viewport();
-            }
-        }
-    }
-    assert!(
-        saw_final_answer_repaint,
-        "expected small final answer repaint event"
-    );
-
-    let small_final_screen = render_chat_to_vt100_screen(&small_chat, &mut small_terminal);
-    assert_small_screen_final_answer_order(&small_final_screen, "small final screen", needle);
-    assert!(
-        !small_final_screen.contains(stale_row),
-        "small final repaint kept stale live/status row: {small_final_screen:?}"
-    );
-
-    let (mut wide_chat, mut wide_rx, _wide_op_rx) = make_chatwidget_manual(None).await;
-    let wide_width = 160;
-    let wide_height = 32;
-    wide_chat
-        .last_rendered_width
-        .set(Some(usize::from(wide_width)));
-    let mut wide_terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
-        VT100Backend::new(wide_width, wide_height),
-    )
-    .expect("wide terminal");
-    wide_terminal.set_viewport_area(Rect::new(0, 0, wide_width, wide_height));
-
-    wide_chat.handle_codex_event(Event {
-        id: "wide-final-turn".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            model_context_window: None,
-            identity_kind: IdentityKind::Nobody,
-        }),
-    });
-    wide_chat.handle_codex_event(Event {
-        id: "wide-final-delta".into(),
-        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-            delta: source.to_string(),
-        }),
-    });
-    wide_chat.on_commit_tick();
-    let wide_live_screen = render_chat_to_vt100_screen(&wide_chat, &mut wide_terminal);
-    assert_small_screen_final_answer_order(&wide_live_screen, "wide live screen", needle);
-
-    wide_chat.handle_codex_event(Event {
-        id: "wide-final-complete".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            last_agent_message: None,
-        }),
-    });
-    for event in drain_events(&mut wide_rx) {
-        if let Some((cell, repaint_viewport)) =
-            into_insert_history_cell_with_viewport_repaint(event)
-        {
-            let cell: Arc<dyn HistoryCell> = Arc::from(cell);
-            wide_chat.insert_transcript_cell(cell);
-            if repaint_viewport {
-                wide_terminal.invalidate_viewport();
-            }
-        }
-    }
-
-    let wide_final_screen = render_chat_to_vt100_screen(&wide_chat, &mut wide_terminal);
-    assert_small_screen_final_answer_order(&wide_final_screen, "wide final screen", needle);
-
-    let compact_needle: String = needle.chars().filter(|ch| !ch.is_whitespace()).collect();
-    let small_compact: String = small_final_screen
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect();
-    let wide_compact: String = wide_final_screen
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect();
-    assert!(
-        small_compact.contains(&compact_needle),
-        "small final screen should preserve compact final answer: {small_final_screen:?}"
-    );
-    assert!(
-        wide_compact.contains(&compact_needle),
-        "wide final screen should preserve compact final answer: {wide_final_screen:?}"
     );
 }
 

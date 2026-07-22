@@ -602,10 +602,14 @@ pub(crate) struct ChatWidget {
     token_info: Option<TokenUsageInfo>,
     // Stream lifecycle controller
     stream_controller: Option<AgentMarkdownStreamController>,
+    // Set only after the display clock has committed the first answer delta.
+    answer_stream_display_started: bool,
     // Final legacy AgentMessage echo expected after a blocking prompt forced an answer stream flush.
     pending_streamed_agent_message_echo: Option<String>,
     // Stream lifecycle controller for proposed plan output.
     plan_stream_controller: Option<PlanStreamController>,
+    // Set only after the display clock has committed the first proposed-plan delta.
+    plan_stream_display_started: bool,
     // Cache-busting counter for the render-only proposed plan live tail.
     plan_stream_revision: u64,
     // Whether the current turn has started streaming visible assistant answer content.
@@ -1146,8 +1150,14 @@ impl ChatWidget {
 
         let source = controller.finalize();
         if source.is_empty() {
+            self.answer_stream_display_started = false;
             return (false, leading_separator);
         }
+
+        if !self.answer_stream_display_started {
+            self.prepare_answer_stream_display();
+        }
+        self.answer_stream_display_started = false;
 
         if remember_final_echo {
             self.pending_streamed_agent_message_echo
@@ -1167,16 +1177,14 @@ impl ChatWidget {
         let updated = if let Some(cell) = self.active_answer_stream_cell_mut() {
             cell.show_all_markdown(source)
         } else {
-            self.add_boxed_history_with_viewport_repaint(Box::new(AgentMessageCell::new_markdown(
-                source, true,
-            )));
+            self.add_boxed_history(Box::new(AgentMessageCell::new_markdown(source, true)));
             return (true, None);
         };
 
         if updated {
             self.bump_active_cell_revision();
         }
-        self.flush_active_cell_with_viewport_repaint();
+        self.flush_active_cell();
         (true, None)
     }
 
@@ -1200,71 +1208,96 @@ impl ChatWidget {
         }
     }
 
-    fn ensure_answer_stream_active_cell(&mut self) {
-        if self.active_cell_is_answer_stream() {
-            return;
-        }
-        self.flush_active_cell();
-        self.active_cell = Some(Box::new(AgentMessageCell::new_streaming_markdown(true)));
-        self.bump_active_cell_revision();
-    }
-
-    fn sync_answer_stream_active_cell_from_controller(&mut self) {
-        let Some((source, visible_lines)) = self.stream_controller.as_ref().map(|controller| {
-            (
-                controller.completed_source().to_string(),
-                controller.visible_rendered_lines(),
-            )
-        }) else {
-            return;
+    fn sync_answer_stream_active_cell_from_controller(&mut self) -> bool {
+        let Some(source) = self
+            .stream_controller
+            .as_ref()
+            .map(|controller| controller.committed_source().to_string())
+        else {
+            return false;
         };
         if source.is_empty() {
-            return;
+            return false;
         }
 
-        self.ensure_answer_stream_active_cell();
-        let changed = self
+        let mut changed = false;
+        if !self.active_cell_is_answer_stream() {
+            self.flush_active_cell();
+            self.active_cell = Some(Box::new(AgentMessageCell::new_streaming_markdown(true)));
+            changed = true;
+        }
+
+        changed |= self
             .active_answer_stream_cell_mut()
-            .is_some_and(|cell| cell.set_markdown_stream_state(source, visible_lines));
+            .is_some_and(|cell| cell.set_streaming_markdown(source));
         if changed {
-            self.bump_active_cell_revision();
+            self.advance_active_cell_revision();
+        }
+        changed
+    }
+
+    fn prepare_answer_stream_display(&mut self) {
+        if self.answer_stream_display_started {
+            return;
+        }
+        self.answer_stream_display_started = true;
+        self.flush_unified_exec_wait_streak();
+        if !self.active_cell_is_answer_stream() {
+            self.flush_active_cell();
+        }
+        if self.needs_final_message_separator && self.had_work_activity {
+            let elapsed_seconds = self
+                .bottom_pane
+                .status_widget()
+                .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
+                .map(|current| self.worked_elapsed_from(current));
+            self.add_to_history(history_cell::FinalMessageSeparator::new(
+                elapsed_seconds,
+                None,
+            ));
+            self.needs_final_message_separator = false;
+            self.had_work_activity = false;
+        } else if self.needs_final_message_separator {
+            self.needs_final_message_separator = false;
         }
     }
 
-    fn set_answer_stream_visible_lines(&mut self, visible_lines: usize) {
-        let changed = self
-            .active_answer_stream_cell_mut()
-            .is_some_and(|cell| cell.set_visible_rendered_lines(visible_lines));
-        if changed {
-            self.bump_active_cell_revision();
-            self.request_redraw();
+    fn prepare_plan_stream_display(&mut self) {
+        if self.plan_stream_display_started {
+            return;
+        }
+        self.plan_stream_display_started = true;
+        self.flush_unified_exec_wait_streak();
+        if self.active_cell.is_some() && !self.active_cell_is_answer_stream() {
+            self.flush_active_cell();
         }
     }
 
     fn bump_plan_stream_revision(&mut self) {
         self.plan_stream_revision = self.plan_stream_revision.wrapping_add(1);
-        self.request_redraw_with_risky_row_repair();
+        self.request_redraw();
     }
 
     fn plan_stream_has_visible_tail(&self) -> bool {
         self.plan_stream_controller
             .as_ref()
-            .is_some_and(|controller| !controller.completed_source().is_empty())
+            .is_some_and(|controller| !controller.committed_source().is_empty())
     }
 
     fn plan_stream_live_tail_revision(&self) -> u64 {
-        let completed_source_len = self
+        let committed_source_len = self
             .plan_stream_controller
             .as_ref()
-            .map(|controller| controller.completed_source().len() as u64)
+            .map(|controller| controller.committed_source().len() as u64)
             .unwrap_or(0);
         self.plan_stream_revision
             .wrapping_mul(31)
-            .wrapping_add(completed_source_len)
+            .wrapping_add(committed_source_len)
     }
 
     fn clear_plan_stream_controller(&mut self) -> bool {
         let cleared = self.plan_stream_controller.take().is_some();
+        self.plan_stream_display_started = false;
         if cleared {
             self.bump_plan_stream_revision();
             self.request_redraw();
@@ -1296,15 +1329,12 @@ impl ChatWidget {
             return Vec::new();
         };
 
-        let source = controller.completed_source();
+        let source = controller.committed_source();
         if source.is_empty() {
             return Vec::new();
         }
 
-        let cell = ProposedPlanStreamCell::from_stream_state(
-            source.to_string(),
-            controller.visible_rendered_lines(),
-        );
+        let cell = ProposedPlanStreamCell::from_stream_source(source.to_string());
         match mode {
             TranscriptRenderMode::Display => cell.display_lines(width),
             TranscriptRenderMode::Transcript => cell.transcript_lines(width),
@@ -1500,7 +1530,7 @@ impl ChatWidget {
     ) {
         if self.thread_id == Some(event.thread_id) && self.thread_name != event.thread_name {
             self.thread_name = event.thread_name;
-            self.request_redraw_with_risky_row_repair();
+            self.request_redraw();
         }
     }
 
@@ -1695,7 +1725,7 @@ impl ChatWidget {
     }
 
     fn on_plan_delta(&mut self, delta: String) {
-        if self.active_identity_kind() != IdentityKind::Planner {
+        if delta.is_empty() || self.active_identity_kind() != IdentityKind::Planner {
             return;
         }
         if !self.plan_item_active {
@@ -1703,27 +1733,32 @@ impl ChatWidget {
             self.plan_delta_buffer.clear();
         }
         self.plan_delta_buffer.push_str(&delta);
-        self.flush_unified_exec_wait_streak();
-        if self.active_cell.is_some() && !self.active_cell_is_answer_stream() {
-            self.flush_active_cell();
-        }
         if self.plan_stream_controller.is_none() {
             self.plan_stream_controller = Some(PlanStreamController::new());
-            self.bump_plan_stream_revision();
+            self.plan_stream_display_started = false;
         }
-        let stream_width = self.last_rendered_width.get().map(|w| w.saturating_sub(4));
         let should_start_animation = self
             .plan_stream_controller
             .as_mut()
-            .is_some_and(|controller| controller.push(&delta, stream_width));
+            .is_some_and(|controller| controller.push(&delta));
         if should_start_animation {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
-            self.on_commit_tick();
         }
-        self.request_redraw();
     }
 
     fn on_plan_item_completed(&mut self, text: String) {
+        let plan_stream_tick = self
+            .plan_stream_controller
+            .as_mut()
+            .map(PlanStreamController::on_commit_tick);
+        if let Some((advanced, _)) = plan_stream_tick
+            && advanced
+        {
+            self.prepare_plan_stream_display();
+            self.bottom_pane.suspend_status_indicator_with_redraw(false);
+            self.plan_stream_revision = self.plan_stream_revision.wrapping_add(1);
+        }
+        let plan_stream_idle = plan_stream_tick.map(|(_, is_idle)| is_idle);
         let streamed_plan = self.plan_delta_buffer.trim().to_string();
         let plan_text = if text.trim().is_empty() {
             streamed_plan
@@ -1736,7 +1771,10 @@ impl ChatWidget {
         self.latest_proposed_plan_title = extract_first_markdown_heading(&plan_text);
         self.latest_proposed_plan_text =
             (!plan_text.trim().is_empty()).then_some(plan_text.clone());
-        self.request_redraw_with_risky_row_repair();
+        self.request_redraw();
+        if plan_stream_idle == Some(true) {
+            self.app_event_tx.send(AppEvent::StopCommitAnimation);
+        }
     }
 
     fn on_agent_reasoning_delta(
@@ -2037,14 +2075,14 @@ impl ChatWidget {
         };
         if self.cli_agent_jobs.get(&job_id) != Some(&next_entry) {
             self.cli_agent_jobs.insert(job_id, next_entry);
-            self.request_redraw_with_risky_row_repair();
+            self.request_redraw();
         }
     }
 
     fn clear_cli_agent_jobs(&mut self) {
         if !self.cli_agent_jobs.is_empty() {
             self.cli_agent_jobs.clear();
-            self.request_redraw_with_risky_row_repair();
+            self.request_redraw();
         }
     }
 
@@ -2062,6 +2100,8 @@ impl ChatWidget {
             self.stop_commit_animation_if_no_stream_controllers();
         }
         self.answer_stream_started_this_turn = false;
+        self.answer_stream_display_started = false;
+        self.plan_stream_display_started = false;
         self.pending_streamed_agent_message_echo = None;
         self.otel_manager.reset_runtime_metrics();
         if defer_review_redraw {
@@ -2103,13 +2143,12 @@ impl ChatWidget {
         if self.pending_proposed_plan_text().is_some()
             && let Some(separator) = final_separator.take()
         {
-            self.app_event_tx
-                .send_history_cell_with_viewport_repaint(Box::new(separator));
+            self.app_event_tx.send_history_cell(Box::new(separator));
         }
         self.flush_pending_proposed_plan();
         if !from_replay {
             if let Some(separator) = final_separator {
-                self.add_to_history_with_viewport_repaint(separator);
+                self.add_to_history(separator);
             }
             self.needs_final_message_separator = false;
             self.had_work_activity = false;
@@ -2314,7 +2353,7 @@ impl ChatWidget {
                 }
                 self.bottom_pane.set_context_window(None, None);
                 self.token_info = None;
-                self.request_redraw_with_risky_row_repair();
+                self.request_redraw();
             }
         }
     }
@@ -2355,7 +2394,7 @@ impl ChatWidget {
             snapshot.total_saved_usd_micros = event.total.saved_usd_micros;
         }
         if self.input_slimming != previous {
-            self.request_redraw_with_risky_row_repair();
+            self.request_redraw();
         }
     }
 
@@ -2367,7 +2406,7 @@ impl ChatWidget {
         let used_tokens = self.context_used_tokens(&info, percent.is_some());
         self.bottom_pane.set_context_window(percent, used_tokens);
         self.token_info = Some(info);
-        self.request_redraw_with_risky_row_repair();
+        self.request_redraw();
     }
 
     fn context_remaining_percent(&self, info: &TokenUsageInfo) -> Option<i64> {
@@ -2981,7 +3020,7 @@ impl ChatWidget {
             changed = true;
         }
         if changed {
-            self.request_redraw_with_risky_row_repair();
+            self.request_redraw();
         }
     }
 
@@ -3037,34 +3076,54 @@ impl ChatWidget {
         );
     }
 
-    /// Periodic tick to commit at most one queued line to history with a small delay,
-    /// animating the output.
+    /// Commit all provider deltas received since the previous display-clock tick.
     pub(crate) fn on_commit_tick(&mut self) {
         let mut has_controller = false;
         let mut all_idle = true;
-        if let Some(controller) = self.stream_controller.as_mut() {
+        let mut redraw = false;
+        let answer_stream_tick = self
+            .stream_controller
+            .as_mut()
+            .map(AgentMarkdownStreamController::on_commit_tick);
+        if let Some((advanced, is_idle)) = answer_stream_tick {
             has_controller = true;
-            let (advanced, is_idle) = controller.on_commit_tick();
-            let visible_lines = controller.visible_rendered_lines();
             if advanced {
-                self.bottom_pane.suspend_status_indicator();
-                self.set_answer_stream_visible_lines(visible_lines);
+                self.prepare_answer_stream_display();
+                self.bottom_pane.suspend_status_indicator_with_redraw(false);
+                redraw |= self.sync_answer_stream_active_cell_from_controller();
             }
             all_idle &= is_idle;
         }
-        if let Some(controller) = self.plan_stream_controller.as_mut() {
+        let plan_stream_tick = self
+            .plan_stream_controller
+            .as_mut()
+            .map(PlanStreamController::on_commit_tick);
+        if let Some((advanced, is_idle)) = plan_stream_tick {
             has_controller = true;
-            let (advanced, is_idle) = controller.on_commit_tick();
             if advanced {
-                self.bottom_pane.suspend_status_indicator();
-                self.bump_plan_stream_revision();
-                self.request_redraw();
+                self.prepare_plan_stream_display();
+                self.bottom_pane.suspend_status_indicator_with_redraw(false);
+                self.plan_stream_revision = self.plan_stream_revision.wrapping_add(1);
+                redraw = true;
             }
             all_idle &= is_idle;
+        }
+        if redraw {
+            self.request_redraw();
         }
         if has_controller && all_idle {
             self.app_event_tx.send(AppEvent::StopCommitAnimation);
         }
+    }
+
+    pub(crate) fn has_pending_stream_display(&self) -> bool {
+        self.stream_controller
+            .as_ref()
+            .is_some_and(AgentMarkdownStreamController::has_pending)
+            || self
+                .plan_stream_controller
+                .as_ref()
+                .is_some_and(PlanStreamController::has_pending)
     }
 
     fn flush_interrupt_queue(&mut self) {
@@ -3122,48 +3181,22 @@ impl ChatWidget {
 
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
-        if !delta.is_empty() {
-            self.answer_stream_started_this_turn = true;
+        if delta.is_empty() {
+            return;
         }
-
-        // Before streaming agent content, flush any active exec cell group.
-        self.flush_unified_exec_wait_streak();
-        if !self.active_cell_is_answer_stream() {
-            self.flush_active_cell();
-        }
+        self.answer_stream_started_this_turn = true;
 
         if self.stream_controller.is_none() {
-            // If the previous turn inserted non-stream history (exec output, patch status, MCP
-            // calls), render a separator before starting the next streamed assistant message.
-            if self.needs_final_message_separator && self.had_work_activity {
-                let elapsed_seconds = self
-                    .bottom_pane
-                    .status_widget()
-                    .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
-                    .map(|current| self.worked_elapsed_from(current));
-                self.add_to_history(history_cell::FinalMessageSeparator::new(
-                    elapsed_seconds,
-                    None,
-                ));
-                self.needs_final_message_separator = false;
-                self.had_work_activity = false;
-            } else if self.needs_final_message_separator {
-                // Reset the flag even if we don't show separator (no work was done)
-                self.needs_final_message_separator = false;
-            }
             self.stream_controller = Some(AgentMarkdownStreamController::new());
+            self.answer_stream_display_started = false;
         }
-        let stream_width = self.last_rendered_width.get().map(|w| w.saturating_sub(2));
         let should_start_animation = self
             .stream_controller
             .as_mut()
-            .is_some_and(|controller| controller.push(&delta, stream_width));
-        self.sync_answer_stream_active_cell_from_controller();
+            .is_some_and(|controller| controller.push(&delta));
         if should_start_animation {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
-            self.on_commit_tick();
         }
-        self.request_redraw();
     }
 
     fn worked_elapsed_from(&mut self, current_elapsed: u64) -> u64 {
@@ -3521,8 +3554,10 @@ impl ChatWidget {
             initial_user_message,
             token_info: None,
             stream_controller: None,
+            answer_stream_display_started: false,
             pending_streamed_agent_message_echo: None,
             plan_stream_controller: None,
+            plan_stream_display_started: false,
             plan_stream_revision: 0,
             answer_stream_started_this_turn: false,
             running_commands: HashMap::new(),
@@ -3707,8 +3742,10 @@ impl ChatWidget {
             initial_user_message,
             token_info: None,
             stream_controller: None,
+            answer_stream_display_started: false,
             pending_streamed_agent_message_echo: None,
             plan_stream_controller: None,
+            plan_stream_display_started: false,
             plan_stream_revision: 0,
             answer_stream_started_this_turn: false,
             running_commands: HashMap::new(),
@@ -4749,31 +4786,11 @@ impl ChatWidget {
         }
     }
 
-    fn flush_active_cell_with_viewport_repaint(&mut self) {
-        if let Some(active) = self.active_cell.take() {
-            self.needs_final_message_separator = true;
-            self.app_event_tx
-                .send_history_cell_with_viewport_repaint(active);
-        }
-    }
-
     pub(crate) fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
         self.add_boxed_history(Box::new(cell));
     }
 
-    fn add_to_history_with_viewport_repaint(&mut self, cell: impl HistoryCell + 'static) {
-        self.add_boxed_history_with_viewport_repaint(Box::new(cell));
-    }
-
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
-        self.add_boxed_history_impl(cell, false);
-    }
-
-    fn add_boxed_history_with_viewport_repaint(&mut self, cell: Box<dyn HistoryCell>) {
-        self.add_boxed_history_impl(cell, true);
-    }
-
-    fn add_boxed_history_impl(&mut self, cell: Box<dyn HistoryCell>, repaint_viewport: bool) {
         // Keep the placeholder session header as the active cell until real session info arrives,
         // so we can merge headers instead of committing a duplicate box to history.
         let keep_placeholder_header_active = !self.is_session_configured()
@@ -4787,12 +4804,7 @@ impl ChatWidget {
             self.flush_active_cell();
             self.needs_final_message_separator = true;
         }
-        if repaint_viewport {
-            self.app_event_tx
-                .send_history_cell_with_viewport_repaint(cell);
-        } else {
-            self.app_event_tx.send_history_cell(cell);
-        }
+        self.app_event_tx.send_history_cell(cell);
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
@@ -5276,7 +5288,7 @@ impl ChatWidget {
         if let Some(output) = review.review_output {
             self.flush_answer_stream_with_separator();
             self.flush_interrupt_queue();
-            self.flush_active_cell_with_viewport_repaint();
+            self.flush_active_cell();
 
             if output.findings.is_empty() {
                 let explanation = output.overall_explanation.trim().to_string();
@@ -5290,8 +5302,7 @@ impl ChatWidget {
                     let mut rendered: Vec<ratatui::text::Line<'static>> = vec!["".into()];
                     append_markdown(&explanation, None, &mut rendered);
                     let body_cell = AgentMessageCell::new(rendered, false);
-                    self.app_event_tx
-                        .send_history_cell_with_viewport_repaint(Box::new(body_cell));
+                    self.app_event_tx.send_history_cell(Box::new(body_cell));
                 }
             }
             // Final message is rendered as part of the AgentMessage.
@@ -5342,19 +5353,19 @@ impl ChatWidget {
         self.app_event_tx.send(AppEvent::Exit(exit_mode));
     }
 
-    fn request_redraw(&mut self) {
+    fn request_redraw(&self) {
         self.frame_requester.schedule_frame();
     }
 
-    fn request_redraw_with_risky_row_repair(&self) {
-        self.frame_requester.schedule_frame_with_risky_row_repair();
-    }
-
-    fn bump_active_cell_revision(&mut self) {
+    fn advance_active_cell_revision(&mut self) {
         // Wrapping avoids overflow; wraparound would require 2^64 bumps and at
         // worst causes a one-time cache-key collision.
         self.active_cell_revision = self.active_cell_revision.wrapping_add(1);
-        self.request_redraw_with_risky_row_repair();
+    }
+
+    fn bump_active_cell_revision(&mut self) {
+        self.advance_active_cell_revision();
+        self.request_redraw();
     }
 
     fn notify(&mut self, notification: Notification) {
@@ -7201,7 +7212,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn request_redraw_for_ui_change(&self) {
-        self.request_redraw_with_risky_row_repair();
+        self.request_redraw();
     }
 
     pub(crate) fn frame_requester(&self) -> FrameRequester {
@@ -7803,12 +7814,12 @@ impl ChatWidget {
 
     pub(crate) fn insert_transcript_cell(&mut self, cell: Arc<dyn HistoryCell>) {
         self.transcript.borrow_mut().insert_cell(cell);
-        self.request_redraw_with_risky_row_repair();
+        self.request_redraw();
     }
 
     pub(crate) fn replace_transcript_cells(&mut self, cells: Vec<Arc<dyn HistoryCell>>) {
         self.transcript = RefCell::new(TranscriptView::new(cells, TranscriptRenderMode::Display));
-        self.request_redraw_with_risky_row_repair();
+        self.request_redraw();
     }
 
     #[cfg(test)]
@@ -7830,24 +7841,6 @@ impl ChatWidget {
                 self.transcript_live_tail_for_mode(tail_width, TranscriptRenderMode::Display)
             },
         );
-    }
-
-    pub(crate) fn prepare_transcript_terminal_repaint(&self, area_width: u16) -> bool {
-        let sidebar_width = crate::product::tui_app::sidebar::sidebar_width(area_width);
-        let main_width = sidebar_width.map_or(area_width, |sidebar_width| {
-            area_width.saturating_sub(sidebar_width)
-        });
-        let mut transcript = self.transcript.borrow_mut();
-        let main_width = main_width.max(1);
-        transcript.prepare_terminal_repaint_for_width(main_width);
-        transcript.sync_live_tail(main_width, self.transcript_live_tail_key(), |tail_width| {
-            self.transcript_live_tail_for_mode(tail_width, TranscriptRenderMode::Display)
-        });
-        let needs_repaint = transcript.take_terminal_repaint_request();
-        if transcript.has_pending_terminal_repaint() {
-            self.frame_requester.schedule_frame();
-        }
-        needs_repaint
     }
 
     fn handle_transcript_scroll_key(&mut self, key_event: KeyEvent) -> bool {

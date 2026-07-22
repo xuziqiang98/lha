@@ -3,6 +3,7 @@ mod osc9;
 
 use std::env;
 use std::io;
+use std::io::Write;
 
 use crate::product::agent::config::types::NotificationMethod;
 use bel::BelBackend;
@@ -36,10 +37,10 @@ impl DesktopNotificationBackend {
         }
     }
 
-    pub fn notify(&mut self, message: &str) -> io::Result<()> {
+    pub fn notify(&mut self, message: &str, writer: &mut impl Write) -> io::Result<()> {
         match self {
-            DesktopNotificationBackend::Osc9(backend) => backend.notify(message),
-            DesktopNotificationBackend::Bel(backend) => backend.notify(message),
+            DesktopNotificationBackend::Osc9(backend) => backend.notify(message, writer),
+            DesktopNotificationBackend::Bel(backend) => backend.notify(message, writer),
         }
     }
 }

@@ -136,6 +136,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
@@ -154,7 +155,35 @@ use toml::Value as TomlValue;
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const SHIFT_MOUSE_BYPASS_DURATION: Duration = Duration::from_millis(1500);
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
-const FINAL_ANSWER_SETTLE_REPAINT_FRAMES: u8 = 2;
+
+#[derive(Clone, Debug, Default)]
+struct CommitAnimationControl {
+    running: Arc<AtomicBool>,
+    generation: Arc<AtomicU64>,
+}
+
+impl CommitAnimationControl {
+    fn try_start(&self) -> Option<u64> {
+        self.running
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .ok()?;
+        Some(
+            self.generation
+                .fetch_add(1, Ordering::AcqRel)
+                .wrapping_add(1),
+        )
+    }
+
+    fn stop(&self) {
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        self.running.store(false, Ordering::Release);
+    }
+
+    fn is_running(&self, generation: u64) -> bool {
+        self.running.load(Ordering::Acquire)
+            && self.generation.load(Ordering::Acquire) == generation
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -582,14 +611,13 @@ pub(crate) struct App {
 
     pub(crate) enhanced_keys_supported: bool,
 
-    /// Controls the animation thread that sends CommitTick events.
-    pub(crate) commit_anim_running: Arc<AtomicBool>,
+    /// Controls the display-clock thread that sends CommitTick events.
+    commit_animation: CommitAnimationControl,
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::product::tui_app::app_backtrack::BacktrackState,
     /// When set, the next draw re-renders the transcript after a rollback.
     pub(crate) backtrack_render_pending: bool,
-    final_answer_settle_repaint_frames_remaining: u8,
     pub(crate) feedback: crate::product::feedback::CodexFeedback,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
@@ -849,103 +877,6 @@ impl App {
         }
     }
 
-    fn insert_history_cell_with_viewport_repaint(
-        &mut self,
-        cell: Box<dyn HistoryCell>,
-        tui: &mut tui::Tui,
-    ) {
-        let cell: Arc<dyn HistoryCell> = cell.into();
-        let schedule_settle_repaint = Self::is_final_answer_settle_repaint_cell(cell.as_ref());
-        self.insert_history_cell_state(cell);
-        tui.terminal.invalidate_viewport();
-        if schedule_settle_repaint {
-            self.schedule_final_answer_settle_repaint(tui);
-        } else {
-            tui.frame_requester().schedule_frame();
-        }
-    }
-
-    #[cfg(test)]
-    fn insert_history_cell_with_viewport_repaint_on_terminal<B>(
-        &mut self,
-        cell: Box<dyn HistoryCell>,
-        terminal: &mut crate::product::tui_app::custom_terminal::Terminal<B>,
-        frame_requester: &tui::FrameRequester,
-    ) where
-        B: ratatui::backend::Backend + std::io::Write,
-    {
-        let cell: Arc<dyn HistoryCell> = cell.into();
-        let schedule_settle_repaint = Self::is_final_answer_settle_repaint_cell(cell.as_ref());
-        self.insert_history_cell_state(cell);
-        terminal.invalidate_viewport();
-        if schedule_settle_repaint {
-            self.schedule_final_answer_settle_repaint_with_frame_requester(frame_requester);
-        } else {
-            frame_requester.schedule_frame();
-        }
-    }
-
-    fn insert_history_cell_with_viewport_repaint_for_thread(
-        &mut self,
-        thread_id: ThreadId,
-        cell: Box<dyn HistoryCell>,
-        tui: &mut tui::Tui,
-    ) {
-        let cell: Arc<dyn HistoryCell> = cell.into();
-        let schedule_settle_repaint = Self::is_final_answer_settle_repaint_cell(cell.as_ref());
-        if self.insert_history_cell_arc_for_thread(thread_id, cell) {
-            tui.terminal.invalidate_viewport();
-            if schedule_settle_repaint {
-                self.schedule_final_answer_settle_repaint(tui);
-            } else {
-                tui.frame_requester().schedule_frame();
-            }
-        }
-    }
-
-    fn is_final_answer_settle_repaint_cell(cell: &dyn HistoryCell) -> bool {
-        cell.as_any().is::<history_cell::AgentMessageCell>()
-    }
-
-    fn schedule_final_answer_settle_repaint(&mut self, tui: &mut tui::Tui) {
-        let frame_requester = tui.frame_requester();
-        self.schedule_final_answer_settle_repaint_with_frame_requester(&frame_requester);
-    }
-
-    fn schedule_final_answer_settle_repaint_with_frame_requester(
-        &mut self,
-        frame_requester: &tui::FrameRequester,
-    ) {
-        self.final_answer_settle_repaint_frames_remaining = self
-            .final_answer_settle_repaint_frames_remaining
-            .max(FINAL_ANSWER_SETTLE_REPAINT_FRAMES);
-        frame_requester.schedule_frame();
-    }
-
-    fn consume_final_answer_settle_repaint(&mut self, tui: &mut tui::Tui) {
-        let frame_requester = tui.frame_requester();
-        self.consume_final_answer_settle_repaint_on_terminal(&mut tui.terminal, &frame_requester);
-    }
-
-    fn consume_final_answer_settle_repaint_on_terminal<B>(
-        &mut self,
-        terminal: &mut crate::product::tui_app::custom_terminal::Terminal<B>,
-        frame_requester: &tui::FrameRequester,
-    ) where
-        B: ratatui::backend::Backend + std::io::Write,
-    {
-        if self.final_answer_settle_repaint_frames_remaining == 0 {
-            return;
-        }
-
-        self.final_answer_settle_repaint_frames_remaining -= 1;
-        terminal.invalidate_viewport();
-
-        if self.final_answer_settle_repaint_frames_remaining > 0 {
-            frame_requester.schedule_frame();
-        }
-    }
-
     fn insert_history_cell_arc_for_thread(
         &mut self,
         thread_id: ThreadId,
@@ -1075,6 +1006,7 @@ impl App {
         tui: &mut tui::Tui,
         mut config: Config,
     ) -> std::result::Result<AppRunControl, AppExitInfo> {
+        config.animations = self.config.animations;
         let continuation = self
             .deferred_startup_continuation
             .clone()
@@ -1318,6 +1250,7 @@ impl App {
     }
 
     fn apply_runtime_policy_overrides(&mut self, config: &mut Config) {
+        config.animations = self.config.animations;
         if let Some(policy) = self.runtime_approval_policy_override.as_ref()
             && let Err(err) = config.approval_policy.set(*policy)
         {
@@ -1984,10 +1917,9 @@ impl App {
             enhanced_keys_supported,
             transcript_cells: Vec::new(),
             overlay: None,
-            commit_anim_running: Arc::new(AtomicBool::new(false)),
+            commit_animation: CommitAnimationControl::default(),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
-            final_answer_settle_repaint_frames_remaining: 0,
             feedback: feedback.clone(),
             pending_update_action: None,
             suppressed_shutdown_complete_threads: HashSet::new(),
@@ -2304,13 +2236,6 @@ impl App {
             return Ok(());
         }
         let size = tui.terminal.size()?;
-        if self
-            .chat_widget
-            .prepare_transcript_terminal_repaint(size.width)
-        {
-            tui.terminal.invalidate_viewport();
-        }
-        self.consume_final_answer_settle_repaint(tui);
         tui.draw(size.height, |frame| {
             self.chat_widget.render(frame.area(), frame.buffer);
             if let Some(state) = &self.provider_config_modal {
@@ -2772,6 +2697,12 @@ impl App {
         }
     }
 
+    fn stop_commit_animation_if_idle(&self) {
+        if !self.chat_widget.has_pending_stream_display() {
+            self.commit_animation.stop();
+        }
+    }
+
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
         match event {
             AppEvent::NewSession => {
@@ -2986,30 +2917,23 @@ impl App {
             AppEvent::InsertThreadHistoryCell { thread_id, cell } => {
                 self.insert_history_cell_for_thread(thread_id, cell, tui)
             }
-            AppEvent::InsertHistoryCellWithViewportRepaint(cell) => {
-                self.insert_history_cell_with_viewport_repaint(cell, tui)
-            }
-            AppEvent::InsertThreadHistoryCellWithViewportRepaint { thread_id, cell } => {
-                self.insert_history_cell_with_viewport_repaint_for_thread(thread_id, cell, tui)
-            }
             AppEvent::StartCommitAnimation => {
-                if self
-                    .commit_anim_running
-                    .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-                    .is_ok()
-                {
+                if let Some(generation) = self.commit_animation.try_start() {
                     let tx = self.app_event_tx.clone();
-                    let running = self.commit_anim_running.clone();
+                    let control = self.commit_animation.clone();
                     thread::spawn(move || {
-                        while running.load(Ordering::Relaxed) {
-                            thread::sleep(Duration::from_millis(50));
+                        while control.is_running(generation) {
+                            thread::sleep(Duration::from_millis(33));
+                            if !control.is_running(generation) {
+                                break;
+                            }
                             tx.send(AppEvent::CommitTick);
                         }
                     });
                 }
             }
             AppEvent::StopCommitAnimation => {
-                self.commit_anim_running.store(false, Ordering::Release);
+                self.stop_commit_animation_if_idle();
             }
             AppEvent::CommitTick => {
                 self.chat_widget.on_commit_tick();
@@ -4983,6 +4907,7 @@ mod tests {
 
     use crate::product::agent::features::Feature;
     use crate::product::agent::models_manager::manager::ModelsManager;
+    use crate::product::agent::protocol::AgentMessageDeltaEvent;
     use crate::product::agent::protocol::AskForApproval;
     use crate::product::agent::protocol::Event;
     use crate::product::agent::protocol::EventMsg;
@@ -5010,6 +4935,41 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use tempfile::tempdir;
     use tokio::time;
+
+    #[test]
+    fn commit_animation_generation_prevents_stopped_worker_from_rejoining() {
+        let control = CommitAnimationControl::default();
+        let first = control.try_start().expect("first worker");
+        assert!(control.is_running(first));
+
+        control.stop();
+        let second = control.try_start().expect("replacement worker");
+
+        assert!(!control.is_running(first));
+        assert!(control.is_running(second));
+    }
+
+    #[tokio::test]
+    async fn stale_stop_does_not_cancel_pending_stream_display() {
+        let mut app = make_test_app().await;
+        let generation = app
+            .commit_animation
+            .try_start()
+            .expect("display clock worker");
+        app.chat_widget.handle_codex_event(Event {
+            id: "pending-stream".to_string(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: "pending".to_string(),
+            }),
+        });
+
+        app.stop_commit_animation_if_idle();
+        assert!(app.commit_animation.is_running(generation));
+
+        app.chat_widget.on_commit_tick();
+        app.stop_commit_animation_if_idle();
+        assert!(!app.commit_animation.is_running(generation));
+    }
 
     #[test]
     fn normalize_harness_overrides_resolves_relative_add_dirs() -> Result<()> {
@@ -5332,243 +5292,6 @@ mod tests {
             .await
             .expect("timed out waiting for redraw")
             .expect("frame requester closed");
-    }
-
-    #[tokio::test]
-    async fn final_agent_message_schedules_settle_repaint_budget() {
-        let mut app = make_test_app().await;
-        let mut terminal = make_test_terminal(120, 4);
-        let (frame_requester, mut frame_rx) = tui::FrameRequester::test_with_receiver();
-
-        app.insert_history_cell_with_viewport_repaint_on_terminal(
-            Box::new(AgentMessageCell::new_markdown(
-                "final answer".to_string(),
-                true,
-            )),
-            &mut terminal,
-            &frame_requester,
-        );
-
-        assert_eq!(
-            app.final_answer_settle_repaint_frames_remaining,
-            FINAL_ANSWER_SETTLE_REPAINT_FRAMES
-        );
-        assert!(frame_rx.try_recv().is_ok());
-        assert!(matches!(frame_rx.try_recv(), Err(TryRecvError::Empty)));
-    }
-
-    #[tokio::test]
-    async fn final_answer_settle_viewport_repaint_budget_is_consumed_over_two_draws() {
-        let mut app = make_test_app().await;
-        let mut terminal = make_test_terminal(120, 4);
-        let (frame_requester, mut frame_rx) = tui::FrameRequester::test_with_receiver();
-        let correct = "看到的“大工具输出”细节";
-        let corrupted = "看到的工具输出”细“大节";
-
-        draw_static_row(&mut terminal, correct);
-        corrupt_terminal_row(&mut terminal, 0, corrupted);
-        assert!(
-            terminal
-                .backend()
-                .vt100()
-                .screen()
-                .contents()
-                .contains(corrupted)
-        );
-
-        app.final_answer_settle_repaint_frames_remaining = FINAL_ANSWER_SETTLE_REPAINT_FRAMES;
-        app.consume_final_answer_settle_repaint_on_terminal(&mut terminal, &frame_requester);
-        assert_eq!(app.final_answer_settle_repaint_frames_remaining, 1);
-        assert!(frame_rx.try_recv().is_ok());
-        let screen = draw_static_row(&mut terminal, correct);
-        assert!(screen.contains(correct));
-        assert!(!screen.contains(corrupted));
-
-        corrupt_terminal_row(&mut terminal, 0, corrupted);
-        app.consume_final_answer_settle_repaint_on_terminal(&mut terminal, &frame_requester);
-        assert_eq!(app.final_answer_settle_repaint_frames_remaining, 0);
-        assert!(matches!(frame_rx.try_recv(), Err(TryRecvError::Empty)));
-        let screen = draw_static_row(&mut terminal, correct);
-        assert!(screen.contains(correct));
-        assert!(!screen.contains(corrupted));
-
-        corrupt_terminal_row(&mut terminal, 0, corrupted);
-        app.consume_final_answer_settle_repaint_on_terminal(&mut terminal, &frame_requester);
-        assert_eq!(app.final_answer_settle_repaint_frames_remaining, 0);
-        assert!(matches!(frame_rx.try_recv(), Err(TryRecvError::Empty)));
-        let screen = draw_static_row(&mut terminal, correct);
-        assert!(screen.contains(corrupted));
-        assert!(!screen.contains(correct));
-    }
-
-    #[tokio::test]
-    async fn final_answer_settle_repairs_cybergym_session_text_order() {
-        let mut app = make_test_app().await;
-        let width = 180;
-        let height = 30;
-        let mut terminal = make_test_terminal(width, height);
-        let (frame_requester, _frame_rx) = tui::FrameRequester::test_with_receiver();
-        let answer = concat!(
-            "任务跑完了，但不是成功。\n\n",
-            "你贴的这个报错：\n\n",
-            "`failed to record rollout items: failed to queue rollout items: channel closed`\n\n",
-            "不是 CyberGym 判题失败原因。它发生在 `12:32:30Z`，而内层 security run 已经在 `12:32:27Z` 结束了，所以这是结束收尾时 rollout recorder 已关闭、后续 late write 还尝试记录 session item 导致的日志噪声。真正的任务失败原因是 vuln-detection 图调度停滞，没有产出 validated finding。\n"
-        );
-
-        app.insert_history_cell_with_viewport_repaint_on_terminal(
-            Box::new(AgentMessageCell::new_markdown(answer.to_string(), true)),
-            &mut terminal,
-            &frame_requester,
-        );
-
-        let initial_screen = draw_chat_widget(&app, &mut terminal);
-        assert_cybergym_session_answer_order(&initial_screen);
-        let row = screen_row_containing(&initial_screen, "CyberGym 判题失败原因");
-        corrupt_terminal_row(
-            &mut terminal,
-            row,
-            "不是 CyberGym 判题失败原因它。发生在 12:32:30Z，而层 security内 run 已经在 12:32:27Z 结束了，所以这是结束收尾时 rollout recorder 已关闭、后续 late write 还尝试记录 session item 导致的日志噪声。的真正任务失败原因是 vuln-detection 图调度停滞，没有产出 validated finding。",
-        );
-        let corrupted_screen = terminal.backend().vt100().screen().contents();
-        assert!(
-            corrupted_screen.contains("不是 CyberGym 判题失败原因它。发生"),
-            "test setup should corrupt CyberGym session row: {corrupted_screen:?}"
-        );
-
-        app.consume_final_answer_settle_repaint_on_terminal(&mut terminal, &frame_requester);
-        let repaired_screen = draw_chat_widget(&app, &mut terminal);
-        assert_cybergym_session_answer_order(&repaired_screen);
-    }
-
-    #[tokio::test]
-    async fn non_agent_viewport_repaint_cell_does_not_schedule_final_answer_settle() {
-        let mut app = make_test_app().await;
-        let mut terminal = make_test_terminal(120, 4);
-        let (frame_requester, mut frame_rx) = tui::FrameRequester::test_with_receiver();
-        let correct = "ordinary info row with stable ASCII";
-        let corrupted = "ordinary info row with stale ASCII";
-
-        draw_static_row(&mut terminal, correct);
-        corrupt_terminal_row(&mut terminal, 0, corrupted);
-
-        app.insert_history_cell_with_viewport_repaint_on_terminal(
-            Box::new(PlainHistoryCell::new(vec!["info".into()])),
-            &mut terminal,
-            &frame_requester,
-        );
-
-        assert_eq!(app.final_answer_settle_repaint_frames_remaining, 0);
-        assert!(frame_rx.try_recv().is_ok());
-        assert!(matches!(frame_rx.try_recv(), Err(TryRecvError::Empty)));
-        let screen = draw_static_row(&mut terminal, correct);
-        assert!(screen.contains(correct));
-        assert!(!screen.contains(corrupted));
-    }
-
-    #[tokio::test]
-    async fn proposed_plan_viewport_repaint_does_not_schedule_final_answer_settle() {
-        let mut app = make_test_app().await;
-        let mut terminal = make_test_terminal(120, 4);
-        let (frame_requester, mut frame_rx) = tui::FrameRequester::test_with_receiver();
-
-        app.insert_history_cell_with_viewport_repaint_on_terminal(
-            Box::new(history_cell::new_proposed_plan(
-                "# Plan\n\n1. Keep streaming stable.".to_string(),
-            )),
-            &mut terminal,
-            &frame_requester,
-        );
-
-        assert_eq!(app.final_answer_settle_repaint_frames_remaining, 0);
-        assert!(frame_rx.try_recv().is_ok());
-        assert!(matches!(frame_rx.try_recv(), Err(TryRecvError::Empty)));
-    }
-
-    fn make_test_terminal(
-        width: u16,
-        height: u16,
-    ) -> crate::product::tui_app::custom_terminal::Terminal<VT100Backend> {
-        let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
-            VT100Backend::new(width, height),
-        )
-        .expect("terminal");
-        terminal.set_viewport_area(Rect::new(0, 0, width, height));
-        terminal
-    }
-
-    fn draw_static_row(
-        terminal: &mut crate::product::tui_app::custom_terminal::Terminal<VT100Backend>,
-        text: &str,
-    ) -> String {
-        terminal
-            .draw(|frame| {
-                frame
-                    .buffer
-                    .set_string(0, 0, text, ratatui::style::Style::default());
-            })
-            .expect("draw static row");
-        terminal.backend().vt100().screen().contents()
-    }
-
-    fn draw_chat_widget(
-        app: &App,
-        terminal: &mut crate::product::tui_app::custom_terminal::Terminal<VT100Backend>,
-    ) -> String {
-        let width = terminal.backend().vt100().screen().size().1;
-        if app.chat_widget.prepare_transcript_terminal_repaint(width) {
-            terminal.invalidate_viewport();
-        }
-        terminal
-            .draw(|frame| app.chat_widget.render(frame.area(), frame.buffer_mut()))
-            .expect("draw chat widget");
-        terminal.backend().vt100().screen().contents()
-    }
-
-    fn corrupt_terminal_row(
-        terminal: &mut crate::product::tui_app::custom_terminal::Terminal<VT100Backend>,
-        y: u16,
-        text: &str,
-    ) {
-        let backend = terminal.backend_mut();
-        crossterm::queue!(
-            backend,
-            crossterm::cursor::MoveTo(0, y),
-            crossterm::terminal::Clear(crossterm::terminal::ClearType::UntilNewLine),
-            crossterm::style::Print(text)
-        )
-        .expect("corrupt terminal row");
-        std::io::Write::flush(backend).expect("flush corrupted terminal row");
-    }
-
-    fn screen_row_containing(contents: &str, needle: &str) -> u16 {
-        contents
-            .lines()
-            .position(|line| line.contains(needle))
-            .and_then(|row| u16::try_from(row).ok())
-            .unwrap_or_else(|| panic!("screen should contain {needle:?}: {contents:?}"))
-    }
-
-    fn assert_cybergym_session_answer_order(rendered: &str) {
-        for needle in [
-            "不是 CyberGym 判题失败原因。它发生在",
-            "内层 security run 已经在",
-            "真正的任务失败原因是 vuln-detection 图调度停滞",
-        ] {
-            assert!(
-                rendered.contains(needle),
-                "CyberGym session answer missing correct text {needle:?}: {rendered:?}"
-            );
-        }
-        for stale in [
-            "不是 CyberGym 判题失败原因它。发生",
-            "层 security内 run",
-            "的真正任务失败原因是 vuln-detection",
-        ] {
-            assert!(
-                !rendered.contains(stale),
-                "CyberGym session answer kept stale text {stale:?}: {rendered:?}"
-            );
-        }
     }
 
     #[tokio::test]
@@ -5983,10 +5706,9 @@ mod tests {
             transcript_cells: Vec::new(),
             overlay: None,
             enhanced_keys_supported: false,
-            commit_anim_running: Arc::new(AtomicBool::new(false)),
+            commit_animation: CommitAnimationControl::default(),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
-            final_answer_settle_repaint_frames_remaining: 0,
             feedback: crate::product::feedback::CodexFeedback::new(),
             pending_update_action: None,
             suppressed_shutdown_complete_threads: HashSet::new(),
@@ -6056,10 +5778,9 @@ mod tests {
                 transcript_cells: Vec::new(),
                 overlay: None,
                 enhanced_keys_supported: false,
-                commit_anim_running: Arc::new(AtomicBool::new(false)),
+                commit_animation: CommitAnimationControl::default(),
                 backtrack: BacktrackState::default(),
                 backtrack_render_pending: false,
-                final_answer_settle_repaint_frames_remaining: 0,
                 feedback: crate::product::feedback::CodexFeedback::new(),
                 pending_update_action: None,
                 suppressed_shutdown_complete_threads: HashSet::new(),
@@ -6294,10 +6015,9 @@ show_raw_agent_reasoning = true
             transcript_cells: Vec::new(),
             overlay: None,
             enhanced_keys_supported: false,
-            commit_anim_running: Arc::new(AtomicBool::new(false)),
+            commit_animation: CommitAnimationControl::default(),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
-            final_answer_settle_repaint_frames_remaining: 0,
             feedback: crate::product::feedback::CodexFeedback::new(),
             pending_update_action: None,
             suppressed_shutdown_complete_threads: HashSet::new(),

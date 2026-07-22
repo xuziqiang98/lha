@@ -1,6 +1,6 @@
 use std::fmt;
 use std::io;
-use std::io::stdout;
+use std::io::Write;
 
 use crossterm::Command;
 use ratatui::crossterm::execute;
@@ -9,8 +9,8 @@ use ratatui::crossterm::execute;
 pub struct BelBackend;
 
 impl BelBackend {
-    pub fn notify(&mut self, _message: &str) -> io::Result<()> {
-        execute!(stdout(), PostNotification)
+    pub fn notify(&mut self, _message: &str, writer: &mut impl Write) -> io::Result<()> {
+        execute!(writer, PostNotification)
     }
 }
 
