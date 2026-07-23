@@ -673,6 +673,72 @@ async fn streaming_display_tick_coalesces_pending_deltas_without_idle_redraw() {
 }
 
 #[tokio::test]
+async fn error_before_display_tick_preserves_partial_answer() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_task_started();
+    let _ = drain_events(&mut rx);
+    chat.on_agent_message_delta("partial answer\n".to_string());
+    let _ = drain_events(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "stream-error".to_string(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "stream failed".to_string(),
+            codex_error_info: None,
+        }),
+    });
+
+    let rendered = drain_events(&mut rx)
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .map(|cell| lines_to_single_string(&cell.display_lines(80)))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rendered,
+        vec![
+            "• partial answer\n".to_string(),
+            "■ stream failed\n".to_string()
+        ]
+    );
+}
+
+#[tokio::test]
+async fn turn_abort_after_display_tick_preserves_uncommitted_tail_once() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_task_started();
+    chat.on_agent_message_delta("committed prefix".to_string());
+    chat.on_commit_tick();
+    chat.on_agent_message_delta(" and pending tail".to_string());
+    let _ = drain_events(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "turn-aborted".to_string(),
+        msg: EventMsg::TurnAborted(crate::product::agent::protocol::TurnAbortedEvent {
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    let rendered = drain_events(&mut rx)
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .map(|cell| lines_to_single_string(&cell.display_lines(80)))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rendered,
+        vec![
+            "• committed prefix and pending tail\n".to_string(),
+            concat!(
+                "■ Conversation interrupted - tell the model what to do differently. ",
+                "Something went wrong? Hit `/feedback` to report the issue.\n"
+            )
+            .to_string()
+        ]
+    );
+}
+
+#[tokio::test]
 async fn streaming_cjk_deltas_only_touch_live_tail_rows() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     let width = 80;
@@ -6694,6 +6760,30 @@ async fn streaming_final_answer_keeps_task_running_state() {
         other => panic!("expected Op::Interrupt, got {other:?}"),
     }
     assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+}
+
+#[tokio::test]
+async fn streaming_answer_esc_interrupts_with_suspended_status() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_task_started();
+    chat.on_agent_message_delta("partial answer".to_string());
+    chat.on_commit_tick();
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_widget().is_none());
+    let _ = drain_events(&mut rx);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    let events = drain_events(&mut rx);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, AppEvent::CodexOp(Op::Interrupt)))
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]

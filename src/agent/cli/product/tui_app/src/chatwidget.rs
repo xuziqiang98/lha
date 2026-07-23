@@ -2436,13 +2436,26 @@ impl ChatWidget {
         }
     }
 
-    /// Finalize any active exec as failed and stop/clear agent-turn UI state.
+    /// Preserve received assistant output while marking any active tool content as failed.
+    fn finalize_active_content_for_failed_turn(&mut self) {
+        if self.stream_controller.is_none() {
+            self.finalize_active_cell_as_failed();
+            return;
+        }
+
+        if !self.active_cell_is_answer_stream() {
+            self.finalize_active_cell_as_failed();
+        }
+        self.flush_answer_stream_with_separator();
+    }
+
+    /// Finalize active content and stop/clear agent-turn UI state.
     ///
     /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
     /// and should continue to drive the bottom-pane running indicator while it is in progress.
     fn finalize_turn(&mut self) {
-        // Ensure any spinner is replaced by a red ✗ and flushed into history.
-        self.finalize_active_cell_as_failed();
+        // Preserve received assistant output while still marking active tool work as failed.
+        self.finalize_active_content_for_failed_turn();
         // Reset running state and clear streaming buffers.
         self.pending_review_elapsed_secs = None;
         self.agent_turn_running = false;
@@ -2453,10 +2466,9 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
-        let had_answer_stream = self.stream_controller.take().is_some();
         let had_plan_stream = self.discard_pending_proposed_plan_turn_state();
-        if had_answer_stream || had_plan_stream {
-            self.app_event_tx.send(AppEvent::StopCommitAnimation);
+        if had_plan_stream {
+            self.stop_commit_animation_if_no_stream_controllers();
         }
         self.pending_streamed_agent_message_echo = None;
     }

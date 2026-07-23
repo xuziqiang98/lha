@@ -301,6 +301,10 @@ impl BottomPane {
         self.status.as_ref()
     }
 
+    fn visible_or_suspended_status(&self) -> Option<&StatusIndicatorWidget> {
+        self.status.as_ref().or(self.suspended_status.as_ref())
+    }
+
     fn visible_or_suspended_status_mut(&mut self) -> Option<&mut StatusIndicatorWidget> {
         if let Some(status) = self.status.as_mut() {
             Some(status)
@@ -378,13 +382,13 @@ impl BottomPane {
             self.request_redraw();
             InputResult::None
         } else {
-            // If a task is running and a status line is visible, allow Esc to
-            // send an interrupt even while the composer has focus.
+            // If a task is running and its status is visible or temporarily suspended, allow Esc
+            // to send an interrupt even while the composer has focus.
             // When a popup is active, prefer dismissing it over interrupting the task.
             if key_event.code == KeyCode::Esc
                 && self.is_task_running
                 && !self.composer.popup_active()
-                && let Some(status) = &self.status
+                && let Some(status) = self.visible_or_suspended_status()
             {
                 // Send Op::Interrupt
                 status.interrupt();
@@ -1687,6 +1691,38 @@ mod tests {
         assert!(
             matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
             "expected Esc to send Op::Interrupt while a task is running"
+        );
+    }
+
+    #[test]
+    fn esc_interrupts_running_task_when_status_is_suspended() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask LHA to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        pane.suspend_status_indicator();
+        assert!(pane.status_widget().is_none());
+        assert!(pane.suspended_status.is_some());
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(
+            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
+            "expected Esc to send Op::Interrupt while the running status is suspended"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "expected exactly one interrupt event"
         );
     }
 

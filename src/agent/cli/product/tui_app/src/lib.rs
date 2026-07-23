@@ -391,6 +391,7 @@ async fn run_ratatui_app(
     terminal.clear()?;
 
     let mut tui = Tui::new(terminal, use_mouse_capture, motion_policy);
+    tui.install_stderr_panic_hook();
     if let Err(err) = tui.redirect_stderr_to(&stderr_log_path) {
         tracing::warn!("failed to redirect TUI stderr to the log: {err}");
     }

@@ -10,6 +10,7 @@ use std::panic;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::TryLockError;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
@@ -223,6 +224,25 @@ fn set_panic_hook() {
     }));
 }
 
+fn set_stderr_panic_hook(stderr_guard: SharedStderrGuard) {
+    let hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
+        let mut guard = match stderr_guard.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::Poisoned(err)) => err.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                hook(panic_info);
+                return;
+            }
+        };
+        if let Some(guard) = guard.as_mut() {
+            let _ = guard.suspend();
+        }
+        drop(guard);
+        hook(panic_info);
+    }));
+}
+
 #[derive(Clone, Debug)]
 pub enum TuiEvent {
     Key(KeyEvent),
@@ -300,6 +320,10 @@ impl Tui {
 
     pub fn set_notification_method(&mut self, method: NotificationMethod) {
         self.notification_backend = Some(detect_backend(method));
+    }
+
+    pub(crate) fn install_stderr_panic_hook(&self) {
+        set_stderr_panic_hook(self.stderr_guard.clone());
     }
 
     pub(crate) fn redirect_stderr_to(&mut self, path: &std::path::Path) -> Result<()> {
@@ -633,6 +657,58 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::layout::Rect;
     use ratatui::style::Style;
+    use std::path::Path;
+    use std::process::Command as ProcessCommand;
+
+    const PANIC_HOOK_CHILD_LOG_PATH: &str = "LHA_PANIC_HOOK_TEST_LOG_PATH";
+
+    fn write_raw_stderr(message: &str) {
+        let mut stderr = std::io::stderr().lock();
+        std::io::Write::write_all(&mut stderr, message.as_bytes()).expect("write stderr");
+        std::io::Write::flush(&mut stderr).expect("flush stderr");
+    }
+
+    #[test]
+    fn panic_hook_stderr_child() {
+        let Some(path) = std::env::var_os(PANIC_HOOK_CHILD_LOG_PATH) else {
+            return;
+        };
+
+        panic::set_hook(Box::new(|_| write_raw_stderr("panic-hook-report\n")));
+        let guard = TuiStderrGuard::redirect_to(Path::new(&path)).expect("redirect child stderr");
+        let stderr_guard = Arc::new(Mutex::new(Some(guard)));
+        write_raw_stderr("redirected-before-panic\n");
+        set_stderr_panic_hook(stderr_guard);
+
+        panic!("trigger stderr-restoring panic hook");
+    }
+
+    #[test]
+    fn panic_hook_restores_stderr_before_chaining() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let log_path = temp.path().join("lha-tui.log");
+        let output = ProcessCommand::new(std::env::current_exe().expect("current test binary"))
+            .arg("panic_hook_stderr_child")
+            .arg("--nocapture")
+            .env(PANIC_HOOK_CHILD_LOG_PATH, &log_path)
+            .output()
+            .expect("run panic hook child");
+
+        assert!(!output.status.success(), "{output:?}");
+        let child_stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            child_stderr.contains("panic-hook-report"),
+            "{child_stderr:?}"
+        );
+        assert!(
+            !child_stderr.contains("redirected-before-panic"),
+            "{child_stderr:?}"
+        );
+
+        let log = std::fs::read_to_string(log_path).expect("read redirected stderr");
+        assert!(log.contains("redirected-before-panic"), "{log:?}");
+        assert!(!log.contains("panic-hook-report"), "{log:?}");
+    }
 
     fn command_bytes(command: impl crossterm::Command) -> Vec<u8> {
         let mut bytes = Vec::new();
