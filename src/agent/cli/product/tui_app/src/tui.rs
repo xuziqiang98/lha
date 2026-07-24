@@ -56,11 +56,8 @@ mod frame_rate_limiter;
 mod frame_requester;
 #[cfg(unix)]
 mod job_control;
-mod motion_policy;
 mod stderr_guard;
 
-pub(crate) use motion_policy::MotionPolicy;
-pub(crate) use motion_policy::TerminalEnvironment;
 use stderr_guard::TuiStderrGuard;
 
 type SharedStderrGuard = Arc<Mutex<Option<TuiStderrGuard>>>;
@@ -282,16 +279,9 @@ impl Drop for Tui {
 }
 
 impl Tui {
-    pub fn new(
-        terminal: Terminal,
-        mouse_capture_enabled: bool,
-        motion_policy: MotionPolicy,
-    ) -> Self {
+    pub fn new(terminal: Terminal, mouse_capture_enabled: bool) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
-        let frame_requester = FrameRequester::with_min_frame_interval(
-            draw_tx.clone(),
-            motion_policy.min_frame_interval(),
-        );
+        let frame_requester = FrameRequester::new(draw_tx.clone());
         let stderr_guard = Arc::new(Mutex::new(None));
 
         // Detect keyboard enhancement support before any EventStream is created so the

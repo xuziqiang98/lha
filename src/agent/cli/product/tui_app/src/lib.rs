@@ -361,16 +361,13 @@ pub async fn run_main(
 
 async fn run_ratatui_app(
     cli: Cli,
-    mut initial_config: Config,
+    initial_config: Config,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     cloud_requirements: CloudRequirementsLoader,
     feedback: crate::product::feedback::CodexFeedback,
 ) -> color_eyre::Result<AppExitInfo> {
     color_eyre::install()?;
-    let motion_policy =
-        tui::MotionPolicy::for_environment(&tui::TerminalEnvironment::from_process());
-    initial_config.animations = motion_policy.effective_animations(initial_config.animations);
     let stderr_log_path =
         crate::product::agent::config::log_dir(&initial_config)?.join("lha-tui.log");
 
@@ -390,7 +387,7 @@ async fn run_ratatui_app(
     let mut terminal_restore_guard = TerminalRestoreGuard::new();
     terminal.clear()?;
 
-    let mut tui = Tui::new(terminal, use_mouse_capture, motion_policy);
+    let mut tui = Tui::new(terminal, use_mouse_capture);
     tui.install_stderr_panic_hook();
     if let Err(err) = tui.redirect_stderr_to(&stderr_log_path) {
         tracing::warn!("failed to redirect TUI stderr to the log: {err}");
@@ -560,7 +557,7 @@ async fn run_ratatui_app(
         None => None,
     };
 
-    let mut config = match &session_selection {
+    let config = match &session_selection {
         resume_picker::SessionSelection::Resume(_) | resume_picker::SessionSelection::Fork(_) => {
             load_config_or_exit_with_fallback_cwd(
                 cli_kv_overrides.clone(),
@@ -572,7 +569,6 @@ async fn run_ratatui_app(
         }
         _ => config,
     };
-    config.animations = motion_policy.effective_animations(config.animations);
     tui.set_mouse_capture_enabled(resolve_mouse_capture(&cli, &config))?;
     let active_profile = config.active_profile.clone();
     let show_provider_popup_on_startup = config.provider_config_required;
