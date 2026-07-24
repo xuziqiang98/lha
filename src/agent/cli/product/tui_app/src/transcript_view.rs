@@ -323,7 +323,7 @@ impl TranscriptView {
     }
 
     pub(crate) fn render_inline(&mut self, area: Rect, buf: &mut Buffer) {
-        self.render_area(area, buf, false, false);
+        self.render_area(area, buf, false, true);
     }
 
     pub(crate) fn render_overlay_content(&mut self, area: Rect, buf: &mut Buffer) {
@@ -1959,7 +1959,7 @@ mod tests {
 
         assert_eq!(view.desired_height(20), 3);
         assert_eq!(
-            area_lines(&buf, Rect::new(0, 0, 20, 3)),
+            area_lines(&buf, Rect::new(0, 2, 20, 3)),
             vec![
                 "first               ".to_string(),
                 "                    ".to_string(),
@@ -1993,7 +1993,7 @@ mod tests {
 
         assert_eq!(view.desired_height(20), 1);
         assert_eq!(
-            area_lines(&buf, Rect::new(0, 0, 20, 1)),
+            area_lines(&buf, Rect::new(0, 1, 20, 1)),
             vec!["tail                ".to_string()]
         );
     }
@@ -2086,7 +2086,7 @@ mod tests {
         let mut view = TranscriptView::new_transcript(vec![Arc::new(StyledBlockCell)]);
         let buf = render_test_view(&mut view, 12, 3);
 
-        assert_row_bg_is(&buf, 12, 0, Some(Color::Blue));
+        assert_row_bg_is(&buf, 12, 2, Some(Color::Blue));
     }
 
     #[test]
@@ -2094,7 +2094,7 @@ mod tests {
         let mut view = TranscriptView::new_transcript(vec![Arc::new(TestCell("plain"))]);
         let buf = render_test_view(&mut view, 12, 3);
 
-        assert_row_bg_is_not(&buf, 12, 0, Some(Color::Blue));
+        assert_row_bg_is_not(&buf, 12, 2, Some(Color::Blue));
     }
 
     #[test]
@@ -2121,7 +2121,7 @@ mod tests {
                 mouse(
                     MouseEventKind::Down(crossterm::event::MouseButton::Left),
                     0,
-                    0
+                    2
                 ),
                 &mut scroll,
             ),
@@ -2132,7 +2132,7 @@ mod tests {
                 mouse(
                     MouseEventKind::Drag(crossterm::event::MouseButton::Left),
                     5,
-                    0
+                    2
                 ),
                 &mut scroll,
             ),
@@ -2142,7 +2142,7 @@ mod tests {
             mouse(
                 MouseEventKind::Up(crossterm::event::MouseButton::Left),
                 5,
-                0,
+                2,
             ),
             &mut scroll,
         );
@@ -2154,13 +2154,13 @@ mod tests {
     }
 
     #[test]
-    fn mouse_down_below_top_anchored_content_is_ignored() {
+    fn mouse_down_above_bottom_anchored_content_is_ignored() {
         let mut view = TranscriptView::new_transcript(vec![Arc::new(TestCell("alpha"))]);
         let _ = render_test_view(&mut view, 20, 3);
         let mut scroll = MouseScrollState::default();
 
         let outcome = view.handle_mouse_event(
-            mouse(MouseEventKind::Down(MouseButton::Left), 0, 2),
+            mouse(MouseEventKind::Down(MouseButton::Left), 0, 0),
             &mut scroll,
         );
 
@@ -2919,7 +2919,7 @@ mod tests {
             mouse(
                 MouseEventKind::Down(crossterm::event::MouseButton::Left),
                 1,
-                0,
+                2,
             ),
             &mut scroll,
         );
@@ -2928,7 +2928,7 @@ mod tests {
                 mouse(
                     MouseEventKind::Drag(crossterm::event::MouseButton::Left),
                     99,
-                    0
+                    2
                 ),
                 &mut scroll,
             ),
@@ -2955,7 +2955,7 @@ mod tests {
     }
 
     #[test]
-    fn render_inline_top_aligns_in_nonzero_area_y() {
+    fn render_inline_bottom_aligns_in_nonzero_area_y() {
         let mut view = TranscriptView::new_transcript(vec![Arc::new(TestCell("tail"))]);
         let area = Rect::new(0, 4, 8, 3);
         let mut buf = Buffer::empty(Rect::new(0, 0, 8, 8));
@@ -2965,16 +2965,16 @@ mod tests {
         assert_eq!(
             area_lines(&buf, area),
             vec![
+                "        ".to_string(),
+                "        ".to_string(),
                 "tail    ".to_string(),
-                "        ".to_string(),
-                "        ".to_string(),
             ]
         );
-        assert_eq!(view.last_padding_top, 0);
+        assert_eq!(view.last_padding_top, 2);
     }
 
     #[test]
-    fn short_transcript_growth_keeps_existing_rows_stable() {
+    fn short_transcript_growth_stays_bottom_anchored() {
         let mut view = TranscriptView::new(Vec::new(), TranscriptRenderMode::Display);
         let area = Rect::new(0, 3, 20, 5);
         let mut first = Buffer::empty(Rect::new(0, 0, 20, 10));
@@ -2990,6 +2990,7 @@ mod tests {
             |_| TranscriptView::live_tail_from_lines(vec!["stable first row".into()]),
         );
         view.render_inline(area, &mut first);
+        let first_padding_top = view.last_padding_top;
         let first_row = (area.y..area.bottom())
             .find(|y| {
                 (area.x..area.right())
@@ -3025,10 +3026,20 @@ mod tests {
                     .contains("stable first row")
             })
             .expect("grown first row");
+        let grown_second_row = (area.y..area.bottom())
+            .find(|y| {
+                (area.x..area.right())
+                    .map(|x| grown[(x, *y)].symbol())
+                    .collect::<String>()
+                    .contains("new second row")
+            })
+            .expect("grown second row");
 
-        assert_eq!(first_row, area.y);
-        assert_eq!(grown_first_row, first_row);
-        assert_eq!(view.last_padding_top, 0);
+        assert_eq!(first_padding_top, 4);
+        assert_eq!(first_row, area.bottom() - 1);
+        assert_eq!(grown_first_row, area.bottom() - 2);
+        assert_eq!(grown_second_row, area.bottom() - 1);
+        assert_eq!(view.last_padding_top, 3);
     }
 
     #[test]

@@ -854,7 +854,7 @@ async fn error_and_abort_preserve_elapsed_for_runtime_separator() {
 }
 
 #[tokio::test]
-async fn streaming_cjk_deltas_only_touch_live_tail_rows() {
+async fn streaming_cjk_deltas_preserve_terminal_grid_when_bottom_anchor_shifts_rows() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     let width = 80;
     let height = 14;
@@ -870,13 +870,39 @@ async fn streaming_cjk_deltas_only_touch_live_tail_rows() {
     terminal.set_viewport_area(Rect::new(0, 0, width, height));
     render_chat_to_audited_terminal(&chat, &mut terminal);
     let before = terminal.last_frame_buffer().clone();
+    let stable_row_before = buffer_row_containing(&before, "稳定中文回答不会被后续状态动画重写。")
+        .unwrap_or_else(|| {
+            panic!(
+                "stable CJK row before streaming:\n{}",
+                buffer_to_string(&before)
+            )
+        });
 
     terminal.backend_mut().clear_frames();
-    chat.on_agent_message_delta("新增流式中文 tail".to_string());
+    chat.on_agent_message_delta(
+        "新增流式中文 tail 1\n新增流式中文 tail 2\n新增流式中文 tail 3\n新增流式中文 tail 4"
+            .to_string(),
+    );
     chat.on_commit_tick();
     render_chat_to_audited_terminal(&chat, &mut terminal);
     let after = terminal.last_frame_buffer().clone();
+    let stable_row_after = buffer_row_containing(&after, "稳定中文回答不会被后续状态动画重写。")
+        .unwrap_or_else(|| {
+            panic!(
+                "stable CJK row after streaming:\n{}",
+                buffer_to_string(&after)
+            )
+        });
+    let tail_row_after =
+        buffer_row_containing(&after, "新增流式中文 tail 4").expect("streaming CJK tail row");
 
+    assert!(
+        stable_row_after < stable_row_before,
+        "expected bottom anchoring to move the stable CJK row upward: before={stable_row_before}, \
+         after={stable_row_after}\n{}",
+        buffer_to_string(&after)
+    );
+    assert!(tail_row_after > stable_row_after);
     assert_sparse_frame("streaming CJK display tick", &before, &after, &terminal);
 }
 
@@ -3779,6 +3805,25 @@ fn buffer_to_string(buf: &Buffer) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn buffer_row_containing(buf: &Buffer, needle: &str) -> Option<u16> {
+    let compact_needle = needle
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    (buf.area.y..buf.area.bottom()).find(|y| {
+        let row = (buf.area.x..buf.area.right())
+            .filter_map(|x| {
+                let cell = &buf[(x, *y)];
+                (!cell.skip).then(|| cell.symbol())
+            })
+            .collect::<String>();
+        row.chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>()
+            .contains(&compact_needle)
+    })
 }
 
 fn render_sidebar_snapshot(snapshot: &SidebarSnapshot) -> String {
