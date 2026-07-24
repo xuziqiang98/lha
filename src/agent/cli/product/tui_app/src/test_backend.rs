@@ -520,15 +520,18 @@ impl AnsiAnalyzer {
     }
 
     fn set_size(&mut self, width: u16, height: u16) {
+        let bottom_anchored = self.scroll_bottom == self.height.saturating_sub(1);
         self.width = width;
         self.height = height;
-        self.row = self.row.min(height.saturating_sub(1));
+        let screen_bottom = height.saturating_sub(1);
+        self.row = self.row.min(screen_bottom);
         self.column = self.column.min(width.saturating_sub(1));
-        self.scroll_top = self.scroll_top.min(height.saturating_sub(1));
-        self.scroll_bottom = self
-            .scroll_bottom
-            .min(height.saturating_sub(1))
-            .max(self.scroll_top);
+        self.scroll_top = self.scroll_top.min(screen_bottom);
+        self.scroll_bottom = if bottom_anchored {
+            screen_bottom
+        } else {
+            self.scroll_bottom.min(screen_bottom).max(self.scroll_top)
+        };
     }
 
     fn advance(&mut self, bytes: &[u8]) {
@@ -951,5 +954,39 @@ mod audited_tests {
             frame.screen_after,
             vec!["abcd".to_string(), "E".to_string()]
         );
+    }
+
+    #[test]
+    fn ansi_analyzer_expands_bottom_anchored_scroll_region_on_height_growth() {
+        let mut backend = AuditedVT100Backend::new(4, 2);
+        backend.write_all(b"\x1b[2;1H").unwrap();
+        Write::flush(&mut backend).unwrap();
+        backend.clear_frames();
+
+        backend.set_size(4, 4);
+        backend.write_all(b"\nX").unwrap();
+        Write::flush(&mut backend).unwrap();
+
+        let frame = backend.last_frame().unwrap();
+        assert_eq!(frame.stats.scroll_operation_count, 0);
+        assert_eq!(frame.stats.mutated_rows, BTreeSet::from([2]));
+        assert_eq!(frame.stats.printed_columns_by_row, BTreeMap::from([(2, 1)]));
+    }
+
+    #[test]
+    fn ansi_analyzer_preserves_non_anchored_scroll_region_on_height_growth() {
+        let mut backend = AuditedVT100Backend::new(4, 4);
+        backend.write_all(b"\x1b[2;3r\x1b[3;1H").unwrap();
+        Write::flush(&mut backend).unwrap();
+        backend.clear_frames();
+
+        backend.set_size(4, 6);
+        backend.write_all(b"\nX").unwrap();
+        Write::flush(&mut backend).unwrap();
+
+        let frame = backend.last_frame().unwrap();
+        assert_eq!(frame.stats.scroll_operation_count, 1);
+        assert_eq!(frame.stats.mutated_rows, BTreeSet::from([1, 2]));
+        assert_eq!(frame.stats.printed_columns_by_row, BTreeMap::from([(2, 1)]));
     }
 }
