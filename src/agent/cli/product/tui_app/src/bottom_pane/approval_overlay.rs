@@ -229,6 +229,36 @@ impl ApprovalOverlay {
         }
     }
 
+    fn cancel_all(&mut self) {
+        if self.done {
+            return;
+        }
+        if !self.current_complete
+            && let Some(variant) = self.current_variant.as_ref()
+        {
+            match variant {
+                ApprovalVariant::Exec { id, command, .. } => {
+                    self.handle_exec_decision(id, command, ReviewDecision::Abort);
+                }
+                ApprovalVariant::ApplyPatch { id, .. } => {
+                    self.handle_patch_decision(id, ReviewDecision::Abort);
+                }
+                ApprovalVariant::McpElicitation {
+                    server_name,
+                    request_id,
+                } => {
+                    self.handle_elicitation_decision(
+                        server_name,
+                        request_id,
+                        ElicitationAction::Cancel,
+                    );
+                }
+            }
+        }
+        self.queue.clear();
+        self.done = true;
+    }
+
     fn try_handle_shortcut(&mut self, key_event: &KeyEvent) -> bool {
         match key_event {
             KeyEvent {
@@ -273,34 +303,12 @@ impl BottomPaneView for ApprovalOverlay {
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
-        if self.done {
-            return CancellationEvent::Handled;
-        }
-        if !self.current_complete
-            && let Some(variant) = self.current_variant.as_ref()
-        {
-            match &variant {
-                ApprovalVariant::Exec { id, command, .. } => {
-                    self.handle_exec_decision(id, command, ReviewDecision::Abort);
-                }
-                ApprovalVariant::ApplyPatch { id, .. } => {
-                    self.handle_patch_decision(id, ReviewDecision::Abort);
-                }
-                ApprovalVariant::McpElicitation {
-                    server_name,
-                    request_id,
-                } => {
-                    self.handle_elicitation_decision(
-                        server_name,
-                        request_id,
-                        ElicitationAction::Cancel,
-                    );
-                }
-            }
-        }
-        self.queue.clear();
-        self.done = true;
+        self.cancel_all();
         CancellationEvent::Handled
+    }
+
+    fn on_programmatic_dismiss(&mut self) {
+        self.cancel_all();
     }
 
     fn is_complete(&self) -> bool {

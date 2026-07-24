@@ -135,6 +135,14 @@ pub(crate) struct RequestUserInputOverlay {
 }
 
 impl RequestUserInputOverlay {
+    fn interrupt_and_finish(&mut self) {
+        if self.done {
+            return;
+        }
+        self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+        self.done = true;
+    }
+
     pub(crate) fn new(
         request: RequestUserInputEvent,
         app_event_tx: AppEventSender,
@@ -965,8 +973,7 @@ impl BottomPaneView for RequestUserInputOverlay {
         }
 
         if matches!(key_event.code, KeyCode::Esc) {
-            self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
-            self.done = true;
+            self.interrupt_and_finish();
             return;
         }
 
@@ -1162,8 +1169,7 @@ impl BottomPaneView for RequestUserInputOverlay {
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         if self.confirm_unanswered_active() {
             self.close_unanswered_confirmation();
-            self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
-            self.done = true;
+            self.interrupt_and_finish();
             return CancellationEvent::Handled;
         }
         if self.focus_is_notes() && !self.composer.current_text_with_pending().is_empty() {
@@ -1171,9 +1177,12 @@ impl BottomPaneView for RequestUserInputOverlay {
             return CancellationEvent::Handled;
         }
 
-        self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
-        self.done = true;
+        self.interrupt_and_finish();
         CancellationEvent::Handled
+    }
+
+    fn on_programmatic_dismiss(&mut self) {
+        self.interrupt_and_finish();
     }
 
     fn is_complete(&self) -> bool {

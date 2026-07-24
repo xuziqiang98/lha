@@ -2967,6 +2967,11 @@ impl ChatComposer {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn input_enabled(&self) -> bool {
+        self.input_enabled
+    }
+
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
     }

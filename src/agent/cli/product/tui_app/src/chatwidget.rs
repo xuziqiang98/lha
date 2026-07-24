@@ -15,11 +15,9 @@
 //! output is time-dependent, so the overlay can refresh its cached tail without rebuilding it on
 //! every draw.
 //!
-//! The bottom pane exposes a single "task running" indicator that drives the spinner and interrupt
-//! hints. This module treats that indicator as derived UI-busy state: it is set while an agent turn
-//! is in progress and while MCP server startup is in progress. Those lifecycles are tracked
-//! independently (`agent_turn_running` and `mcp_startup_status`) and synchronized via
-//! `update_task_running_state`.
+//! The bottom pane exposes a single status slot that drives the spinner and interrupt hints.
+//! `StatusMachine` owns the independent Turn, MCP startup, and Windows setup lifecycles, while
+//! `reconcile_status_ui()` derives the active presenter and applies it to the bottom pane.
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -172,6 +170,10 @@ use crate::product::tui_app::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::product::tui_app::bottom_pane::SelectionAction;
 use crate::product::tui_app::bottom_pane::SelectionItem;
 use crate::product::tui_app::bottom_pane::SelectionViewParams;
+use crate::product::tui_app::bottom_pane::StatusDirective;
+use crate::product::tui_app::bottom_pane::StatusPresenter;
+use crate::product::tui_app::bottom_pane::StatusSuspensionReason;
+use crate::product::tui_app::bottom_pane::StatusVisibility;
 use crate::product::tui_app::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::product::tui_app::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::product::tui_app::clipboard_paste::paste_image_to_temp_png;
@@ -499,6 +501,110 @@ impl StatusIndicatorState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum TurnLifecycle {
+    #[default]
+    Idle,
+    ReviewStarting,
+    Running(TurnKind),
+}
+
+impl TurnLifecycle {
+    fn is_busy(self) -> bool {
+        !matches!(self, Self::Idle)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TurnKind {
+    Agent,
+    Review,
+    Undo,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TurnFinalizing {
+    FinalAnswer,
+    ReviewExit,
+    UndoCompleted,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DispatchMode {
+    Live,
+    Replay,
+}
+
+impl DispatchMode {
+    fn is_live(self) -> bool {
+        self == Self::Live
+    }
+
+    fn is_replay(self) -> bool {
+        self == Self::Replay
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct StreamSuspension {
+    answer_visible: bool,
+    plan_visible: bool,
+}
+
+impl StreamSuspension {
+    fn any(self) -> bool {
+        self.answer_visible || self.plan_visible
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct McpStartupState {
+    servers: HashMap<String, McpStartupStatus>,
+}
+
+#[derive(Clone, Debug)]
+struct StatusMachine {
+    turn: TurnLifecycle,
+    mcp_startup: Option<McpStartupState>,
+    windows_setup_running: bool,
+    turn_status: StatusIndicatorState,
+    retry_status: Option<StatusIndicatorState>,
+    streams: StreamSuspension,
+    finalizing: Option<TurnFinalizing>,
+}
+
+impl Default for StatusMachine {
+    fn default() -> Self {
+        Self {
+            turn: TurnLifecycle::Idle,
+            mcp_startup: None,
+            windows_setup_running: false,
+            turn_status: StatusIndicatorState::working(),
+            retry_status: None,
+            streams: StreamSuspension::default(),
+            finalizing: None,
+        }
+    }
+}
+
+impl StatusMachine {
+    fn is_busy(&self) -> bool {
+        self.windows_setup_running || self.turn.is_busy() || self.mcp_startup.is_some()
+    }
+
+    fn presenter(&self) -> Option<StatusPresenter> {
+        if self.windows_setup_running {
+            Some(StatusPresenter::WindowsSetup)
+        } else if self.turn.is_busy() {
+            Some(StatusPresenter::Turn)
+        } else if self.mcp_startup.is_some() {
+            Some(StatusPresenter::McpStartup)
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CliAgentJobEntry {
     agent_type: AgentJobKind,
@@ -625,21 +731,10 @@ pub(crate) struct ChatWidget {
     last_unified_wait: Option<UnifiedExecWaitState>,
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
     turn_sleep_inhibitor: SleepInhibitor,
-    task_complete_pending: bool,
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
     changed_files: VecDeque<String>,
     cli_agent_jobs: HashMap<String, CliAgentJobEntry>,
-    /// Tracks whether the LHA product runtime currently considers an agent turn to be in progress.
-    ///
-    /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
-    /// can update the status header without accidentally clearing the spinner for an active turn.
-    agent_turn_running: bool,
-    /// Tracks per-server MCP startup state while startup is in progress.
-    ///
-    /// The map is `Some(_)` from the first `McpStartupUpdate` until `McpStartupComplete`, and the
-    /// bottom pane is treated as "running" while this is populated, even if no agent turn is
-    /// currently executing.
-    mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
+    status_machine: StatusMachine,
     connectors_cache: ConnectorsCacheState,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
@@ -656,10 +751,6 @@ pub(crate) struct ChatWidget {
     // contained the same raw text. Retain the last source until the next legacy delta to avoid a
     // duplicate cell in that old event shape.
     last_legacy_reasoning_finalized: Option<String>,
-    // Full status snapshot shown in the status indicator.
-    current_status: StatusIndicatorState,
-    // Previous status snapshot to restore after a transient stream retry.
-    retry_status: Option<StatusIndicatorState>,
     thread_id: Option<ThreadId>,
     agent_shutdown_complete: bool,
     thread_name: Option<String>,
@@ -698,10 +789,10 @@ pub(crate) struct ChatWidget {
     is_review_mode: bool,
     // Snapshot of token usage to restore after review mode exits.
     pre_review_token_info: Option<Option<TokenUsageInfo>>,
-    // True after the user submits /review and before the review banner is inserted.
-    pending_review_start_transition: bool,
-    // Status elapsed time preserved when review progress is hidden before TurnComplete.
-    pending_review_elapsed_secs: Option<u64>,
+    // Replay-only review context used for transcript rendering without affecting live input gates.
+    replay_review_mode: bool,
+    // Replay-only token snapshot, restored even when a rollout ends before review exit.
+    replay_pre_review_token_info: Option<Option<TokenUsageInfo>>,
     // Whether the next streamed assistant content should be preceded by a final message separator.
     //
     // This is set whenever we insert a visible history cell that conceptually belongs to a turn.
@@ -970,23 +1061,120 @@ fn parse_diff_header_path(raw: &str, prefix: &str) -> Option<Option<String>> {
 }
 
 impl ChatWidget {
-    /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
-    ///
-    /// The bottom pane only has one running flag, but this module treats it as a derived state of
-    /// the agent turn lifecycle, MCP startup lifecycle, and review-start transition.
     fn task_running_state(&self) -> bool {
-        self.agent_turn_running
-            || self.mcp_startup_status.is_some()
-            || self.pending_review_start_transition
+        self.status_machine.is_busy()
     }
 
-    fn update_task_running_state(&mut self) {
-        self.bottom_pane.set_task_running(self.task_running_state());
+    fn mcp_status_snapshot(&self) -> StatusIndicatorState {
+        let Some(mcp_startup) = self.status_machine.mcp_startup.as_ref() else {
+            return StatusIndicatorState::working();
+        };
+        let total = mcp_startup.servers.len();
+        let mut starting: Vec<_> = mcp_startup
+            .servers
+            .iter()
+            .filter_map(|(name, state)| {
+                matches!(state, McpStartupStatus::Starting).then_some(name.as_str())
+            })
+            .collect();
+        starting.sort_unstable();
+        let completed = total.saturating_sub(starting.len());
+        let header = if let Some(first) = starting.first() {
+            let max_to_show = 3;
+            let mut to_show: Vec<_> = starting.iter().take(max_to_show).copied().collect();
+            if starting.len() > max_to_show {
+                to_show.push("…");
+            }
+            if total > 1 {
+                format!(
+                    "Starting MCP servers ({completed}/{total}): {}",
+                    to_show.join(", ")
+                )
+            } else {
+                format!("Booting MCP server: {first}")
+            }
+        } else if total > 1 {
+            format!("Starting MCP servers ({total}/{total})")
+        } else {
+            "Finishing MCP startup".to_string()
+        };
+        StatusIndicatorState {
+            header,
+            details: None,
+            details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
+        }
     }
 
-    fn update_task_running_state_with_redraw(&mut self, request_redraw: bool) {
+    fn status_directive(&self) -> StatusDirective {
+        let Some(presenter) = self.status_machine.presenter() else {
+            return StatusDirective::idle();
+        };
+        let (status, visibility, interruptible) = match presenter {
+            StatusPresenter::WindowsSetup => (
+                StatusIndicatorState {
+                    header: "Setting up agent sandbox. This can take a minute.".to_string(),
+                    details: None,
+                    details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
+                },
+                StatusVisibility::Visible,
+                false,
+            ),
+            StatusPresenter::Turn => {
+                let visibility = if self.status_machine.finalizing.is_some() {
+                    StatusVisibility::Suspended(StatusSuspensionReason::TurnFinalizing)
+                } else if self.status_machine.streams.any() {
+                    StatusVisibility::Suspended(StatusSuspensionReason::StreamOutput)
+                } else {
+                    StatusVisibility::Visible
+                };
+                let interruptible = !matches!(
+                    self.status_machine.turn,
+                    TurnLifecycle::Running(TurnKind::Undo)
+                ) && self.status_machine.finalizing.is_none();
+                (
+                    self.status_machine.turn_status.clone(),
+                    visibility,
+                    interruptible,
+                )
+            }
+            StatusPresenter::McpStartup => {
+                (self.mcp_status_snapshot(), StatusVisibility::Visible, true)
+            }
+        };
+        StatusDirective {
+            running: true,
+            presenter: Some(presenter),
+            header: status.header,
+            details: status.details,
+            details_max_lines: status.details_max_lines,
+            visibility,
+            interruptible,
+            rebuild_widget: false,
+        }
+    }
+
+    fn reconcile_status_ui(&mut self) {
+        self.reconcile_status_ui_with_redraw(true);
+    }
+
+    fn reconcile_status_ui_with_redraw(&mut self, request_redraw: bool) {
+        let directive = self.status_directive();
         self.bottom_pane
-            .set_task_running_with_redraw(self.task_running_state(), request_redraw);
+            .apply_status_directive(directive, request_redraw);
+    }
+
+    fn reconcile_status_ui_with_rebuild(&mut self, request_redraw: bool) {
+        let mut directive = self.status_directive();
+        directive.rebuild_widget = directive.presenter == Some(StatusPresenter::Turn);
+        self.bottom_pane
+            .apply_status_directive(directive, request_redraw);
+    }
+
+    fn resume_turn_work(&mut self) {
+        if self.status_machine.finalizing == Some(TurnFinalizing::FinalAnswer) {
+            self.status_machine.finalizing = None;
+        }
+        self.reconcile_status_ui();
     }
 
     fn current_reasoning_entries(&self) -> &[ReasoningBufferEntry] {
@@ -1114,37 +1302,48 @@ impl ChatWidget {
             reasoning_buffer_presentation(self.current_reasoning_entries()).latest_status_title
         {
             self.set_status_header(header);
-        } else if self.bottom_pane.is_task_running() {
+        } else if self.status_machine.turn.is_busy() {
             self.set_status_header(String::from("Working"));
         }
     }
 
     fn flush_unified_exec_wait_streak(&mut self) {
+        self.flush_unified_exec_wait_streak_with_status_restore(true);
+    }
+
+    fn flush_unified_exec_wait_streak_with_status_restore(&mut self, restore_status: bool) {
         let Some(wait) = self.unified_exec_wait_streak.take() else {
             return;
         };
         self.needs_final_message_separator = true;
         let cell = history_cell::new_unified_exec_interaction(wait.command_display, String::new());
         self.app_event_tx.send_history_cell(Box::new(cell));
-        self.restore_reasoning_status_header();
+        if restore_status {
+            self.restore_reasoning_status_header();
+        }
     }
 
     fn flush_answer_stream_with_separator(&mut self) {
-        let _ = self.flush_answer_stream_with_separator_impl(false, None);
+        let _ = self.flush_answer_stream_with_separator_impl(false, None, true);
     }
 
     fn flush_answer_stream_for_blocking_prompt(&mut self) {
-        let _ = self.flush_answer_stream_with_separator_impl(true, None);
+        let _ = self.flush_answer_stream_with_separator_impl(true, None, true);
     }
 
     fn flush_answer_stream_with_separator_impl(
         &mut self,
         remember_final_echo: bool,
         leading_separator: Option<history_cell::FinalMessageSeparator>,
+        reconcile_status: bool,
     ) -> (bool, Option<history_cell::FinalMessageSeparator>) {
         let Some(controller) = self.stream_controller.take() else {
             return (false, leading_separator);
         };
+        self.status_machine.streams.answer_visible = false;
+        if reconcile_status {
+            self.reconcile_status_ui_with_redraw(false);
+        }
 
         self.stop_commit_animation_if_no_stream_controllers();
 
@@ -1248,7 +1447,7 @@ impl ChatWidget {
         if self.needs_final_message_separator && self.had_work_activity {
             let elapsed_seconds = self
                 .bottom_pane
-                .status_widget()
+                .status_widget_any()
                 .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
                 .map(|current| self.worked_elapsed_from(current));
             self.add_to_history(history_cell::FinalMessageSeparator::new(
@@ -1295,10 +1494,19 @@ impl ChatWidget {
             .wrapping_add(committed_source_len)
     }
 
+    #[cfg(test)]
     fn clear_plan_stream_controller(&mut self) -> bool {
+        self.clear_plan_stream_controller_with_reconcile(true)
+    }
+
+    fn clear_plan_stream_controller_with_reconcile(&mut self, reconcile_status: bool) -> bool {
         let cleared = self.plan_stream_controller.take().is_some();
         self.plan_stream_display_started = false;
         if cleared {
+            self.status_machine.streams.plan_visible = false;
+            if reconcile_status {
+                self.reconcile_status_ui_with_redraw(false);
+            }
             self.bump_plan_stream_revision();
             self.request_redraw();
         }
@@ -1311,8 +1519,12 @@ impl ChatWidget {
         }
     }
 
-    fn discard_pending_proposed_plan_turn_state(&mut self) -> bool {
-        let cleared_plan_stream = self.clear_plan_stream_controller();
+    fn discard_pending_proposed_plan_turn_state_with_reconcile(
+        &mut self,
+        reconcile_status: bool,
+    ) -> bool {
+        let cleared_plan_stream =
+            self.clear_plan_stream_controller_with_reconcile(reconcile_status);
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.saw_plan_item_this_turn = false;
@@ -1352,13 +1564,18 @@ impl ChatWidget {
     }
 
     fn flush_pending_proposed_plan(&mut self) -> bool {
+        self.flush_pending_proposed_plan_with_reconcile(true)
+    }
+
+    fn flush_pending_proposed_plan_with_reconcile(&mut self, reconcile_status: bool) -> bool {
         if self.pending_proposed_plan_rendered_this_turn {
             return false;
         }
         let Some(plan_text) = self.pending_proposed_plan_text() else {
             return false;
         };
-        let cleared_plan_stream = self.clear_plan_stream_controller();
+        let cleared_plan_stream =
+            self.clear_plan_stream_controller_with_reconcile(reconcile_status);
         if cleared_plan_stream {
             self.stop_commit_animation_if_no_stream_controllers();
         }
@@ -1398,17 +1615,12 @@ impl ChatWidget {
                     StatusDetailsCapitalization::Preserve => trimmed.to_string(),
                 }
             });
-        self.current_status = StatusIndicatorState {
-            header: header.clone(),
-            details: details.clone(),
-            details_max_lines,
-        };
-        self.bottom_pane.update_status(
+        self.status_machine.turn_status = StatusIndicatorState {
             header,
             details,
-            StatusDetailsCapitalization::Preserve,
             details_max_lines,
-        );
+        };
+        self.reconcile_status_ui();
     }
 
     /// Convenience wrapper around [`Self::set_status`];
@@ -1423,7 +1635,7 @@ impl ChatWidget {
     }
 
     fn restore_retry_status_if_present(&mut self) {
-        if let Some(status) = self.retry_status.take() {
+        if let Some(status) = self.status_machine.retry_status.take() {
             self.set_status(
                 status.header,
                 status.details,
@@ -1705,7 +1917,28 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_agent_message(&mut self, message: String) {
+    fn on_agent_message(&mut self, message: String, mode: DispatchMode) {
+        if mode.is_replay() {
+            self.render_agent_message_transcript_only(message);
+            return;
+        }
+        if self.status_machine.turn.is_busy() {
+            self.status_machine
+                .finalizing
+                .get_or_insert(TurnFinalizing::FinalAnswer);
+            self.reconcile_status_ui();
+        }
+        self.render_agent_message(message);
+    }
+
+    fn render_agent_message_transcript_only(&mut self, message: String) {
+        if !message.is_empty() {
+            self.add_to_history(AgentMessageCell::new_markdown(message, true));
+        }
+        self.request_redraw();
+    }
+
+    fn render_agent_message(&mut self, message: String) {
         // If we have a stream_controller, then the final agent message is redundant and will be a
         // duplicate of what has already been streamed.
         let repeats_forced_stream = self
@@ -1755,7 +1988,6 @@ impl ChatWidget {
             && advanced
         {
             self.prepare_plan_stream_display();
-            self.bottom_pane.suspend_status_indicator_with_redraw(false);
             self.plan_stream_revision = self.plan_stream_revision.wrapping_add(1);
         }
         let plan_stream_idle = plan_stream_tick.map(|(_, is_idle)| is_idle);
@@ -1771,6 +2003,10 @@ impl ChatWidget {
         self.latest_proposed_plan_title = extract_first_markdown_heading(&plan_text);
         self.latest_proposed_plan_text =
             (!plan_text.trim().is_empty()).then_some(plan_text.clone());
+        if self.status_machine.streams.plan_visible {
+            self.status_machine.streams.plan_visible = false;
+            self.reconcile_status_ui_with_redraw(false);
+        }
         self.request_redraw();
         if plan_stream_idle == Some(true) {
             self.app_event_tx.send(AppEvent::StopCommitAnimation);
@@ -1783,6 +2019,9 @@ impl ChatWidget {
         source: ReasoningContentSource,
         delta: String,
     ) {
+        if self.status_machine.turn.is_busy() {
+            self.resume_turn_work();
+        }
         // Reasoning titles are live status; the remaining Markdown is finalized into history.
         self.append_reasoning_delta(item_id, source, delta);
 
@@ -1810,6 +2049,9 @@ impl ChatWidget {
     }
 
     fn on_reasoning_raw_content_delta(&mut self, event: ReasoningRawContentDeltaEvent) {
+        if self.status_machine.turn.is_busy() {
+            self.resume_turn_work();
+        }
         if !self.config.show_raw_agent_reasoning {
             return;
         }
@@ -1849,9 +2091,9 @@ impl ChatWidget {
         &mut self,
         event_id: Option<&str>,
         item: ReasoningItem,
-        from_replay: bool,
+        mode: DispatchMode,
     ) {
-        if from_replay {
+        if mode.is_replay() {
             self.replay_reasoning_item(item);
             return;
         }
@@ -1875,7 +2117,6 @@ impl ChatWidget {
         let entries =
             canonical_reasoning_item_entries(&item, &state, self.config.show_raw_agent_reasoning);
         self.replace_reasoning_item_entries(&item.id, entries);
-        self.update_reasoning_status_header_from_buffer();
         if self.reasoning_buffer_has_content() {
             self.on_agent_reasoning_final();
         }
@@ -1934,7 +2175,12 @@ impl ChatWidget {
         self.on_agent_reasoning_delta(None, ReasoningContentSource::Summary, delta);
     }
 
-    fn on_legacy_reasoning_final(&mut self, event_id: Option<&str>, text: String) {
+    fn on_legacy_reasoning_final(
+        &mut self,
+        event_id: Option<&str>,
+        text: String,
+        mode: DispatchMode,
+    ) {
         if self.consume_live_legacy_reasoning_completion(
             event_id,
             LegacyReasoningCompletion::Summary(text.clone()),
@@ -1943,11 +2189,14 @@ impl ChatWidget {
         }
 
         self.last_legacy_reasoning_finalized = None;
-        self.append_reasoning_completion(ReasoningContentSource::Summary, &text);
+        self.append_reasoning_completion(ReasoningContentSource::Summary, &text, mode.is_live());
         self.finalize_legacy_reasoning();
     }
 
     fn on_legacy_raw_reasoning_delta(&mut self, delta: String) {
+        if self.status_machine.turn.is_busy() {
+            self.resume_turn_work();
+        }
         if !self.config.show_raw_agent_reasoning {
             return;
         }
@@ -1955,26 +2204,40 @@ impl ChatWidget {
         self.on_agent_reasoning_delta(None, ReasoningContentSource::Raw, delta);
     }
 
-    fn on_legacy_raw_reasoning_final(&mut self, event_id: Option<&str>, text: String) {
-        if !self.config.show_raw_agent_reasoning
-            || self.consume_live_legacy_reasoning_completion(
-                event_id,
-                LegacyReasoningCompletion::Raw(text.clone()),
-            )
-            || self
-                .last_legacy_reasoning_finalized
-                .as_deref()
-                .is_some_and(|finalized| finalized.ends_with(&text))
+    fn on_legacy_raw_reasoning_final(
+        &mut self,
+        event_id: Option<&str>,
+        text: String,
+        mode: DispatchMode,
+    ) {
+        if self.consume_live_legacy_reasoning_completion(
+            event_id,
+            LegacyReasoningCompletion::Raw(text.clone()),
+        ) || self
+            .last_legacy_reasoning_finalized
+            .as_deref()
+            .is_some_and(|finalized| finalized.ends_with(&text))
         {
+            return;
+        }
+        if mode.is_live() && self.status_machine.turn.is_busy() {
+            self.resume_turn_work();
+        }
+        if !self.config.show_raw_agent_reasoning {
             return;
         }
 
         self.last_legacy_reasoning_finalized = None;
-        self.append_reasoning_completion(ReasoningContentSource::Raw, &text);
+        self.append_reasoning_completion(ReasoningContentSource::Raw, &text, mode.is_live());
         self.finalize_legacy_reasoning();
     }
 
-    fn append_reasoning_completion(&mut self, source: ReasoningContentSource, text: &str) {
+    fn append_reasoning_completion(
+        &mut self,
+        source: ReasoningContentSource,
+        text: &str,
+        update_live_status: bool,
+    ) {
         let received = self.current_reasoning_content(source).to_string();
         if source == ReasoningContentSource::Summary {
             let presentation = split_reasoning_presentation(&received);
@@ -1987,7 +2250,11 @@ impl ChatWidget {
 
         let missing = missing_reasoning_suffix(&received, text);
         if !missing.is_empty() {
-            self.on_agent_reasoning_delta(None, source, missing.to_string());
+            if update_live_status {
+                self.on_agent_reasoning_delta(None, source, missing.to_string());
+            } else {
+                self.append_reasoning_delta(None, source, missing.to_string());
+            }
         }
     }
 
@@ -1998,6 +2265,9 @@ impl ChatWidget {
     }
 
     fn on_agent_reasoning_final(&mut self) {
+        if self.status_machine.turn.is_busy() {
+            self.resume_turn_work();
+        }
         let presentation = reasoning_buffer_presentation(&self.reasoning_buffer);
         if !presentation.transcript_markdown.is_empty() {
             let cell = if self.should_hide_reasoning_summary_from_display() {
@@ -2014,7 +2284,7 @@ impl ChatWidget {
     }
 
     fn should_hide_reasoning_summary_from_display(&self) -> bool {
-        self.answer_stream_started_this_turn || self.is_review_mode
+        self.answer_stream_started_this_turn || self.is_review_mode || self.replay_review_mode
     }
 
     fn clear_reasoning_buffers(&mut self) {
@@ -2031,13 +2301,9 @@ impl ChatWidget {
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
         self.clear_unified_exec_processes();
-        self.current_status = StatusIndicatorState::working();
-        self.retry_status = None;
-        self.pending_review_elapsed_secs = self
-            .bottom_pane
-            .status_widget()
-            .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
-        self.bottom_pane.hide_status_indicator();
+        self.status_machine.turn_status = StatusIndicatorState::working();
+        self.status_machine.retry_status = None;
+        self.reconcile_status_ui();
         self.request_redraw();
     }
 
@@ -2047,6 +2313,9 @@ impl ChatWidget {
     }
 
     fn on_agent_job_status(&mut self, event: AgentJobStatusEvent) {
+        if self.status_machine.turn.is_busy() {
+            self.resume_turn_work();
+        }
         let AgentJobStatusEvent {
             job_id,
             agent_type,
@@ -2087,15 +2356,33 @@ impl ChatWidget {
     }
 
     fn on_task_started(&mut self) {
-        let defer_review_redraw = self.pending_review_start_transition;
-        self.pending_review_elapsed_secs = None;
-        self.agent_turn_running = true;
+        let previous_turn = self.status_machine.turn;
+        let defer_review_redraw = previous_turn == TurnLifecycle::ReviewStarting;
+        if !defer_review_redraw {
+            if previous_turn.is_busy() {
+                let _ = self.finalize_active_content_for_failed_turn(None);
+            } else {
+                let _ = self.flush_answer_stream_with_separator_impl(false, None, false);
+            }
+            self.flush_unified_exec_wait_streak_with_status_restore(false);
+            self.running_commands.clear();
+            self.suppressed_exec_calls.clear();
+            self.last_unified_wait = None;
+            self.unified_exec_wait_streak = None;
+            self.clear_unified_exec_processes();
+        }
+        self.status_machine.turn = TurnLifecycle::Running(TurnKind::Agent);
+        self.status_machine.streams = StreamSuspension::default();
+        self.status_machine.finalizing = None;
+        self.status_machine.turn_status = StatusIndicatorState::working();
+        self.status_machine.retry_status = None;
         self.turn_sleep_inhibitor
             .set_turn_running(/* turn_running */ true);
         self.saw_plan_update_this_turn = false;
         self.pending_plan_implementation_goal_state_refresh = false;
         self.pending_plan_implementation_prompt = false;
-        let cleared_plan_stream = self.discard_pending_proposed_plan_turn_state();
+        let cleared_plan_stream =
+            self.discard_pending_proposed_plan_turn_state_with_reconcile(false);
         if cleared_plan_stream {
             self.stop_commit_animation_if_no_stream_controllers();
         }
@@ -2103,6 +2390,9 @@ impl ChatWidget {
         self.answer_stream_display_started = false;
         self.plan_stream_display_started = false;
         self.pending_streamed_agent_message_echo = None;
+        self.needs_final_message_separator = false;
+        self.had_work_activity = false;
+        self.last_separator_elapsed_secs = None;
         self.otel_manager.reset_runtime_metrics();
         if defer_review_redraw {
             self.bottom_pane.clear_quit_shortcut_hint_with_redraw(false);
@@ -2111,56 +2401,46 @@ impl ChatWidget {
         }
         self.quit_shortcut_expires_at = None;
         self.quit_shortcut_key = None;
-        self.current_status = StatusIndicatorState::working();
-        self.retry_status = None;
         self.clear_reasoning_buffers();
         if defer_review_redraw {
-            self.update_task_running_state_with_redraw(false);
+            self.reconcile_status_ui_with_redraw(false);
             return;
         }
-        self.update_task_running_state();
-        self.bottom_pane.set_interrupt_hint_visible(true);
-        self.set_status_header(String::from("Working"));
+        self.reconcile_status_ui_with_rebuild(true);
         self.request_redraw();
     }
 
-    fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
+    fn on_task_complete(&mut self, last_agent_message: Option<String>, mode: DispatchMode) {
         // If a stream is currently active, finalize it.
-        let pending_review_elapsed_secs = self.pending_review_elapsed_secs.take();
-        let final_separator = if from_replay {
+        let final_separator = if mode.is_replay() {
             None
         } else {
             let elapsed_seconds = self
                 .bottom_pane
-                .status_widget()
-                .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
-                .or(pending_review_elapsed_secs);
+                .status_widget_any()
+                .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
             self.final_message_separator(elapsed_seconds)
         };
         let (_flushed_answer, mut final_separator) =
-            self.flush_answer_stream_with_separator_impl(false, final_separator);
-        self.flush_unified_exec_wait_streak();
+            self.flush_answer_stream_with_separator_impl(false, final_separator, false);
+        self.flush_unified_exec_wait_streak_with_status_restore(false);
+        self.finalize_active_cell_as_failed();
         if self.pending_proposed_plan_text().is_some()
             && let Some(separator) = final_separator.take()
         {
             self.app_event_tx.send_history_cell(Box::new(separator));
         }
-        self.flush_pending_proposed_plan();
-        if !from_replay {
+        self.flush_pending_proposed_plan_with_reconcile(false);
+        if mode.is_live() {
             if let Some(separator) = final_separator {
                 self.add_to_history(separator);
             }
             self.needs_final_message_separator = false;
             self.had_work_activity = false;
         }
-        if !from_replay {
+        if mode.is_live() {
             self.scroll_transcript_to_bottom();
         }
-        // Mark task stopped and request redraw now that all content is in history.
-        self.agent_turn_running = false;
-        self.turn_sleep_inhibitor
-            .set_turn_running(/* turn_running */ false);
-        self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
@@ -2168,17 +2448,26 @@ impl ChatWidget {
         self.pending_streamed_agent_message_echo = None;
         self.clear_unified_exec_processes();
         self.clear_reasoning_buffers();
+        if mode.is_live() {
+            self.status_machine.turn = TurnLifecycle::Idle;
+            self.status_machine.streams = StreamSuspension::default();
+            self.status_machine.finalizing = None;
+            self.status_machine.retry_status = None;
+            self.turn_sleep_inhibitor
+                .set_turn_running(/* turn_running */ false);
+            self.reconcile_status_ui();
+        }
         self.request_redraw();
 
-        if !from_replay {
+        if mode.is_live() {
             self.maybe_prompt_plan_implementation();
+            // If there is a queued user message, send exactly one now to begin the next turn.
+            self.maybe_send_next_queued_input();
+            // Emit a notification when the turn completes (suppressed if focused).
+            self.notify(Notification::AgentTurnComplete {
+                response: last_agent_message.unwrap_or_default(),
+            });
         }
-        // If there is a queued user message, send exactly one now to begin the next turn.
-        self.maybe_send_next_queued_input();
-        // Emit a notification when the turn completes (suppressed if focused).
-        self.notify(Notification::AgentTurnComplete {
-            response: last_agent_message.unwrap_or_default(),
-        });
     }
 
     fn maybe_prompt_plan_implementation(&mut self) {
@@ -2426,27 +2715,45 @@ impl ChatWidget {
 
     fn restore_pre_review_token_info(&mut self) {
         if let Some(saved) = self.pre_review_token_info.take() {
-            match saved {
-                Some(info) => self.apply_token_info(info),
-                None => {
-                    self.bottom_pane.set_context_window(None, None);
-                    self.token_info = None;
-                }
+            self.restore_token_info_snapshot(saved);
+        }
+    }
+
+    fn restore_replay_review_token_info(&mut self) {
+        if let Some(saved) = self.replay_pre_review_token_info.take() {
+            self.restore_token_info_snapshot(saved);
+        }
+    }
+
+    fn restore_token_info_snapshot(&mut self, saved: Option<TokenUsageInfo>) {
+        match saved {
+            Some(info) => self.apply_token_info(info),
+            None => {
+                self.bottom_pane.set_context_window(None, None);
+                self.token_info = None;
             }
         }
     }
 
     /// Preserve received assistant output while marking any active tool content as failed.
-    fn finalize_active_content_for_failed_turn(&mut self) {
+    fn finalize_active_content_for_failed_turn(
+        &mut self,
+        leading_separator: Option<history_cell::FinalMessageSeparator>,
+    ) -> Option<history_cell::FinalMessageSeparator> {
         if self.stream_controller.is_none() {
             self.finalize_active_cell_as_failed();
-            return;
+            return leading_separator;
         }
 
         if !self.active_cell_is_answer_stream() {
             self.finalize_active_cell_as_failed();
         }
-        self.flush_answer_stream_with_separator();
+        let (flushed_answer, remaining_separator) =
+            self.flush_answer_stream_with_separator_impl(false, leading_separator, false);
+        if !flushed_answer {
+            self.finalize_active_cell_as_failed();
+        }
+        remaining_separator
     }
 
     /// Finalize active content and stop/clear agent-turn UI state.
@@ -2454,23 +2761,36 @@ impl ChatWidget {
     /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
     /// and should continue to drive the bottom-pane running indicator while it is in progress.
     fn finalize_turn(&mut self) {
+        let elapsed_seconds = self
+            .bottom_pane
+            .status_widget_any()
+            .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
+        let final_separator = self.final_message_separator(elapsed_seconds);
         // Preserve received assistant output while still marking active tool work as failed.
-        self.finalize_active_content_for_failed_turn();
-        // Reset running state and clear streaming buffers.
-        self.pending_review_elapsed_secs = None;
-        self.agent_turn_running = false;
-        self.turn_sleep_inhibitor
-            .set_turn_running(/* turn_running */ false);
-        self.update_task_running_state();
+        let final_separator = self.finalize_active_content_for_failed_turn(final_separator);
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
-        let had_plan_stream = self.discard_pending_proposed_plan_turn_state();
+        let had_plan_stream = self.discard_pending_proposed_plan_turn_state_with_reconcile(false);
         if had_plan_stream {
             self.stop_commit_animation_if_no_stream_controllers();
         }
         self.pending_streamed_agent_message_echo = None;
+        self.clear_unified_exec_processes();
+        self.clear_reasoning_buffers();
+        if let Some(separator) = final_separator {
+            self.add_to_history(separator);
+        }
+        self.needs_final_message_separator = false;
+        self.had_work_activity = false;
+        self.status_machine.turn = TurnLifecycle::Idle;
+        self.status_machine.streams = StreamSuspension::default();
+        self.status_machine.finalizing = None;
+        self.status_machine.retry_status = None;
+        self.turn_sleep_inhibitor
+            .set_turn_running(/* turn_running */ false);
+        self.reconcile_status_ui();
     }
 
     fn on_model_cap_error(&mut self, model: String, reset_after_seconds: Option<u64>) {
@@ -2506,48 +2826,15 @@ impl ChatWidget {
     }
 
     fn on_mcp_startup_update(&mut self, ev: McpStartupUpdateEvent) {
-        let mut status = self.mcp_startup_status.take().unwrap_or_default();
         if let McpStartupStatus::Failed { error } = &ev.status {
             self.on_warning(error);
         }
-        status.insert(ev.server, ev.status);
-        self.mcp_startup_status = Some(status);
-        self.update_task_running_state();
-        if let Some(current) = &self.mcp_startup_status {
-            let total = current.len();
-            let mut starting: Vec<_> = current
-                .iter()
-                .filter_map(|(name, state)| {
-                    if matches!(state, McpStartupStatus::Starting) {
-                        Some(name)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            starting.sort();
-            if let Some(first) = starting.first() {
-                let completed = total.saturating_sub(starting.len());
-                let max_to_show = 3;
-                let mut to_show: Vec<String> = starting
-                    .iter()
-                    .take(max_to_show)
-                    .map(ToString::to_string)
-                    .collect();
-                if starting.len() > max_to_show {
-                    to_show.push("…".to_string());
-                }
-                let header = if total > 1 {
-                    format!(
-                        "Starting MCP servers ({completed}/{total}): {}",
-                        to_show.join(", ")
-                    )
-                } else {
-                    format!("Booting MCP server: {first}")
-                };
-                self.set_status_header(header);
-            }
-        }
+        self.status_machine
+            .mcp_startup
+            .get_or_insert_with(McpStartupState::default)
+            .servers
+            .insert(ev.server, ev.status);
+        self.reconcile_status_ui();
         self.request_redraw();
     }
 
@@ -2567,8 +2854,8 @@ impl ChatWidget {
             self.on_warning(format!("MCP startup incomplete ({})", parts.join("; ")));
         }
 
-        self.mcp_startup_status = None;
-        self.update_task_running_state();
+        self.status_machine.mcp_startup = None;
+        self.reconcile_status_ui();
         self.retry_pending_plan_implementation_prompt();
         self.maybe_send_next_queued_input();
         self.request_redraw();
@@ -2580,12 +2867,7 @@ impl ChatWidget {
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
-
-        if reason != TurnAbortReason::ReviewEnded {
-            self.add_to_history(history_cell::new_error_event(
-                "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.".to_owned(),
-            ));
-        }
+        self.add_turn_abort_history(reason);
 
         if let Some(combined) = self.drain_queued_messages_for_restore() {
             let combined_local_image_paths = combined
@@ -2602,6 +2884,41 @@ impl ChatWidget {
         }
 
         self.request_redraw();
+    }
+
+    fn on_replayed_turn_aborted(&mut self, reason: TurnAbortReason) {
+        let _ = self.finalize_active_content_for_failed_turn(None);
+        self.running_commands.clear();
+        self.suppressed_exec_calls.clear();
+        self.last_unified_wait = None;
+        self.unified_exec_wait_streak = None;
+        let had_plan_stream = self.discard_pending_proposed_plan_turn_state_with_reconcile(false);
+        if had_plan_stream {
+            self.stop_commit_animation_if_no_stream_controllers();
+        }
+        self.pending_streamed_agent_message_echo = None;
+        self.clear_unified_exec_processes();
+        self.clear_reasoning_buffers();
+        self.needs_final_message_separator = false;
+        self.had_work_activity = false;
+        self.add_turn_abort_history(reason);
+        self.request_redraw();
+    }
+
+    fn add_turn_abort_history(&mut self, reason: TurnAbortReason) {
+        let message = match reason {
+            TurnAbortReason::Interrupted => Some(
+                "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue."
+                    .to_owned(),
+            ),
+            TurnAbortReason::Replaced => {
+                Some("Turn aborted: replaced by a new task".to_owned())
+            }
+            TurnAbortReason::ReviewEnded => None,
+        };
+        if let Some(message) = message {
+            self.add_to_history(history_cell::new_error_event(message));
+        }
     }
 
     /// Merge queued drafts (plus the current composer state) into a single message for restore.
@@ -2704,6 +3021,9 @@ impl ChatWidget {
 
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.flush_answer_stream_with_separator();
+        if self.status_machine.turn.is_busy() {
+            self.resume_turn_work();
+        }
         if is_unified_exec_source(ev.source) {
             self.track_unified_exec_process_begin(&ev);
             if !is_standard_tool_call(&ev.parsed_cmd) {
@@ -2732,10 +3052,13 @@ impl ChatWidget {
     }
 
     fn on_terminal_interaction(&mut self, ev: TerminalInteractionEvent) {
-        if !self.bottom_pane.is_task_running() {
+        if !self.status_machine.turn.is_busy() {
             return;
         }
         self.flush_answer_stream_with_separator();
+        if self.status_machine.turn.is_busy() {
+            self.resume_turn_work();
+        }
         self.promote_unified_exec_process(&ev.process_id);
         let command_display = self
             .unified_exec_processes
@@ -2746,8 +3069,6 @@ impl ChatWidget {
             // Empty stdin means we are polling for background output.
             // Surface this in the status indicator (single "waiting" surface) instead of
             // the transcript. Keep the header short so the interrupt hint remains visible.
-            self.bottom_pane.ensure_status_indicator();
-            self.bottom_pane.set_interrupt_hint_visible(true);
             self.set_status(
                 "Waiting for background terminal".to_string(),
                 command_display.clone(),
@@ -2785,6 +3106,10 @@ impl ChatWidget {
     }
 
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
+        self.flush_answer_stream_with_separator();
+        if self.status_machine.turn.is_busy() {
+            self.resume_turn_work();
+        }
         self.add_to_history(history_cell::new_patch_event(
             event.changes,
             &self.config.cwd,
@@ -2793,6 +3118,9 @@ impl ChatWidget {
 
     fn on_view_image_tool_call(&mut self, event: ViewImageToolCallEvent) {
         self.flush_answer_stream_with_separator();
+        if self.status_machine.turn.is_busy() {
+            self.resume_turn_work();
+        }
         self.add_to_history(history_cell::new_view_image_tool_call(
             event.path,
             &self.config.cwd,
@@ -2819,7 +3147,7 @@ impl ChatWidget {
                 self.flush_unified_exec_wait_streak();
             }
             self.track_unified_exec_process_end(&ev);
-            if !self.bottom_pane.is_task_running() {
+            if !self.status_machine.turn.is_busy() {
                 return;
             }
         }
@@ -2955,6 +3283,10 @@ impl ChatWidget {
     }
 
     fn on_mcp_tool_call_begin(&mut self, ev: McpToolCallBeginEvent) {
+        self.flush_answer_stream_with_separator();
+        if self.status_machine.turn.is_busy() {
+            self.resume_turn_work();
+        }
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_mcp_begin(ev), |s| s.handle_mcp_begin_now(ev2));
     }
@@ -2966,6 +3298,9 @@ impl ChatWidget {
 
     fn on_web_search_begin(&mut self, ev: WebSearchBeginEvent) {
         self.flush_answer_stream_with_separator();
+        if self.status_machine.turn.is_busy() {
+            self.resume_turn_work();
+        }
         self.flush_active_cell();
         self.active_cell = Some(Box::new(history_cell::new_active_web_search_call(
             ev.call_id,
@@ -3044,23 +3379,32 @@ impl ChatWidget {
 
     fn on_background_event(&mut self, message: String) {
         debug!("BackgroundEvent: {message}");
-        self.bottom_pane.ensure_status_indicator();
-        self.bottom_pane.set_interrupt_hint_visible(true);
+        if !self.status_machine.turn.is_busy() {
+            return;
+        }
+        self.resume_turn_work();
         self.set_status_header(message);
     }
 
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
-        self.bottom_pane.ensure_status_indicator();
-        self.bottom_pane.set_interrupt_hint_visible(false);
+        self.status_machine.turn = TurnLifecycle::Running(TurnKind::Undo);
+        self.status_machine.streams = StreamSuspension::default();
+        self.status_machine.finalizing = None;
+        self.status_machine.retry_status = None;
+        self.turn_sleep_inhibitor
+            .set_turn_running(/* turn_running */ true);
         let message = event
             .message
             .unwrap_or_else(|| "Undo in progress...".to_string());
         self.set_status_header(message);
     }
 
-    fn on_undo_completed(&mut self, event: UndoCompletedEvent) {
+    fn on_undo_completed(&mut self, event: UndoCompletedEvent, mode: DispatchMode) {
         let UndoCompletedEvent { success, message } = event;
-        self.bottom_pane.hide_status_indicator();
+        if mode.is_live() && self.status_machine.turn.is_busy() {
+            self.status_machine.finalizing = Some(TurnFinalizing::UndoCompleted);
+            self.reconcile_status_ui();
+        }
         let message = message.unwrap_or_else(|| {
             if success {
                 "Undo completed successfully.".to_string()
@@ -3076,10 +3420,13 @@ impl ChatWidget {
     }
 
     fn on_stream_error(&mut self, message: String, additional_details: Option<String>) {
-        if self.retry_status.is_none() {
-            self.retry_status = Some(self.current_status.clone());
+        if !self.status_machine.turn.is_busy() {
+            return;
         }
-        self.bottom_pane.ensure_status_indicator();
+        self.resume_turn_work();
+        if self.status_machine.retry_status.is_none() {
+            self.status_machine.retry_status = Some(self.status_machine.turn_status.clone());
+        }
         self.set_status(
             message,
             additional_details,
@@ -3093,6 +3440,7 @@ impl ChatWidget {
         let mut has_controller = false;
         let mut all_idle = true;
         let mut redraw = false;
+        let mut status_changed = false;
         let answer_stream_tick = self
             .stream_controller
             .as_mut()
@@ -3101,7 +3449,8 @@ impl ChatWidget {
             has_controller = true;
             if advanced {
                 self.prepare_answer_stream_display();
-                self.bottom_pane.suspend_status_indicator_with_redraw(false);
+                self.status_machine.streams.answer_visible = true;
+                status_changed = true;
                 redraw |= self.sync_answer_stream_active_cell_from_controller();
             }
             all_idle &= is_idle;
@@ -3114,11 +3463,15 @@ impl ChatWidget {
             has_controller = true;
             if advanced {
                 self.prepare_plan_stream_display();
-                self.bottom_pane.suspend_status_indicator_with_redraw(false);
+                self.status_machine.streams.plan_visible = true;
+                status_changed = true;
                 self.plan_stream_revision = self.plan_stream_revision.wrapping_add(1);
                 redraw = true;
             }
             all_idle &= is_idle;
+        }
+        if status_changed {
+            self.reconcile_status_ui_with_redraw(false);
         }
         if redraw {
             self.request_redraw();
@@ -3183,10 +3536,6 @@ impl ChatWidget {
     }
 
     fn handle_stream_finished(&mut self) {
-        if self.task_complete_pending {
-            self.bottom_pane.hide_status_indicator();
-            self.task_complete_pending = false;
-        }
         // A completed stream indicates non-exec content was just inserted.
         self.flush_interrupt_queue();
     }
@@ -3357,7 +3706,6 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
-        // Ensure the status indicator is visible while the command runs.
         self.running_commands.insert(
             ev.call_id.clone(),
             RunningCommand {
@@ -3421,6 +3769,9 @@ impl ChatWidget {
 
     pub(crate) fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
         self.flush_answer_stream_with_separator();
+        if self.status_machine.turn.is_busy() {
+            self.resume_turn_work();
+        }
         self.flush_active_cell();
         self.active_cell = Some(Box::new(history_cell::new_active_mcp_tool_call(
             ev.call_id,
@@ -3578,20 +3929,16 @@ impl ChatWidget {
             unified_exec_wait_streak: None,
             loaded_skills: Vec::new(),
             turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
-            task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             changed_files: VecDeque::new(),
             cli_agent_jobs: HashMap::new(),
-            agent_turn_running: false,
-            mcp_startup_status: None,
+            status_machine: StatusMachine::default(),
             connectors_cache: ConnectorsCacheState::default(),
             interrupts: InterruptManager::new(),
             reasoning_buffer: Vec::new(),
             reasoning_item_states: HashMap::new(),
             pending_live_legacy_reasoning: HashMap::new(),
             last_legacy_reasoning_finalized: None,
-            current_status: StatusIndicatorState::working(),
-            retry_status: None,
             thread_id: None,
             agent_shutdown_complete: false,
             thread_name: None,
@@ -3609,8 +3956,8 @@ impl ChatWidget {
             quit_shortcut_key: None,
             is_review_mode: false,
             pre_review_token_info: None,
-            pending_review_start_transition: false,
-            pending_review_elapsed_secs: None,
+            replay_review_mode: false,
+            replay_pre_review_token_info: None,
             needs_final_message_separator: false,
             had_work_activity: false,
             saw_plan_update_this_turn: false,
@@ -3766,20 +4113,16 @@ impl ChatWidget {
             unified_exec_wait_streak: None,
             loaded_skills: Vec::new(),
             turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
-            task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             changed_files: VecDeque::new(),
             cli_agent_jobs: HashMap::new(),
-            agent_turn_running: false,
-            mcp_startup_status: None,
+            status_machine: StatusMachine::default(),
             connectors_cache: ConnectorsCacheState::default(),
             interrupts: InterruptManager::new(),
             reasoning_buffer: Vec::new(),
             reasoning_item_states: HashMap::new(),
             pending_live_legacy_reasoning: HashMap::new(),
             last_legacy_reasoning_finalized: None,
-            current_status: StatusIndicatorState::working(),
-            retry_status: None,
             thread_id: None,
             agent_shutdown_complete: false,
             thread_name: None,
@@ -3797,8 +4140,8 @@ impl ChatWidget {
             quit_shortcut_key: None,
             is_review_mode: false,
             pre_review_token_info: None,
-            pending_review_start_transition: false,
-            pending_review_elapsed_secs: None,
+            replay_review_mode: false,
+            replay_pre_review_token_info: None,
             needs_final_message_separator: false,
             had_work_activity: false,
             saw_plan_update_this_turn: false,
@@ -4820,10 +5163,7 @@ impl ChatWidget {
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
-        if !self.is_session_configured()
-            || self.bottom_pane.is_task_running()
-            || self.is_review_mode
-        {
+        if !self.is_session_configured() || self.status_machine.is_busy() || self.is_review_mode {
             self.queued_user_messages.push_back(user_message);
             self.refresh_queued_user_messages();
         } else {
@@ -4988,13 +5328,16 @@ impl ChatWidget {
                 continue;
             }
             // `id: None` indicates a synthetic/fake id coming from replay.
-            self.dispatch_event_msg(None, msg, true);
+            self.dispatch_event_msg(None, msg, DispatchMode::Replay);
         }
+        self.replay_review_mode = false;
+        self.restore_replay_review_token_info();
+        self.clear_reasoning_buffers();
     }
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
-        self.dispatch_event_msg(Some(id), msg, false);
+        self.dispatch_event_msg(Some(id), msg, DispatchMode::Live);
     }
 
     #[cfg(test)]
@@ -5003,7 +5346,7 @@ impl ChatWidget {
         if matches!(msg, EventMsg::ShutdownComplete) {
             return;
         }
-        self.dispatch_event_msg(None, msg, true);
+        self.dispatch_event_msg(None, msg, DispatchMode::Replay);
     }
 
     /// Dispatch a protocol `EventMsg` to the appropriate handler.
@@ -5011,19 +5354,18 @@ impl ChatWidget {
     /// `id` is `Some` for live events and `None` for replayed events from
     /// `replay_initial_messages()`. Callers should treat `None` as a "fake" id
     /// that must not be used to correlate follow-up actions.
-    fn dispatch_event_msg(&mut self, id: Option<String>, msg: EventMsg, from_replay: bool) {
+    fn dispatch_event_msg(&mut self, id: Option<String>, msg: EventMsg, mode: DispatchMode) {
+        let from_replay = mode.is_replay();
         let is_stream_error = matches!(&msg, EventMsg::StreamError(_));
-        if !is_stream_error {
+        if mode.is_live() && !is_stream_error {
             self.restore_retry_status_if_present();
         }
 
-        if self.pending_review_start_transition
+        if mode.is_live()
+            && self.status_machine.turn == TurnLifecycle::ReviewStarting
             && matches!(
                 &msg,
-                EventMsg::Error(_)
-                    | EventMsg::StreamError(_)
-                    | EventMsg::TurnAborted(_)
-                    | EventMsg::TurnComplete(_)
+                EventMsg::Error(_) | EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_)
             )
         {
             self.clear_review_start_transition();
@@ -5054,35 +5396,54 @@ impl ChatWidget {
             EventMsg::ThreadGoalCleared(e) => self.on_thread_goal_cleared(e),
             EventMsg::ThreadGoalReplaced(e) => self.on_thread_goal_replaced(e),
             EventMsg::ThreadGoalSnapshot(e) => self.on_thread_goal_snapshot(e),
-            EventMsg::ThreadGoalReplaceConfirmationRequired(e) => {
+            EventMsg::ThreadGoalReplaceConfirmationRequired(e) if mode.is_live() => {
                 self.on_thread_goal_replace_confirmation_required(e)
             }
+            EventMsg::ThreadGoalReplaceConfirmationRequired(_) => {}
             EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
-                self.on_agent_message(message)
+                self.on_agent_message(message, mode)
             }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
-                self.on_agent_message_delta(delta)
+                if mode.is_live() {
+                    self.on_agent_message_delta(delta);
+                }
             }
-            EventMsg::PlanDelta(event) => self.on_plan_delta(event.delta),
+            EventMsg::PlanDelta(event) => {
+                if mode.is_live() {
+                    self.on_plan_delta(event.delta);
+                }
+            }
             EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }) => {
-                self.on_legacy_reasoning_delta(delta)
+                if mode.is_live() {
+                    self.on_legacy_reasoning_delta(delta);
+                }
             }
             EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
                 delta,
-            }) => self.on_legacy_raw_reasoning_delta(delta),
+            }) => {
+                if mode.is_live() {
+                    self.on_legacy_raw_reasoning_delta(delta);
+                }
+            }
             EventMsg::AgentReasoning(AgentReasoningEvent { text }) => {
-                self.on_legacy_reasoning_final(id.as_deref(), text)
+                self.on_legacy_reasoning_final(id.as_deref(), text, mode)
             }
             EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
-                self.on_legacy_raw_reasoning_final(id.as_deref(), text)
+                self.on_legacy_raw_reasoning_final(id.as_deref(), text, mode)
             }
             EventMsg::AgentReasoningSectionBreak(_) => {
-                self.last_legacy_reasoning_finalized = None;
-                self.on_reasoning_section_break();
+                if mode.is_live() {
+                    self.last_legacy_reasoning_finalized = None;
+                    self.on_reasoning_section_break();
+                }
             }
-            EventMsg::TurnStarted(_) => self.on_task_started(),
+            EventMsg::TurnStarted(_) => {
+                if mode.is_live() {
+                    self.on_task_started();
+                }
+            }
             EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
-                self.on_task_complete(last_agent_message, from_replay)
+                self.on_task_complete(last_agent_message, mode)
             }
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
@@ -5096,7 +5457,9 @@ impl ChatWidget {
                 message,
                 codex_error_info,
             }) => {
-                if let Some(info) = codex_error_info
+                if mode.is_replay() {
+                    self.add_to_history(history_cell::new_error_event(message));
+                } else if let Some(info) = codex_error_info
                     && let Some(RateLimitErrorKind::ModelCap {
                         model,
                         reset_after_seconds,
@@ -5107,19 +5470,33 @@ impl ChatWidget {
                     self.on_error(message);
                 }
             }
-            EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
-            EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
-            EventMsg::TurnAborted(ev) => match ev.reason {
-                TurnAbortReason::Interrupted => {
-                    self.on_interrupted_turn(ev.reason);
+            EventMsg::McpStartupUpdate(ev) => {
+                if mode.is_live() {
+                    self.on_mcp_startup_update(ev);
                 }
-                TurnAbortReason::Replaced => {
-                    self.on_error("Turn aborted: replaced by a new task".to_owned())
+            }
+            EventMsg::McpStartupComplete(ev) => {
+                if mode.is_live() {
+                    self.on_mcp_startup_complete(ev);
                 }
-                TurnAbortReason::ReviewEnded => {
-                    self.on_interrupted_turn(ev.reason);
+            }
+            EventMsg::TurnAborted(ev) => {
+                if mode.is_live() {
+                    match ev.reason {
+                        TurnAbortReason::Interrupted => {
+                            self.on_interrupted_turn(ev.reason);
+                        }
+                        TurnAbortReason::Replaced => {
+                            self.on_error("Turn aborted: replaced by a new task".to_owned())
+                        }
+                        TurnAbortReason::ReviewEnded => {
+                            self.on_interrupted_turn(ev.reason);
+                        }
+                    }
+                } else {
+                    self.on_replayed_turn_aborted(ev.reason);
                 }
-            },
+            }
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
             EventMsg::AgentJobStatus(event) => {
                 if !from_replay {
@@ -5127,17 +5504,24 @@ impl ChatWidget {
                 }
             }
             EventMsg::ExecApprovalRequest(ev) => {
-                // For replayed events, synthesize an empty id (these should not occur).
-                self.on_exec_approval_request(id.unwrap_or_default(), ev)
+                if mode.is_live() {
+                    self.on_exec_approval_request(id.unwrap_or_default(), ev);
+                }
             }
             EventMsg::ApplyPatchApprovalRequest(ev) => {
-                self.on_apply_patch_approval_request(id.unwrap_or_default(), ev)
+                if mode.is_live() {
+                    self.on_apply_patch_approval_request(id.unwrap_or_default(), ev);
+                }
             }
             EventMsg::ElicitationRequest(ev) => {
-                self.on_elicitation_request(ev);
+                if mode.is_live() {
+                    self.on_elicitation_request(ev);
+                }
             }
             EventMsg::RequestUserInput(ev) => {
-                self.on_request_user_input(ev);
+                if mode.is_live() {
+                    self.on_request_user_input(ev);
+                }
             }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
@@ -5163,22 +5547,30 @@ impl ChatWidget {
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 self.on_background_event(message)
             }
-            EventMsg::UndoStarted(ev) => self.on_undo_started(ev),
-            EventMsg::UndoCompleted(ev) => self.on_undo_completed(ev),
+            EventMsg::UndoStarted(ev) => {
+                if mode.is_live() {
+                    self.on_undo_started(ev);
+                }
+            }
+            EventMsg::UndoCompleted(ev) => self.on_undo_completed(ev, mode),
             EventMsg::StreamError(StreamErrorEvent {
                 message,
                 additional_details,
                 ..
-            }) => self.on_stream_error(message, additional_details),
+            }) => {
+                if mode.is_live() {
+                    self.on_stream_error(message, additional_details);
+                }
+            }
             EventMsg::UserMessage(ev) => {
                 if from_replay {
                     self.on_user_message_event(ev);
                 }
             }
             EventMsg::EnteredReviewMode(review_request) => {
-                self.on_entered_review_mode(review_request, from_replay)
+                self.on_entered_review_mode(review_request, mode)
             }
-            EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
+            EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review, mode),
             EventMsg::ContextCompacted(_) => self.on_context_compacted(id),
             EventMsg::ThreadRolledBack(_) => {}
             EventMsg::RawTranscriptItem(_)
@@ -5186,15 +5578,23 @@ impl ChatWidget {
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_)
             | EventMsg::WorkflowUpdate(_) => {}
-            EventMsg::ReasoningContentDelta(event) => self.on_reasoning_content_delta(event),
-            EventMsg::ReasoningRawContentDelta(event) => self.on_reasoning_raw_content_delta(event),
+            EventMsg::ReasoningContentDelta(event) => {
+                if mode.is_live() {
+                    self.on_reasoning_content_delta(event);
+                }
+            }
+            EventMsg::ReasoningRawContentDelta(event) => {
+                if mode.is_live() {
+                    self.on_reasoning_raw_content_delta(event);
+                }
+            }
             EventMsg::ItemCompleted(event) => {
                 let crate::product::agent::protocol::ItemCompletedEvent {
                     thread_id, item, ..
                 } = event;
                 match item {
                     TurnItem::Reasoning(item) => {
-                        self.on_reasoning_item_completed(id.as_deref(), item, from_replay);
+                        self.on_reasoning_item_completed(id.as_deref(), item, mode);
                     }
                     TurnItem::ContextCompaction(item) => {
                         // Replay omits the outer event id, but legacy compact events still follow
@@ -5260,42 +5660,58 @@ impl ChatWidget {
             }
         }
 
-        self.on_agent_message("Context compacted".to_owned());
+        self.render_agent_message_transcript_only("Context compacted".to_owned());
     }
 
     pub(crate) fn prepare_for_review_start_transition(&mut self) {
-        self.pending_review_start_transition = true;
-        self.update_task_running_state_with_redraw(false);
+        self.status_machine.turn = TurnLifecycle::ReviewStarting;
+        self.status_machine.turn_status = StatusIndicatorState::working();
+        self.status_machine.finalizing = None;
+        self.status_machine.streams = StreamSuspension::default();
+        self.reconcile_status_ui_with_redraw(false);
     }
 
     pub(crate) fn clear_review_start_transition(&mut self) {
-        self.pending_review_start_transition = false;
-        self.update_task_running_state_with_redraw(false);
+        if self.status_machine.turn == TurnLifecycle::ReviewStarting {
+            self.status_machine.turn = TurnLifecycle::Idle;
+        }
+        self.reconcile_status_ui_with_redraw(false);
     }
 
-    fn on_entered_review_mode(&mut self, review: ReviewRequest, from_replay: bool) {
+    fn on_entered_review_mode(&mut self, review: ReviewRequest, mode: DispatchMode) {
         // Enter review mode and emit a concise banner
-        if self.pre_review_token_info.is_none() {
-            self.pre_review_token_info = Some(self.token_info.clone());
+        if mode.is_live() {
+            if self.pre_review_token_info.is_none() {
+                self.pre_review_token_info = Some(self.token_info.clone());
+            }
+            self.is_review_mode = true;
+        } else {
+            if self.replay_pre_review_token_info.is_none() {
+                self.replay_pre_review_token_info = Some(self.token_info.clone());
+            }
+            self.replay_review_mode = true;
         }
-        // Avoid toggling running state for replayed history events on resume.
-        self.is_review_mode = true;
         let hint = review.user_facing_hint.unwrap_or_else(|| {
             crate::product::agent::review_prompts::user_facing_hint(&review.target)
         });
         let banner = format!(">> Code review started: {hint} <<");
         self.add_to_history(history_cell::new_review_status_line(banner));
-        self.clear_review_start_transition();
-        if !from_replay {
-            if !self.bottom_pane.is_task_running() {
-                self.bottom_pane.set_task_running_with_redraw(true, false);
-            }
-            self.bottom_pane
-                .set_interrupt_hint_visible_with_redraw(true, false);
+        if mode.is_live() {
+            self.status_machine.turn = TurnLifecycle::Running(TurnKind::Review);
+            self.status_machine.finalizing = None;
+            self.status_machine.streams = StreamSuspension::default();
+            self.status_machine.retry_status = None;
+            self.turn_sleep_inhibitor
+                .set_turn_running(/* turn_running */ true);
+            self.reconcile_status_ui_with_redraw(false);
         }
     }
 
-    fn on_exited_review_mode(&mut self, review: ExitedReviewModeEvent) {
+    fn on_exited_review_mode(&mut self, review: ExitedReviewModeEvent, mode: DispatchMode) {
+        if mode.is_live() && self.status_machine.turn.is_busy() {
+            self.status_machine.finalizing = Some(TurnFinalizing::ReviewExit);
+            self.reconcile_status_ui();
+        }
         // Leave review mode; if output is present, flush pending stream + show results.
         if let Some(output) = review.review_output {
             self.flush_answer_stream_with_separator();
@@ -5320,9 +5736,15 @@ impl ChatWidget {
             // Final message is rendered as part of the AgentMessage.
         }
 
-        self.finish_review_progress_ui();
-        self.is_review_mode = false;
-        self.restore_pre_review_token_info();
+        if mode.is_live() {
+            self.finish_review_progress_ui();
+            self.is_review_mode = false;
+            self.restore_pre_review_token_info();
+        } else {
+            self.clear_reasoning_buffers();
+            self.replay_review_mode = false;
+            self.restore_replay_review_token_info();
+        }
         // Append a finishing banner at the end of this turn.
         self.add_to_history(history_cell::new_review_status_line(
             "<< Code review finished >>".to_string(),
@@ -5405,6 +5827,11 @@ impl ChatWidget {
                 exec.mark_failed();
             } else if let Some(tool) = cell.as_any_mut().downcast_mut::<McpToolCallCell>() {
                 tool.mark_failed();
+            } else if let Some(search) = cell
+                .as_any_mut()
+                .downcast_mut::<history_cell::WebSearchCell>()
+            {
+                search.complete();
             }
             self.add_boxed_history(cell);
         }
@@ -5412,7 +5839,7 @@ impl ChatWidget {
 
     // If idle and there are queued inputs, submit exactly one to start the next turn.
     fn maybe_send_next_queued_input(&mut self) {
-        if self.bottom_pane.is_task_running() {
+        if self.status_machine.is_busy() || self.is_review_mode {
             return;
         }
         if let Some(user_message) = self.queued_user_messages.pop_front() {
@@ -6712,16 +7139,7 @@ impl ChatWidget {
 
     #[cfg(target_os = "windows")]
     pub(crate) fn show_windows_sandbox_setup_status(&mut self) {
-        // While elevated sandbox setup runs, prevent typing so the user doesn't
-        // accidentally queue messages that will run under an unexpected mode.
-        self.bottom_pane.set_composer_input_enabled(
-            false,
-            Some("Input disabled until setup completes.".to_string()),
-        );
-        self.bottom_pane.ensure_status_indicator();
-        self.bottom_pane.set_interrupt_hint_visible(false);
-        self.set_status_header("Setting up agent sandbox. This can take a minute.".to_string());
-        self.request_redraw();
+        self.apply_windows_sandbox_setup_running(true);
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -6730,8 +7148,16 @@ impl ChatWidget {
 
     #[cfg(target_os = "windows")]
     pub(crate) fn clear_windows_sandbox_setup_status(&mut self) {
-        self.bottom_pane.set_composer_input_enabled(true, None);
-        self.bottom_pane.hide_status_indicator();
+        self.apply_windows_sandbox_setup_running(false);
+    }
+
+    #[cfg(any(target_os = "windows", test))]
+    fn apply_windows_sandbox_setup_running(&mut self, running: bool) {
+        let placeholder = running.then(|| "Input disabled until setup completes.".to_string());
+        self.bottom_pane
+            .set_composer_input_enabled(!running, placeholder);
+        self.status_machine.windows_setup_running = running;
+        self.reconcile_status_ui();
         self.request_redraw();
     }
 
@@ -6798,7 +7224,7 @@ impl ChatWidget {
         if feature == Feature::PreventIdleSleep {
             self.turn_sleep_inhibitor = SleepInhibitor::new(enabled);
             self.turn_sleep_inhibitor
-                .set_turn_running(self.agent_turn_running);
+                .set_turn_running(self.status_machine.turn.is_busy());
         }
         #[cfg(target_os = "windows")]
         if matches!(
@@ -7585,7 +8011,7 @@ impl ChatWidget {
 
     // Review mode counts as cancellable work so Ctrl+C interrupts instead of quitting.
     fn is_cancellable_work_active(&self) -> bool {
-        self.bottom_pane.is_task_running() || self.is_review_mode
+        self.status_machine.is_busy() || self.is_review_mode
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {
@@ -7913,14 +8339,14 @@ impl ChatWidget {
             })
         });
 
-        let mcp = self.mcp_startup_status.as_ref().map(|statuses| {
+        let mcp = self.status_machine.mcp_startup.as_ref().map(|state| {
             let mut snapshot = McpPanelSnapshot {
                 starting: 0,
                 ready: 0,
                 failed: Vec::new(),
                 cancelled: 0,
             };
-            for (server, status) in statuses {
+            for (server, status) in &state.servers {
                 match status {
                     McpStartupStatus::Starting => snapshot.starting += 1,
                     McpStartupStatus::Ready => snapshot.ready += 1,

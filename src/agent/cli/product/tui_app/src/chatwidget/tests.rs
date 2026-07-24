@@ -45,6 +45,7 @@ use crate::product::agent::protocol::McpStartupUpdateEvent;
 use crate::product::agent::protocol::Op;
 use crate::product::agent::protocol::PatchApplyBeginEvent;
 use crate::product::agent::protocol::PatchApplyEndEvent;
+use crate::product::agent::protocol::PlanDeltaEvent;
 use crate::product::agent::protocol::ReasoningContentDeltaEvent;
 use crate::product::agent::protocol::ReasoningRawContentDeltaEvent;
 use crate::product::agent::protocol::ReviewOutputEvent;
@@ -83,6 +84,7 @@ use crate::product::protocol::plan_tool::PlanItemArg;
 use crate::product::protocol::plan_tool::StepStatus;
 use crate::product::protocol::plan_tool::UpdatePlanArgs;
 use crate::product::protocol::protocol::CodexErrorInfo;
+use crate::product::protocol::protocol::McpInvocation;
 use crate::product::protocol::request_user_input::RequestUserInputAnswer;
 use crate::product::protocol::request_user_input::RequestUserInputEvent;
 use crate::product::protocol::request_user_input::RequestUserInputQuestion;
@@ -739,6 +741,119 @@ async fn turn_abort_after_display_tick_preserves_uncommitted_tail_once() {
 }
 
 #[tokio::test]
+async fn error_and_abort_clear_reasoning_and_terminal_status_state() {
+    let (mut error_chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    error_chat.on_task_started();
+    error_chat.handle_codex_event(Event {
+        id: "reasoning-before-error".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Investigating failure**\n\npartial".to_string(),
+        }),
+    });
+    error_chat.status_machine.retry_status = Some(StatusIndicatorState {
+        header: "Retrying".to_string(),
+        details: None,
+        details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
+    });
+    assert!(!error_chat.reasoning_buffer.is_empty());
+
+    error_chat.handle_codex_event(Event {
+        id: "error".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "failed".to_string(),
+            codex_error_info: None,
+        }),
+    });
+
+    assert!(error_chat.reasoning_buffer.is_empty());
+    assert!(error_chat.reasoning_item_states.is_empty());
+    assert_eq!(error_chat.status_machine.turn, TurnLifecycle::Idle);
+    assert_eq!(error_chat.status_machine.finalizing, None);
+    assert_eq!(
+        error_chat.status_machine.streams,
+        StreamSuspension::default()
+    );
+    assert!(error_chat.status_machine.retry_status.is_none());
+    assert!(error_chat.bottom_pane.status_widget_any().is_none());
+
+    let (mut abort_chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    abort_chat.on_task_started();
+    abort_chat.handle_codex_event(Event {
+        id: "reasoning-before-abort".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Stopping**\n\npartial".to_string(),
+        }),
+    });
+    assert!(!abort_chat.reasoning_buffer.is_empty());
+
+    abort_chat.handle_codex_event(Event {
+        id: "abort".into(),
+        msg: EventMsg::TurnAborted(crate::product::agent::protocol::TurnAbortedEvent {
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    assert!(abort_chat.reasoning_buffer.is_empty());
+    assert!(abort_chat.reasoning_item_states.is_empty());
+    assert_eq!(abort_chat.status_machine.turn, TurnLifecycle::Idle);
+    assert_eq!(abort_chat.status_machine.finalizing, None);
+    assert_eq!(
+        abort_chat.status_machine.streams,
+        StreamSuspension::default()
+    );
+    assert!(abort_chat.bottom_pane.status_widget_any().is_none());
+}
+
+#[tokio::test]
+async fn error_and_abort_preserve_elapsed_for_runtime_separator() {
+    let cfg = test_config().await;
+    let model = "gpt-5";
+
+    let error_otel = test_otel_manager_with_runtime_reader(&cfg, model);
+    let (mut error_chat, mut error_rx, _op_rx) =
+        make_chatwidget_manual_inner_with_otel(Some(model), Some(error_otel.clone())).await;
+    error_chat.on_task_started();
+    record_test_runtime_metrics(&error_otel);
+    error_chat
+        .bottom_pane
+        .advance_status_elapsed_for_test(Duration::from_secs(5));
+    error_chat.handle_codex_event(Event {
+        id: "error".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "failed".to_string(),
+            codex_error_info: None,
+        }),
+    });
+    let error_history = drain_insert_history(&mut error_rx)
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<String>();
+    assert!(error_history.contains("Worked for"));
+    assert!(error_history.contains("Inference:"));
+
+    let abort_otel = test_otel_manager_with_runtime_reader(&cfg, model);
+    let (mut abort_chat, mut abort_rx, _op_rx) =
+        make_chatwidget_manual_inner_with_otel(Some(model), Some(abort_otel.clone())).await;
+    abort_chat.on_task_started();
+    record_test_runtime_metrics(&abort_otel);
+    abort_chat
+        .bottom_pane
+        .advance_status_elapsed_for_test(Duration::from_secs(5));
+    abort_chat.handle_codex_event(Event {
+        id: "abort".into(),
+        msg: EventMsg::TurnAborted(crate::product::agent::protocol::TurnAbortedEvent {
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+    let abort_history = drain_insert_history(&mut abort_rx)
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<String>();
+    assert!(abort_history.contains("Worked for"));
+    assert!(abort_history.contains("Inference:"));
+}
+
+#[tokio::test]
 async fn streaming_cjk_deltas_only_touch_live_tail_rows() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     let width = 80;
@@ -786,7 +901,7 @@ async fn finalizing_stream_does_not_repaint_stable_rows() {
     let before = terminal.last_frame_buffer().clone();
     let _ = drain_events(&mut rx);
 
-    chat.flush_answer_stream_with_separator();
+    chat.on_agent_message("流式最终回答".to_string(), DispatchMode::Live);
     for event in drain_events(&mut rx) {
         if let Some(cell) = into_insert_history_cell(event) {
             chat.insert_transcript_cell(Arc::from(cell));
@@ -2017,7 +2132,7 @@ async fn pending_review_prepare_marks_task_running_without_redraw() {
 
     chat.prepare_for_review_start_transition();
 
-    assert!(chat.pending_review_start_transition);
+    assert_eq!(chat.status_machine.turn, TurnLifecycle::ReviewStarting);
     assert!(chat.bottom_pane.is_task_running());
     assert_matches!(frame_rx.try_recv(), Err(TryRecvError::Empty));
 }
@@ -2038,9 +2153,11 @@ async fn pending_review_turn_started_keeps_busy_without_redraw_until_banner_inse
         }),
     });
 
-    assert!(chat.agent_turn_running);
+    assert_eq!(
+        chat.status_machine.turn,
+        TurnLifecycle::Running(TurnKind::Agent)
+    );
     assert!(chat.bottom_pane.is_task_running());
-    assert!(chat.pending_review_start_transition);
     assert_matches!(frame_rx.try_recv(), Err(TryRecvError::Empty));
 
     chat.handle_codex_event(Event {
@@ -2057,7 +2174,10 @@ async fn pending_review_turn_started_keeps_busy_without_redraw_until_banner_inse
     assert_eq!(banner, ">> Code review started: current changes <<\n");
     assert!(chat.is_review_mode);
     assert!(chat.bottom_pane.is_task_running());
-    assert!(!chat.pending_review_start_transition);
+    assert_eq!(
+        chat.status_machine.turn,
+        TurnLifecycle::Running(TurnKind::Review)
+    );
     assert_matches!(frame_rx.try_recv(), Err(TryRecvError::Empty));
 }
 
@@ -2077,10 +2197,52 @@ async fn pending_review_start_error_clears_transition() {
         }),
     });
 
-    assert!(!chat.pending_review_start_transition);
+    assert_eq!(chat.status_machine.turn, TurnLifecycle::Idle);
     assert!(!chat.bottom_pane.is_task_running());
     assert!(rx.try_recv().is_ok());
     assert!(frame_rx.try_recv().is_ok());
+}
+
+#[tokio::test]
+async fn pending_review_start_stream_error_keeps_busy_retry_status() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.prepare_for_review_start_transition();
+    chat.handle_codex_event(Event {
+        id: "review-stream-error".into(),
+        msg: EventMsg::StreamError(StreamErrorEvent {
+            message: "Reconnecting... 1/5".to_string(),
+            codex_error_info: Some(CodexErrorInfo::Other),
+            additional_details: Some("review stream interrupted".to_string()),
+        }),
+    });
+
+    assert_eq!(chat.status_machine.turn, TurnLifecycle::ReviewStarting);
+    assert!(chat.bottom_pane.is_task_running());
+    assert_eq!(
+        chat.status_machine.retry_status,
+        Some(StatusIndicatorState::working())
+    );
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("review retry status should remain visible");
+    assert_eq!(status.header(), "Reconnecting... 1/5");
+    assert_eq!(status.details(), Some("Review stream interrupted"));
+
+    chat.handle_codex_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
+        }),
+    });
+
+    assert_eq!(
+        chat.status_machine.turn,
+        TurnLifecycle::Running(TurnKind::Review)
+    );
+    assert!(chat.bottom_pane.is_task_running());
 }
 
 #[tokio::test]
@@ -2971,20 +3133,16 @@ async fn make_chatwidget_manual_inner_with_otel(
         last_unified_wait: None,
         unified_exec_wait_streak: None,
         turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
-        task_complete_pending: false,
         unified_exec_processes: Vec::new(),
         changed_files: VecDeque::new(),
         cli_agent_jobs: HashMap::new(),
-        agent_turn_running: false,
-        mcp_startup_status: None,
+        status_machine: StatusMachine::default(),
         connectors_cache: ConnectorsCacheState::default(),
         interrupts: InterruptManager::new(),
         reasoning_buffer: Vec::new(),
         reasoning_item_states: HashMap::new(),
         pending_live_legacy_reasoning: HashMap::new(),
         last_legacy_reasoning_finalized: None,
-        current_status: StatusIndicatorState::working(),
-        retry_status: None,
         thread_id: None,
         agent_shutdown_complete: false,
         thread_name: None,
@@ -3002,8 +3160,8 @@ async fn make_chatwidget_manual_inner_with_otel(
         quit_shortcut_key: None,
         is_review_mode: false,
         pre_review_token_info: None,
-        pending_review_start_transition: false,
-        pending_review_elapsed_secs: None,
+        replay_review_mode: false,
+        replay_pre_review_token_info: None,
         needs_final_message_separator: false,
         had_work_activity: false,
         saw_plan_update_this_turn: false,
@@ -3160,20 +3318,16 @@ async fn make_chatwidget_manual_with_frame_requester(
         last_unified_wait: None,
         unified_exec_wait_streak: None,
         turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
-        task_complete_pending: false,
         unified_exec_processes: Vec::new(),
         changed_files: VecDeque::new(),
         cli_agent_jobs: HashMap::new(),
-        agent_turn_running: false,
-        mcp_startup_status: None,
+        status_machine: StatusMachine::default(),
         connectors_cache: ConnectorsCacheState::default(),
         interrupts: InterruptManager::new(),
         reasoning_buffer: Vec::new(),
         reasoning_item_states: HashMap::new(),
         pending_live_legacy_reasoning: HashMap::new(),
         last_legacy_reasoning_finalized: None,
-        current_status: StatusIndicatorState::working(),
-        retry_status: None,
         thread_id: None,
         agent_shutdown_complete: false,
         thread_name: None,
@@ -3191,8 +3345,8 @@ async fn make_chatwidget_manual_with_frame_requester(
         quit_shortcut_key: None,
         is_review_mode: false,
         pre_review_token_info: None,
-        pending_review_start_transition: false,
-        pending_review_elapsed_secs: None,
+        replay_review_mode: false,
+        replay_pre_review_token_info: None,
         needs_final_message_separator: false,
         had_work_activity: false,
         saw_plan_update_this_turn: false,
@@ -3916,7 +4070,7 @@ async fn plan_implementation_popup_waits_for_running_turn_after_goal_snapshot() 
 
     chat.maybe_prompt_plan_implementation();
     assert_matches!(op_rx.try_recv(), Ok(Op::ThreadGoalGet));
-    chat.agent_turn_running = true;
+    chat.status_machine.turn = TurnLifecycle::Running(TurnKind::Agent);
 
     chat.handle_codex_event(Event {
         id: "goal-snapshot".to_string(),
@@ -3928,7 +4082,7 @@ async fn plan_implementation_popup_waits_for_running_turn_after_goal_snapshot() 
 
     assert!(!render_bottom_popup(&chat, 80).contains(PLAN_IMPLEMENTATION_TITLE));
 
-    chat.agent_turn_running = false;
+    chat.status_machine.turn = TurnLifecycle::Idle;
     chat.maybe_prompt_plan_implementation();
 
     assert!(render_bottom_popup(&chat, 80).contains(PLAN_IMPLEMENTATION_TITLE));
@@ -4291,7 +4445,7 @@ async fn slash_plan_scrolls_to_latest_proposed_plan() {
 #[tokio::test]
 async fn slash_plan_available_during_task() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.bottom_pane.set_task_running(true);
+    chat.on_task_started();
     chat.replace_transcript_cells(vec![
         Arc::new(TallTranscriptCell(30)) as Arc<dyn HistoryCell>,
         Arc::new(crate::product::tui_app::history_cell::new_proposed_plan(
@@ -4417,7 +4571,7 @@ async fn slash_rename_with_args_scrolls_transcript_to_bottom() {
 #[tokio::test]
 async fn disabled_slash_command_error_scrolls_transcript_to_bottom() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.bottom_pane.set_task_running(true);
+    chat.on_task_started();
     chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
     let area = Rect::new(0, 0, 80, 18);
     let mut buf = Buffer::empty(area);
@@ -4849,7 +5003,7 @@ async fn ctrl_c_interrupt_does_not_pause_goal_from_tui_cache() {
         updated_at: 1_700_000_100,
     });
     chat.current_goal_state_known = true;
-    chat.bottom_pane.set_task_running(true);
+    chat.on_task_started();
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
 
@@ -4865,7 +5019,7 @@ async fn mouse_down_in_bottom_pane_does_not_start_transcript_selection() {
     let mut buf = Buffer::empty(area);
     chat.render(area, &mut buf);
     let bottom_area = chat.cached_bottom_area().expect("bottom area cached");
-    let header_before = chat.current_status.header.clone();
+    let header_before = chat.status_machine.turn_status.header.clone();
 
     chat.handle_mouse_event(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
@@ -4886,7 +5040,7 @@ async fn mouse_down_in_bottom_pane_does_not_start_transcript_selection() {
         modifiers: KeyModifiers::NONE,
     });
 
-    assert_eq!(chat.current_status.header, header_before);
+    assert_eq!(chat.status_machine.turn_status.header, header_before);
 }
 
 #[tokio::test]
@@ -4926,7 +5080,7 @@ async fn mouse_down_in_bottom_pane_clears_stale_transcript_selection_without_cop
         modifiers: KeyModifiers::NONE,
     });
 
-    assert_eq!(chat.current_status.header, "Working");
+    assert_eq!(chat.status_machine.turn_status.header, "Working");
 }
 
 #[tokio::test]
@@ -4955,11 +5109,11 @@ async fn plan_implementation_popup_skips_when_messages_queued() {
     let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
         .expect("expected planner identity mask");
     chat.set_identity_mask(plan_mask);
-    chat.bottom_pane.set_task_running(true);
+    chat.on_task_started();
     chat.queue_user_message("Queued message".into());
     chat.pending_plan_implementation_prompt = true;
 
-    chat.on_task_complete(Some("Plan details".to_string()), false);
+    chat.on_task_complete(Some("Plan details".to_string()), DispatchMode::Live);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -4985,7 +5139,7 @@ async fn plan_implementation_popup_skips_without_proposed_plan() {
             status: StepStatus::Pending,
         }],
     });
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, DispatchMode::Live);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -5005,7 +5159,7 @@ async fn plan_implementation_popup_shows_after_proposed_plan_output() {
     chat.on_task_started();
     chat.on_plan_delta("- Step 1\n- Step 2\n".to_string());
     chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, DispatchMode::Live);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -5028,7 +5182,7 @@ async fn plan_implementation_popup_does_not_repeat_streamed_intro() {
     chat.on_agent_message_delta(intro.to_string());
     chat.on_plan_delta(plan.to_string());
     chat.on_plan_item_completed(plan.to_string());
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, DispatchMode::Live);
 
     let history = drain_insert_history(&mut rx)
         .iter()
@@ -5064,7 +5218,7 @@ async fn proposed_plan_renders_after_streamed_intro() {
     chat.on_agent_message_delta(intro.to_string());
     chat.on_plan_delta(plan.to_string());
     chat.on_plan_item_completed(plan.to_string());
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, DispatchMode::Live);
 
     let history = drain_insert_history(&mut rx);
     let rendered = history
@@ -5115,7 +5269,7 @@ async fn proposed_plan_renders_after_trailing_answer_text() {
     chat.on_plan_delta(plan.to_string());
     chat.on_agent_message_delta(outro.to_string());
     chat.on_plan_item_completed(plan.to_string());
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, DispatchMode::Live);
 
     let history = drain_insert_history(&mut rx);
     let rendered = history
@@ -5178,7 +5332,7 @@ async fn planner_runtime_metrics_separator_precedes_answer_and_plan() {
     chat.on_plan_delta(plan.to_string());
     chat.on_agent_message_delta(outro.to_string());
     chat.on_plan_item_completed(plan.to_string());
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, DispatchMode::Live);
 
     let history = drain_insert_history(&mut rx);
     let rendered = history
@@ -5244,7 +5398,7 @@ async fn planner_runtime_metrics_separator_precedes_plan_without_answer() {
     record_test_runtime_metrics(&otel_manager);
     chat.on_plan_delta(plan.to_string());
     chat.on_plan_item_completed(plan.to_string());
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, DispatchMode::Live);
 
     let history = drain_insert_history(&mut rx);
     let rendered = history
@@ -5290,7 +5444,7 @@ async fn streamed_proposed_plan_background_fills_rendered_row() {
     chat.on_task_started();
     chat.on_plan_delta("- Step 1\n".to_string());
     chat.on_plan_item_completed("- Step 1\n".to_string());
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, DispatchMode::Live);
 
     let area = Rect::new(0, 0, 80, 18);
     let mut buf = Buffer::empty(area);
@@ -5374,7 +5528,7 @@ async fn streamed_proposed_plan_background_covers_lines_after_literal_plan_tags(
     chat.on_task_started();
     chat.on_plan_delta(plan.to_string());
     chat.on_plan_item_completed(plan.to_string());
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, DispatchMode::Live);
 
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
@@ -5426,7 +5580,7 @@ async fn streamed_proposed_plan_background_covers_indented_literal_plan_tags() {
     chat.on_task_started();
     chat.on_plan_delta(plan.to_string());
     chat.on_plan_item_completed(plan.to_string());
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, DispatchMode::Live);
 
     let area = Rect::new(0, 0, 80, 30);
     let mut buf = Buffer::empty(area);
@@ -5491,7 +5645,7 @@ async fn streamed_proposed_plan_background_covers_nested_literal_plan_tags() {
     chat.on_task_started();
     chat.on_plan_delta(plan.to_string());
     chat.on_plan_item_completed(plan.to_string());
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, DispatchMode::Live);
 
     let area = Rect::new(0, 0, 80, 26);
     let mut buf = Buffer::empty(area);
@@ -5551,7 +5705,7 @@ async fn streamed_proposed_plan_reflows_after_narrow_stream_width() {
         "This streamed proposed plan should become a single wide line after the terminal grows.";
     chat.on_plan_delta(format!("{source}\n"));
     chat.on_plan_item_completed(format!("{source}\n"));
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, DispatchMode::Live);
 
     let cells = std::iter::from_fn(|| rx.try_recv().ok())
         .filter_map(into_insert_history_cell)
@@ -5702,7 +5856,7 @@ async fn completing_pending_proposed_plan_stops_commit_animation() {
     let _ = drain_events(&mut rx);
 
     chat.on_plan_item_completed(plan.to_string());
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, DispatchMode::Live);
 
     assert!(
         chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
@@ -6246,13 +6400,16 @@ async fn prevent_idle_sleep_syncs_with_turn_lifecycle() {
 
     chat.on_task_started();
 
-    assert!(chat.agent_turn_running);
+    assert_eq!(
+        chat.status_machine.turn,
+        TurnLifecycle::Running(TurnKind::Agent)
+    );
     assert!(chat.turn_sleep_inhibitor.is_turn_running());
     assert!(chat.bottom_pane.is_task_running());
 
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, DispatchMode::Live);
 
-    assert!(!chat.agent_turn_running);
+    assert_eq!(chat.status_machine.turn, TurnLifecycle::Idle);
     assert!(!chat.turn_sleep_inhibitor.is_turn_running());
     assert!(!chat.bottom_pane.is_task_running());
 }
@@ -6265,13 +6422,57 @@ async fn prevent_idle_sleep_resets_when_turn_is_finalized() {
 
     chat.finalize_turn();
 
-    assert!(!chat.agent_turn_running);
+    assert_eq!(chat.status_machine.turn, TurnLifecycle::Idle);
     assert!(!chat.turn_sleep_inhibitor.is_turn_running());
     assert!(!chat.bottom_pane.is_task_running());
 }
 
 #[tokio::test]
-async fn replayed_turn_started_syncs_sleep_inhibitor_state() {
+async fn fresh_turn_started_rebuilds_status_and_finalizes_stale_stream() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    begin_unified_exec_startup(&mut chat, "old-startup", "old-process", "sleep 5");
+    terminal_interaction(&mut chat, "old-wait", "old-process", "");
+    chat.on_agent_message_delta("old partial answer".to_string());
+    chat.on_commit_tick();
+    let _ = drain_events(&mut rx);
+
+    chat.bottom_pane
+        .advance_status_elapsed_for_test(Duration::from_secs(5));
+    let old_status = chat
+        .bottom_pane
+        .status_widget_any()
+        .expect("old turn status");
+    assert!(old_status.elapsed_seconds() >= 5);
+    assert!(old_status.inline_message().is_some());
+
+    chat.on_task_started();
+
+    assert!(chat.stream_controller.is_none());
+    assert_eq!(chat.status_machine.streams, StreamSuspension::default());
+    assert!(chat.unified_exec_processes.is_empty());
+    assert!(chat.active_cell.is_none());
+    assert_eq!(chat.last_separator_elapsed_secs, None);
+    let new_status = chat.bottom_pane.status_widget().expect("new turn status");
+    assert_eq!(new_status.header(), "Working");
+    assert_eq!(new_status.elapsed_seconds(), 0);
+    assert_eq!(new_status.inline_message(), None);
+
+    let old_history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(old_history.contains("old partial answer"));
+
+    chat.on_agent_message_delta("new partial answer".to_string());
+    chat.on_commit_tick();
+    let active = active_blob(&chat);
+    assert!(active.contains("new partial answer"));
+    assert!(!active.contains("old partial answer"));
+}
+
+#[tokio::test]
+async fn replayed_turn_started_does_not_create_live_running_state() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.set_feature_enabled(Feature::PreventIdleSleep, true);
 
@@ -6280,15 +6481,245 @@ async fn replayed_turn_started_syncs_sleep_inhibitor_state() {
         identity_kind: IdentityKind::Nobody,
     })]);
 
-    assert!(chat.agent_turn_running);
-    assert!(chat.turn_sleep_inhibitor.is_turn_running());
-    assert!(chat.bottom_pane.is_task_running());
+    assert_eq!(chat.status_machine.turn, TurnLifecycle::Idle);
+    assert!(!chat.turn_sleep_inhibitor.is_turn_running());
+    assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
+async fn replayed_lifecycle_events_do_not_create_live_status_or_side_effects() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let thread_id = ThreadId::new();
+    chat.queue_user_message(UserMessage::from("queued follow-up".to_string()));
+    chat.thread_id = Some(thread_id);
+    chat.current_identity.kind = IdentityKind::Planner;
+
+    chat.replay_initial_messages(vec![
+        EventMsg::ThreadGoalReplaceConfirmationRequired(
+            ThreadGoalReplaceConfirmationRequiredEvent {
+                thread_id,
+                existing_goal: ThreadGoal {
+                    thread_id,
+                    goal_id: "goal-replay".to_string(),
+                    objective: "existing objective".to_string(),
+                    status: ThreadGoalStatus::Active,
+                    token_budget: Some(1_000),
+                    tokens_used: 12,
+                    time_used_seconds: 34,
+                    created_at: 1_700_000_000,
+                    updated_at: 1_700_000_100,
+                },
+                objective: "replacement objective".to_string(),
+            },
+        ),
+        EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+        EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "historical ".to_string(),
+        }),
+        EventMsg::PlanDelta(PlanDeltaEvent {
+            thread_id: "thread-replay".to_string(),
+            turn_id: "turn-replay".to_string(),
+            item_id: "plan-replay".to_string(),
+            delta: "# Historical plan".to_string(),
+        }),
+        EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Historical status title**".to_string(),
+        }),
+        EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "Historical reasoning".to_string(),
+        }),
+        EventMsg::AgentMessage(AgentMessageEvent {
+            message: "historical answer".to_string(),
+            memory_citation: None,
+        }),
+        EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
+        }),
+        EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: None,
+        }),
+        EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+        EventMsg::UndoStarted(UndoStartedEvent {
+            message: Some("historical undo".to_string()),
+        }),
+        EventMsg::UndoCompleted(UndoCompletedEvent {
+            success: true,
+            message: Some("historical undo completed".to_string()),
+        }),
+        EventMsg::TurnAborted(crate::product::agent::protocol::TurnAbortedEvent {
+            reason: TurnAbortReason::Interrupted,
+        }),
+    ]);
+
+    assert_eq!(chat.status_machine.turn, TurnLifecycle::Idle);
+    assert_eq!(chat.status_machine.finalizing, None);
+    assert_eq!(chat.status_machine.streams, StreamSuspension::default());
+    assert_eq!(
+        chat.status_machine.turn_status,
+        StatusIndicatorState::working()
+    );
+    assert!(!chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_widget_any().is_none());
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
+    assert!(chat.stream_controller.is_none());
+    assert!(chat.plan_stream_controller.is_none());
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    let replay_events = drain_events(&mut rx);
+    assert!(
+        replay_events.iter().all(|event| !matches!(
+            event,
+            AppEvent::StartCommitAnimation | AppEvent::StopCommitAnimation
+        )),
+        "replay must not start or stop live stream animations"
+    );
+    let replay_history = replay_events
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .map(|cell| lines_to_single_string(&cell.display_lines(100)))
+        .collect::<String>();
+    assert!(replay_history.contains("historical undo completed"));
+    assert!(replay_history.contains("Conversation interrupted"));
+}
+
+#[tokio::test]
+async fn replayed_unclosed_review_does_not_leak_live_state() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let parent_info = make_token_info(12_700, 13_000);
+    let review_info = make_token_info(12_030, 13_000);
+    chat.set_token_info(Some(parent_info.clone()));
+
+    chat.replay_initial_messages(vec![
+        EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
+        }),
+        EventMsg::TokenCount(TokenCountEvent {
+            info: Some(review_info),
+        }),
+        EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "historical review reasoning".to_string(),
+        }),
+    ]);
+
+    assert_eq!(chat.status_machine.turn, TurnLifecycle::Idle);
+    assert!(!chat.is_review_mode);
+    assert!(!chat.replay_review_mode);
+    assert!(chat.pre_review_token_info.is_none());
+    assert!(chat.replay_pre_review_token_info.is_none());
+    assert_eq!(chat.token_info, Some(parent_info));
+    assert_eq!(chat.bottom_pane.context_window_percent(), Some(2));
+
+    let replay_cells: Vec<_> = drain_events(&mut rx)
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .collect();
+    let replay_display = replay_cells
+        .iter()
+        .map(|cell| lines_to_single_string(&cell.display_lines(100)))
+        .collect::<String>();
+    let replay_transcript = replay_cells
+        .iter()
+        .map(|cell| lines_to_single_string(&cell.transcript_lines(100)))
+        .collect::<String>();
+    assert!(!replay_display.contains("historical review reasoning"));
+    assert!(replay_transcript.contains("historical review reasoning"));
+
+    chat.handle_codex_event(Event {
+        id: "ordinary-reasoning".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "ordinary live reasoning".to_string(),
+        }),
+    });
+    let ordinary_display = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(ordinary_display.contains("ordinary live reasoning"));
+
+    let live_parent_info = make_token_info(11_000, 13_000);
+    chat.set_token_info(Some(live_parent_info.clone()));
+    chat.handle_codex_event(Event {
+        id: "live-review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "live-review-tokens".into(),
+        msg: EventMsg::TokenCount(TokenCountEvent {
+            info: Some(make_token_info(10_000, 13_000)),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "live-review-exit".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: None,
+        }),
+    });
+
+    assert_eq!(chat.token_info, Some(live_parent_info));
+    assert!(!chat.is_review_mode);
+}
+
+#[tokio::test]
+async fn live_and_replay_lifecycle_sequences_only_change_live_status() {
+    let (mut live, _live_rx, _live_op_rx) = make_chatwidget_manual(None).await;
+    live.handle_codex_event(Event {
+        id: "live-start".to_string(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+    live.handle_codex_event(Event {
+        id: "live-answer".to_string(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "answer".to_string(),
+            memory_citation: None,
+        }),
+    });
+
+    let (mut replay, _replay_rx, _replay_op_rx) = make_chatwidget_manual(None).await;
+    replay.handle_codex_event_replay(Event {
+        id: "replay-start".to_string(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+    replay.handle_codex_event_replay(Event {
+        id: "replay-answer".to_string(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "answer".to_string(),
+            memory_citation: None,
+        }),
+    });
+
+    assert_eq!(
+        live.status_machine.finalizing,
+        Some(TurnFinalizing::FinalAnswer)
+    );
+    assert!(live.bottom_pane.is_task_running());
+    assert_eq!(replay.status_machine.turn, TurnLifecycle::Idle);
+    assert_eq!(replay.status_machine.finalizing, None);
+    assert_eq!(replay.status_machine.streams, StreamSuspension::default());
+    assert!(replay.status_machine.mcp_startup.is_none());
+    assert!(!replay.status_machine.windows_setup_running);
+    assert!(!replay.bottom_pane.is_task_running());
 }
 
 #[tokio::test]
 async fn toggling_prevent_idle_sleep_resyncs_inhibitor_with_running_state() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.agent_turn_running = true;
+    chat.status_machine.turn = TurnLifecycle::Running(TurnKind::Agent);
     chat.turn_sleep_inhibitor
         .set_turn_running(/* turn_running */ false);
 
@@ -6661,7 +7092,7 @@ async fn empty_enter_during_task_does_not_queue() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     // Simulate running task so submissions would normally be queued.
-    chat.bottom_pane.set_task_running(true);
+    chat.on_task_started();
 
     // Press Enter with an empty composer.
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -6675,7 +7106,7 @@ async fn alt_up_edits_most_recent_queued_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     // Simulate a running task so messages would normally be queued.
-    chat.bottom_pane.set_task_running(true);
+    chat.on_task_started();
 
     // Seed two queued messages.
     chat.queued_user_messages
@@ -6714,7 +7145,7 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     // Simulate an active task so further submissions are queued.
-    chat.bottom_pane.set_task_running(true);
+    chat.on_task_started();
 
     for _ in 0..3 {
         // Recall the prompt from history and ensure it is what we expect.
@@ -6786,6 +7217,428 @@ async fn streaming_answer_esc_interrupts_with_suspended_status() {
     );
 }
 
+async fn chat_with_suspended_answer() -> ChatWidget {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    chat.on_agent_message_delta("partial answer".to_string());
+    chat.on_commit_tick();
+    assert_eq!(
+        chat.bottom_pane.status_suspension_reason(),
+        Some(StatusSuspensionReason::StreamOutput)
+    );
+    chat
+}
+
+#[tokio::test]
+async fn streamed_answer_restores_status_for_exec_and_reasoning_work() {
+    let mut chat = chat_with_suspended_answer().await;
+
+    let begin = begin_exec(&mut chat, "call-status", "printf hello");
+
+    assert!(chat.bottom_pane.status_indicator_visible());
+    end_exec(&mut chat, begin, "hello", "", 0);
+
+    chat.handle_codex_event(Event {
+        id: "reasoning-after-exec".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Checking the result**".to_string(),
+        }),
+    });
+
+    assert!(chat.bottom_pane.status_indicator_visible());
+    assert_eq!(
+        chat.status_machine.turn_status.header,
+        "Checking the result"
+    );
+}
+
+#[tokio::test]
+async fn streamed_answer_restores_status_for_non_exec_tools() {
+    let mut mcp_chat = chat_with_suspended_answer().await;
+    mcp_chat.handle_codex_event(Event {
+        id: "mcp-call".into(),
+        msg: EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+            call_id: "mcp-call".to_string(),
+            invocation: McpInvocation {
+                server: "server".to_string(),
+                tool: "tool".to_string(),
+                arguments: None,
+            },
+        }),
+    });
+    assert!(mcp_chat.bottom_pane.status_indicator_visible());
+
+    let mut web_chat = chat_with_suspended_answer().await;
+    web_chat.handle_codex_event(Event {
+        id: "web-call".into(),
+        msg: EventMsg::WebSearchBegin(WebSearchBeginEvent {
+            call_id: "web-call".to_string(),
+        }),
+    });
+    assert!(web_chat.bottom_pane.status_indicator_visible());
+
+    let mut patch_chat = chat_with_suspended_answer().await;
+    patch_chat.handle_codex_event(Event {
+        id: "patch-call".into(),
+        msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+            call_id: "patch-call".to_string(),
+            turn_id: "turn".to_string(),
+            auto_approved: true,
+            changes: HashMap::new(),
+        }),
+    });
+    assert!(patch_chat.bottom_pane.status_indicator_visible());
+
+    let mut image_chat = chat_with_suspended_answer().await;
+    image_chat.handle_codex_event(Event {
+        id: "image-call".into(),
+        msg: EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
+            call_id: "image-call".to_string(),
+            path: PathBuf::from("image.png"),
+        }),
+    });
+    assert!(image_chat.bottom_pane.status_indicator_visible());
+
+    let mut terminal_chat = chat_with_suspended_answer().await;
+    terminal_chat.handle_codex_event(Event {
+        id: "terminal-call".into(),
+        msg: EventMsg::TerminalInteraction(TerminalInteractionEvent {
+            call_id: "terminal-call".to_string(),
+            process_id: "process".to_string(),
+            stdin: "continue".to_string(),
+        }),
+    });
+    assert!(terminal_chat.bottom_pane.status_indicator_visible());
+}
+
+#[tokio::test]
+async fn completed_plan_stream_restores_status_when_reasoning_resumes() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.current_identity.kind = IdentityKind::Planner;
+    chat.on_task_started();
+
+    chat.on_plan_delta("# Plan\n- inspect".to_string());
+    chat.on_commit_tick();
+    assert_eq!(
+        chat.bottom_pane.status_suspension_reason(),
+        Some(StatusSuspensionReason::StreamOutput)
+    );
+    chat.on_plan_item_completed("# Plan\n- inspect".to_string());
+    assert!(chat.bottom_pane.status_indicator_visible());
+
+    chat.handle_codex_event(Event {
+        id: "reasoning-after-plan".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Continuing analysis**".to_string(),
+        }),
+    });
+
+    assert!(chat.bottom_pane.status_indicator_visible());
+
+    let (mut tool_chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    tool_chat.current_identity.kind = IdentityKind::Planner;
+    tool_chat.on_task_started();
+    tool_chat.on_plan_delta("# Plan\n- inspect".to_string());
+    tool_chat.on_commit_tick();
+    tool_chat.on_plan_item_completed("# Plan\n- inspect".to_string());
+    let begin = begin_exec(&mut tool_chat, "plan-tool", "printf plan");
+    assert!(tool_chat.bottom_pane.status_indicator_visible());
+    end_exec(&mut tool_chat, begin, "plan", "", 0);
+}
+
+#[tokio::test]
+async fn final_agent_message_stays_hidden_until_turn_complete() {
+    let mut chat = chat_with_suspended_answer().await;
+
+    chat.on_agent_message("partial answer".to_string(), DispatchMode::Live);
+
+    assert_eq!(
+        chat.status_machine.finalizing,
+        Some(TurnFinalizing::FinalAnswer)
+    );
+    assert_eq!(
+        chat.bottom_pane.status_suspension_reason(),
+        Some(StatusSuspensionReason::TurnFinalizing)
+    );
+    assert!(chat.bottom_pane.status_widget_any().is_some());
+
+    chat.on_task_complete(None, DispatchMode::Live);
+
+    assert!(!chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_widget_any().is_none());
+}
+
+#[tokio::test]
+async fn non_streaming_final_message_stays_hidden_and_follow_up_work_can_resume() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    chat.on_agent_message("answer".to_string(), DispatchMode::Live);
+
+    assert_eq!(
+        chat.bottom_pane.status_suspension_reason(),
+        Some(StatusSuspensionReason::TurnFinalizing)
+    );
+
+    chat.handle_codex_event(Event {
+        id: "late-reasoning".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**More work**".to_string(),
+        }),
+    });
+
+    assert_eq!(chat.status_machine.finalizing, None);
+    assert!(chat.bottom_pane.status_indicator_visible());
+
+    chat.on_agent_message("second answer".to_string(), DispatchMode::Live);
+    assert_eq!(
+        chat.status_machine.finalizing,
+        Some(TurnFinalizing::FinalAnswer)
+    );
+    let begin = begin_exec(&mut chat, "late-tool", "printf more");
+    assert_eq!(chat.status_machine.finalizing, None);
+    assert!(chat.bottom_pane.status_indicator_visible());
+    end_exec(&mut chat, begin, "more", "", 0);
+}
+
+#[tokio::test]
+async fn hidden_raw_reasoning_resumes_finalizing_status() {
+    fn assert_status_resumed(chat: &ChatWidget) {
+        assert_eq!(chat.status_machine.finalizing, None);
+        let status = chat
+            .bottom_pane
+            .status_widget()
+            .expect("hidden reasoning should restore the status");
+        assert!(!status.timer_is_paused());
+        assert!(status.interrupt_hint_visible());
+    }
+
+    let (mut structured, mut structured_rx, _op_rx) = make_chatwidget_manual(None).await;
+    structured.on_task_started();
+    structured.on_agent_message("answer".to_string(), DispatchMode::Live);
+    let _ = drain_insert_history(&mut structured_rx);
+    structured.handle_codex_event(Event {
+        id: "structured-raw".into(),
+        msg: EventMsg::ReasoningRawContentDelta(ReasoningRawContentDeltaEvent {
+            thread_id: "thread".to_string(),
+            turn_id: "turn".to_string(),
+            item_id: "structured-raw".to_string(),
+            delta: "hidden raw detail".to_string(),
+            content_index: 0,
+        }),
+    });
+    assert_status_resumed(&structured);
+    assert!(structured.reasoning_item_states.is_empty());
+    assert!(drain_insert_history(&mut structured_rx).is_empty());
+
+    let (mut legacy_delta, mut legacy_delta_rx, _op_rx) = make_chatwidget_manual(None).await;
+    legacy_delta.on_task_started();
+    legacy_delta.on_agent_message("answer".to_string(), DispatchMode::Live);
+    let _ = drain_insert_history(&mut legacy_delta_rx);
+    legacy_delta.handle_codex_event(Event {
+        id: "legacy-raw-delta".into(),
+        msg: EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
+            delta: "hidden legacy raw detail".to_string(),
+        }),
+    });
+    assert_status_resumed(&legacy_delta);
+    assert!(drain_insert_history(&mut legacy_delta_rx).is_empty());
+
+    let (mut legacy_final, mut legacy_final_rx, _op_rx) = make_chatwidget_manual(None).await;
+    legacy_final.on_task_started();
+    legacy_final.on_agent_message("answer".to_string(), DispatchMode::Live);
+    let _ = drain_insert_history(&mut legacy_final_rx);
+    legacy_final.handle_codex_event(Event {
+        id: "legacy-raw-final".into(),
+        msg: EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent {
+            text: "hidden legacy raw detail".to_string(),
+        }),
+    });
+    assert_status_resumed(&legacy_final);
+    assert!(drain_insert_history(&mut legacy_final_rx).is_empty());
+}
+
+#[tokio::test]
+async fn late_answer_and_plan_deltas_do_not_revive_finalizing_status() {
+    let (mut answer_chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    answer_chat.on_task_started();
+    answer_chat.on_agent_message("answer".to_string(), DispatchMode::Live);
+    answer_chat.handle_codex_event(Event {
+        id: "late-answer-delta".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: " late".to_string(),
+        }),
+    });
+
+    assert_eq!(
+        answer_chat.status_machine.finalizing,
+        Some(TurnFinalizing::FinalAnswer)
+    );
+    assert_eq!(
+        answer_chat.bottom_pane.status_suspension_reason(),
+        Some(StatusSuspensionReason::TurnFinalizing)
+    );
+    answer_chat.on_commit_tick();
+    assert_eq!(
+        answer_chat.bottom_pane.status_suspension_reason(),
+        Some(StatusSuspensionReason::TurnFinalizing)
+    );
+
+    let (mut plan_chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    plan_chat.current_identity.kind = IdentityKind::Planner;
+    plan_chat.on_task_started();
+    plan_chat.on_agent_message("answer".to_string(), DispatchMode::Live);
+    plan_chat.handle_codex_event(Event {
+        id: "late-plan-delta".into(),
+        msg: EventMsg::PlanDelta(PlanDeltaEvent {
+            thread_id: "thread-late-plan".to_string(),
+            turn_id: "turn-late-plan".to_string(),
+            item_id: "plan-late-plan".to_string(),
+            delta: "# Late plan".to_string(),
+        }),
+    });
+
+    assert_eq!(
+        plan_chat.status_machine.finalizing,
+        Some(TurnFinalizing::FinalAnswer)
+    );
+    assert_eq!(
+        plan_chat.bottom_pane.status_suspension_reason(),
+        Some(StatusSuspensionReason::TurnFinalizing)
+    );
+    plan_chat.on_commit_tick();
+    assert_eq!(
+        plan_chat.bottom_pane.status_suspension_reason(),
+        Some(StatusSuspensionReason::TurnFinalizing)
+    );
+}
+
+#[tokio::test]
+async fn review_and_undo_terminal_states_replace_final_answer() {
+    let (mut review_chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    review_chat.on_task_started();
+    review_chat.handle_codex_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
+        }),
+    });
+    review_chat.on_agent_message("review answer".to_string(), DispatchMode::Live);
+    assert_eq!(
+        review_chat.status_machine.finalizing,
+        Some(TurnFinalizing::FinalAnswer)
+    );
+
+    review_chat.handle_codex_event(Event {
+        id: "review-exit".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: None,
+        }),
+    });
+    review_chat.handle_codex_event(Event {
+        id: "late-review-reasoning".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Late review work**".to_string(),
+        }),
+    });
+
+    assert_eq!(
+        review_chat.status_machine.finalizing,
+        Some(TurnFinalizing::ReviewExit)
+    );
+    assert_eq!(
+        review_chat.bottom_pane.status_suspension_reason(),
+        Some(StatusSuspensionReason::TurnFinalizing)
+    );
+
+    let (mut undo_chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    undo_chat.handle_codex_event(Event {
+        id: "undo-start".into(),
+        msg: EventMsg::UndoStarted(UndoStartedEvent { message: None }),
+    });
+    undo_chat.on_agent_message("undo answer".to_string(), DispatchMode::Live);
+    assert_eq!(
+        undo_chat.status_machine.finalizing,
+        Some(TurnFinalizing::FinalAnswer)
+    );
+
+    undo_chat.handle_codex_event(Event {
+        id: "undo-complete".into(),
+        msg: EventMsg::UndoCompleted(UndoCompletedEvent {
+            success: true,
+            message: None,
+        }),
+    });
+    undo_chat.handle_codex_event(Event {
+        id: "late-undo-reasoning".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Late undo work**".to_string(),
+        }),
+    });
+
+    assert_eq!(
+        undo_chat.status_machine.finalizing,
+        Some(TurnFinalizing::UndoCompleted)
+    );
+    assert_eq!(
+        undo_chat.bottom_pane.status_suspension_reason(),
+        Some(StatusSuspensionReason::TurnFinalizing)
+    );
+}
+
+#[tokio::test]
+async fn overlapping_answer_and_plan_suspensions_release_independently() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.current_identity.kind = IdentityKind::Planner;
+    chat.on_task_started();
+    chat.on_agent_message_delta("answer".to_string());
+    chat.on_plan_delta("# Plan\n- inspect".to_string());
+    chat.on_commit_tick();
+
+    assert_eq!(
+        chat.status_machine.streams,
+        StreamSuspension {
+            answer_visible: true,
+            plan_visible: true,
+        }
+    );
+    chat.handle_codex_event(Event {
+        id: "agent-job".into(),
+        msg: EventMsg::AgentJobStatus(AgentJobStatusEvent {
+            job_id: "agent-job".to_string(),
+            agent_type: AgentJobKind::Explorer,
+            name: Some("Kepler".to_string()),
+            status: AgentJobDisplayStatus::Running,
+            message: None,
+        }),
+    });
+    assert_eq!(
+        chat.status_machine.streams,
+        StreamSuspension {
+            answer_visible: true,
+            plan_visible: true,
+        }
+    );
+
+    let begin = begin_exec(&mut chat, "overlap-tool", "printf overlap");
+    assert_eq!(
+        chat.status_machine.streams,
+        StreamSuspension {
+            answer_visible: false,
+            plan_visible: true,
+        }
+    );
+    assert_eq!(
+        chat.bottom_pane.status_suspension_reason(),
+        Some(StatusSuspensionReason::StreamOutput)
+    );
+
+    chat.on_plan_item_completed("# Plan\n- inspect".to_string());
+    assert!(chat.bottom_pane.status_indicator_visible());
+    end_exec(&mut chat, begin, "overlap", "", 0);
+}
+
 #[tokio::test]
 async fn ctrl_c_shutdown_works_with_caps_lock() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -6821,7 +7674,10 @@ async fn ctrl_shift_c_copies_selection_without_quit() {
 
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
-    assert_ne!(chat.current_status.header, "No selection to copy");
+    assert_ne!(
+        chat.status_machine.turn_status.header,
+        "No selection to copy"
+    );
 }
 
 #[tokio::test]
@@ -6848,7 +7704,7 @@ async fn transcript_copy_success_clears_selection() {
         Ok(())
     });
 
-    assert_eq!(chat.current_status.header, "Selection copied");
+    assert_eq!(chat.status_machine.turn_status.header, "Selection copied");
     assert!(!chat.transcript.borrow().selection_active_for_test());
 }
 
@@ -6876,7 +7732,7 @@ async fn completed_mouse_selection_copy_success_clears_selection() {
         Ok(())
     });
 
-    assert_eq!(chat.current_status.header, "Selection copied");
+    assert_eq!(chat.status_machine.turn_status.header, "Selection copied");
     assert!(!chat.transcript.borrow().selection_active_for_test());
 }
 
@@ -6905,7 +7761,7 @@ async fn transcript_copy_failure_keeps_selection() {
     });
 
     assert_eq!(
-        chat.current_status.header,
+        chat.status_machine.turn_status.header,
         "Copy failed: clipboard unavailable"
     );
     assert!(chat.transcript.borrow().selection_active_for_test());
@@ -6922,7 +7778,10 @@ async fn ctrl_shift_c_without_selection_does_not_quit() {
 
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
-    assert_eq!(chat.current_status.header, "No selection to copy");
+    assert_eq!(
+        chat.status_machine.turn_status.header,
+        "No selection to copy"
+    );
 }
 
 #[tokio::test]
@@ -7123,12 +7982,24 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
     let begin = begin_exec_with_source(
         &mut chat,
         "call-startup",
-        "echo unified exec startup",
+        "ls",
         ExecCommandSource::UnifiedExecStartup,
     );
     drain_insert_history(&mut rx);
 
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, DispatchMode::Live);
+    let completed_cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        completed_cells.len(),
+        1,
+        "expected task completion to flush the active exec cell"
+    );
+    assert!(
+        lines_to_single_string(&completed_cells[0]).contains("ls"),
+        "expected the flushed active cell to retain the command"
+    );
+    assert!(chat.active_cell.is_none());
+
     end_exec(&mut chat, begin, "", "", 0);
 
     let cells = drain_insert_history(&mut rx);
@@ -7139,10 +8010,39 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
 }
 
 #[tokio::test]
+async fn turn_complete_finalizes_active_web_search() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    chat.handle_codex_event(Event {
+        id: "web-search".to_string(),
+        msg: EventMsg::WebSearchBegin(WebSearchBeginEvent {
+            call_id: "web-search".to_string(),
+        }),
+    });
+    assert!(
+        chat.active_cell
+            .as_ref()
+            .and_then(|cell| cell.transcript_animation_tick())
+            .is_some()
+    );
+    let _ = drain_insert_history(&mut rx);
+
+    chat.on_task_complete(None, DispatchMode::Live);
+
+    let cells = drain_events(&mut rx)
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .collect::<Vec<_>>();
+    assert_eq!(cells.len(), 1);
+    assert!(cells[0].transcript_animation_tick().is_none());
+    assert!(lines_to_single_string(&cells[0].display_lines(80)).contains("Searched"));
+}
+
+#[tokio::test]
 async fn unified_exec_interaction_after_task_complete_is_suppressed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, DispatchMode::Live);
 
     chat.handle_codex_event(Event {
         id: "call-1".to_string(),
@@ -7257,7 +8157,7 @@ async fn unified_exec_wait_status_header_updates_on_late_command_display() {
 
     assert!(chat.active_cell.is_none());
     assert_eq!(
-        chat.current_status.header,
+        chat.status_machine.turn_status.header,
         "Waiting for background terminal"
     );
     let status = chat
@@ -7277,7 +8177,7 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
     terminal_interaction(&mut chat, "call-wait-1a", "proc-1", "");
     terminal_interaction(&mut chat, "call-wait-1b", "proc-1", "");
     assert_eq!(
-        chat.current_status.header,
+        chat.status_machine.turn_status.header,
         "Waiting for background terminal"
     );
 
@@ -7369,10 +8269,13 @@ async fn terminal_interaction_promotes_unified_exec_immediately() {
         &["sleep 5".to_string()]
     );
     assert_eq!(
-        chat.current_status.header,
+        chat.status_machine.turn_status.header,
         "Waiting for background terminal"
     );
-    assert_eq!(chat.current_status.details, Some("sleep 5".to_string()));
+    assert_eq!(
+        chat.status_machine.turn_status.details,
+        Some("sleep 5".to_string())
+    );
     assert!(chat.sidebar_snapshot().task.is_none());
 }
 
@@ -7402,7 +8305,7 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
     terminal_interaction(&mut chat, "call-wait-3a", "proc-3", "pwd\n");
     terminal_interaction(&mut chat, "call-wait-3b", "proc-3", "");
     assert_eq!(
-        chat.current_status.header,
+        chat.status_machine.turn_status.header,
         "Waiting for background terminal"
     );
     let status = chat
@@ -7699,7 +8602,7 @@ async fn shift_tab_opens_identity_modal_event_when_idle() {
 async fn shift_tab_does_not_open_identity_modal_while_task_running() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.set_feature_enabled(Feature::Identities, true);
-    chat.bottom_pane.set_task_running(true);
+    chat.on_task_started();
 
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
 
@@ -8124,7 +9027,7 @@ async fn identity_indicator_matches_active_identity_kind() {
 async fn identity_slash_command_disabled_during_task() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.set_feature_enabled(Feature::Identities, true);
-    chat.bottom_pane.set_task_running(true);
+    chat.on_task_started();
 
     chat.dispatch_command(SlashCommand::Identity);
 
@@ -8729,12 +9632,25 @@ async fn undo_success_events_render_info_messages() {
         !chat.bottom_pane.status_indicator_visible(),
         "status indicator should be hidden after successful undo"
     );
+    assert!(chat.bottom_pane.is_task_running());
+    assert_eq!(
+        chat.status_machine.finalizing,
+        Some(TurnFinalizing::UndoCompleted)
+    );
 
     let completed = lines_to_single_string(&cells[0]);
     assert!(
         completed.contains("Undo completed successfully."),
         "expected default success message, got {completed:?}"
     );
+
+    chat.handle_codex_event(Event {
+        id: "turn-1-complete".to_string(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+    assert!(!chat.bottom_pane.is_task_running());
 }
 
 #[tokio::test]
@@ -10313,7 +11229,7 @@ async fn user_shell_command_renders_output_not_exploring() {
 async fn disabled_slash_command_while_task_running_snapshot() {
     // Build a chat widget and simulate an active task
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.bottom_pane.set_task_running(true);
+    chat.on_task_started();
 
     // Dispatch a command that is unavailable while a task runs (e.g., /model)
     chat.dispatch_command(SlashCommand::Model);
@@ -10424,7 +11340,7 @@ async fn missing_models_json_startup_can_defer_provider_popup_to_app_modal() {
 #[tokio::test]
 async fn providers_command_is_disabled_while_task_running() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.bottom_pane.set_task_running(true);
+    chat.on_task_started();
 
     chat.dispatch_command(SlashCommand::Providers);
 
@@ -10733,7 +11649,7 @@ async fn interrupt_restores_queued_messages_into_composer() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
     // Simulate a running task to enable queuing of user inputs.
-    chat.bottom_pane.set_task_running(true);
+    chat.on_task_started();
 
     // Queue two user messages while the task is running.
     chat.queued_user_messages
@@ -10771,7 +11687,7 @@ async fn interrupt_restores_queued_messages_into_composer() {
 async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
-    chat.bottom_pane.set_task_running(true);
+    chat.on_task_started();
     chat.bottom_pane
         .set_composer_text("current draft".to_string(), Vec::new(), Vec::new());
 
@@ -10802,7 +11718,7 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
 }
 
 #[tokio::test]
-async fn interrupt_preserves_unified_exec_processes() {
+async fn interrupt_clears_unified_exec_footer() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
@@ -10816,7 +11732,8 @@ async fn interrupt_preserves_unified_exec_processes() {
         }),
     });
 
-    assert_eq!(chat.unified_exec_processes.len(), 2);
+    assert!(chat.unified_exec_processes.is_empty());
+    assert!(chat.bottom_pane.unified_exec_processes().is_empty());
 
     let _ = drain_insert_history(&mut rx);
 }
@@ -11060,8 +11977,266 @@ async fn mcp_startup_complete_does_not_clear_running_task() {
 }
 
 #[tokio::test]
+async fn mcp_turn_handoff_replaces_presenter_without_stale_header() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "mcp-start".into(),
+        msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+            server: "alpha".into(),
+            status: McpStartupStatus::Starting,
+        }),
+    });
+    assert_eq!(
+        chat.bottom_pane.status_presenter(),
+        Some(StatusPresenter::McpStartup)
+    );
+    assert_eq!(
+        chat.bottom_pane
+            .status_widget()
+            .map(super::super::status_indicator_widget::StatusIndicatorWidget::header),
+        Some("Booting MCP server: alpha")
+    );
+    chat.bottom_pane
+        .advance_status_elapsed_for_test(Duration::from_secs(5));
+    assert!(
+        chat.bottom_pane
+            .status_widget()
+            .expect("MCP status visible")
+            .elapsed_seconds()
+            >= 5
+    );
+
+    chat.on_task_started();
+    assert_eq!(
+        chat.bottom_pane
+            .status_widget()
+            .expect("turn status visible")
+            .elapsed_seconds(),
+        0
+    );
+    chat.set_status(
+        "Analyzing".to_string(),
+        Some("turn details".to_string()),
+        StatusDetailsCapitalization::Preserve,
+        2,
+    );
+    assert_eq!(
+        chat.bottom_pane.status_presenter(),
+        Some(StatusPresenter::Turn)
+    );
+    assert_eq!(
+        chat.bottom_pane
+            .status_widget()
+            .map(super::super::status_indicator_widget::StatusIndicatorWidget::header),
+        Some("Analyzing")
+    );
+    assert_eq!(
+        chat.bottom_pane
+            .status_widget()
+            .and_then(|status| status.details()),
+        Some("turn details")
+    );
+    chat.bottom_pane
+        .advance_status_elapsed_for_test(Duration::from_secs(5));
+    chat.handle_codex_event(Event {
+        id: "mcp-update-during-turn".into(),
+        msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+            server: "alpha".into(),
+            status: McpStartupStatus::Starting,
+        }),
+    });
+    let turn_status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("turn status should remain visible");
+    assert_eq!(turn_status.header(), "Analyzing");
+    assert_eq!(turn_status.details(), Some("turn details"));
+    assert!(turn_status.elapsed_seconds() >= 5);
+
+    chat.on_task_complete(None, DispatchMode::Live);
+    assert_eq!(
+        chat.bottom_pane.status_presenter(),
+        Some(StatusPresenter::McpStartup)
+    );
+    assert_eq!(
+        chat.bottom_pane
+            .status_widget()
+            .map(super::super::status_indicator_widget::StatusIndicatorWidget::header),
+        Some("Booting MCP server: alpha")
+    );
+    assert_eq!(
+        chat.bottom_pane
+            .status_widget()
+            .and_then(|status| status.details()),
+        None
+    );
+    assert_eq!(
+        chat.bottom_pane
+            .status_widget()
+            .expect("fresh MCP status visible")
+            .elapsed_seconds(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn mcp_update_cannot_revive_finalizing_turn_status() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    chat.on_agent_message("answer".to_string(), DispatchMode::Live);
+
+    chat.handle_codex_event(Event {
+        id: "mcp-start".into(),
+        msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+            server: "alpha".into(),
+            status: McpStartupStatus::Starting,
+        }),
+    });
+
+    assert_eq!(
+        chat.bottom_pane.status_presenter(),
+        Some(StatusPresenter::Turn)
+    );
+    assert_eq!(
+        chat.bottom_pane.status_suspension_reason(),
+        Some(StatusSuspensionReason::TurnFinalizing)
+    );
+
+    chat.on_task_complete(None, DispatchMode::Live);
+
+    assert_eq!(
+        chat.bottom_pane.status_presenter(),
+        Some(StatusPresenter::McpStartup)
+    );
+    assert!(chat.bottom_pane.status_indicator_visible());
+}
+
+#[tokio::test]
+async fn mcp_completion_during_review_does_not_send_queued_input() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.handle_codex_event(Event {
+        id: "mcp-start".into(),
+        msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+            server: "alpha".into(),
+            status: McpStartupStatus::Starting,
+        }),
+    });
+    chat.prepare_for_review_start_transition();
+    chat.handle_codex_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
+        }),
+    });
+    chat.queue_user_message(UserMessage::from("queued follow-up".to_string()));
+
+    chat.handle_codex_event(Event {
+        id: "mcp-complete".into(),
+        msg: EventMsg::McpStartupComplete(McpStartupCompleteEvent {
+            ready: vec!["alpha".to_string()],
+            ..Default::default()
+        }),
+    });
+
+    assert_eq!(
+        chat.status_machine.turn,
+        TurnLifecycle::Running(TurnKind::Review)
+    );
+    assert!(chat.bottom_pane.is_task_running());
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn review_turn_complete_hands_status_back_to_running_mcp_startup() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.handle_codex_event(Event {
+        id: "mcp-start".into(),
+        msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+            server: "alpha".into(),
+            status: McpStartupStatus::Starting,
+        }),
+    });
+    chat.prepare_for_review_start_transition();
+    chat.handle_codex_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "review-exit".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: None,
+        }),
+    });
+
+    assert_eq!(
+        chat.bottom_pane.status_suspension_reason(),
+        Some(StatusSuspensionReason::TurnFinalizing)
+    );
+
+    chat.handle_codex_event(Event {
+        id: "review-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    assert_eq!(
+        chat.bottom_pane.status_presenter(),
+        Some(StatusPresenter::McpStartup)
+    );
+    assert_eq!(
+        chat.bottom_pane
+            .status_widget()
+            .map(super::super::status_indicator_widget::StatusIndicatorWidget::header),
+        Some("Booting MCP server: alpha")
+    );
+}
+
+#[tokio::test]
+async fn windows_setup_owner_hands_back_to_turn_or_mcp() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.handle_codex_event(Event {
+        id: "mcp-start".into(),
+        msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+            server: "alpha".into(),
+            status: McpStartupStatus::Starting,
+        }),
+    });
+
+    chat.apply_windows_sandbox_setup_running(true);
+    assert_eq!(
+        chat.bottom_pane.status_presenter(),
+        Some(StatusPresenter::WindowsSetup)
+    );
+    assert!(!chat.bottom_pane.composer_input_enabled());
+
+    chat.apply_windows_sandbox_setup_running(false);
+    assert_eq!(
+        chat.bottom_pane.status_presenter(),
+        Some(StatusPresenter::McpStartup)
+    );
+    assert!(chat.bottom_pane.composer_input_enabled());
+
+    chat.on_task_started();
+    chat.apply_windows_sandbox_setup_running(true);
+    chat.apply_windows_sandbox_setup_running(false);
+    assert_eq!(
+        chat.bottom_pane.status_presenter(),
+        Some(StatusPresenter::Turn)
+    );
+}
+
+#[tokio::test]
 async fn background_event_updates_status_header() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
 
     chat.handle_codex_event(Event {
         id: "bg-1".into(),
@@ -11071,7 +12246,7 @@ async fn background_event_updates_status_header() {
     });
 
     assert!(chat.bottom_pane.status_indicator_visible());
-    assert_eq!(chat.current_status.header, "Waiting for `vim`");
+    assert_eq!(chat.status_machine.turn_status.header, "Waiting for `vim`");
     assert!(drain_insert_history(&mut rx).is_empty());
 }
 
@@ -11631,7 +12806,7 @@ async fn loaded_skills_are_tracked_once_by_path() {
 #[tokio::test]
 async fn stream_error_updates_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.bottom_pane.set_task_running(true);
+    chat.on_task_started();
     let msg = "Reconnecting... 2/5";
     let details = "Idle timeout waiting for SSE";
     chat.handle_codex_event(Event {
@@ -11654,6 +12829,29 @@ async fn stream_error_updates_status_indicator() {
         .expect("status indicator should be visible");
     assert_eq!(status.header(), msg);
     assert_eq!(status.details(), Some(details));
+}
+
+#[tokio::test]
+async fn idle_background_and_stream_error_do_not_create_status() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "bg-idle".into(),
+        msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+            message: "Waiting for `vim`".to_string(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "stream-error-idle".into(),
+        msg: EventMsg::StreamError(StreamErrorEvent {
+            message: "Reconnecting... 2/5".to_string(),
+            codex_error_info: Some(CodexErrorInfo::Other),
+            additional_details: None,
+        }),
+    });
+
+    assert!(!chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_widget_any().is_none());
 }
 
 #[tokio::test]
@@ -11708,7 +12906,7 @@ async fn stream_recovery_restores_previous_status_header() {
         .expect("status indicator should be visible");
     assert_eq!(status.header(), "Working");
     assert_eq!(status.details(), None);
-    assert!(chat.retry_status.is_none());
+    assert!(chat.status_machine.retry_status.is_none());
 }
 
 #[tokio::test]
@@ -11743,7 +12941,7 @@ async fn stream_recovery_restores_previous_status_details() {
         .expect("status indicator should be visible");
     assert_eq!(status.header(), "Waiting for background terminal");
     assert_eq!(status.details(), Some("sleep 5"));
-    assert!(chat.retry_status.is_none());
+    assert!(chat.status_machine.retry_status.is_none());
 }
 
 #[tokio::test]
@@ -11946,7 +13144,7 @@ async fn structured_reasoning_hides_raw_when_disabled_and_keeps_title_out_of_tra
         }),
     });
 
-    assert_eq!(chat.current_status.header, "Checking tests");
+    assert_eq!(chat.status_machine.turn_status.header, "Checking tests");
 
     let mut display = String::new();
     let mut transcript = String::new();
@@ -12083,7 +13281,7 @@ async fn structured_reasoning_reconciles_completion_only_summary_before_raw_delt
         msg: EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text: raw.into() }),
     });
 
-    assert_eq!(chat.current_status.header, "Checking tests");
+    assert_eq!(chat.status_machine.turn_status.header, "Checking tests");
 
     let cells = drain_insert_history(&mut rx);
     let rendered = cells
@@ -12140,7 +13338,7 @@ async fn structured_reasoning_keeps_standalone_bold_raw_content() {
         msg: EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text: raw.into() }),
     });
 
-    assert_eq!(chat.current_status.header, "Working");
+    assert_eq!(chat.status_machine.turn_status.header, "Working");
 
     let mut display = String::new();
     let mut transcript = String::new();
@@ -12221,7 +13419,7 @@ async fn legacy_raw_reasoning_keeps_standalone_bold_content() {
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
 
-    assert_eq!(chat.current_status.header, "Working");
+    assert_eq!(chat.status_machine.turn_status.header, "Working");
     assert_eq!(cells.len(), 1);
     assert_eq!(rendered.matches("Raw detail").count(), 1);
 }
@@ -12804,10 +14002,11 @@ async fn non_streamed_agent_message_turn_complete_separator_uses_ordinary_histor
     record_test_runtime_metrics(&otel_manager);
     chat.on_agent_message(
         "Review comment:\nFormatting the potential body with saved workflow details.".to_string(),
+        DispatchMode::Live,
     );
     let _ = drain_events(&mut rx);
 
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, DispatchMode::Live);
 
     let mut saw_separator = false;
     for event in drain_events(&mut rx) {
@@ -12909,19 +14108,32 @@ async fn review_exit_clears_progress_status_and_unified_exec_footer_before_turn_
             delta: "**Planning evidence reference**\n\n<!-- -->".into(),
         }),
     });
+    chat.handle_codex_event(Event {
+        id: "review-answer-delta".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "Streamed review answer.".to_string(),
+        }),
+    });
+    chat.on_commit_tick();
+    assert_eq!(
+        chat.bottom_pane.status_suspension_reason(),
+        Some(StatusSuspensionReason::StreamOutput)
+    );
+    chat.bottom_pane
+        .advance_status_elapsed_for_test(Duration::from_secs(5));
     chat.last_unified_wait = Some(UnifiedExecWaitState::new("cargo test -p lha".to_string()));
     chat.unified_exec_wait_streak = Some(UnifiedExecWaitStreak::new(
         "review-process".to_string(),
         Some("cargo test -p lha".to_string()),
     ));
-    chat.retry_status = Some(StatusIndicatorState {
+    chat.status_machine.retry_status = Some(StatusIndicatorState {
         header: "Retrying review".to_string(),
         details: None,
         details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
     });
 
     assert_eq!(
-        chat.current_status,
+        chat.status_machine.turn_status,
         StatusIndicatorState {
             header: "Planning evidence reference".to_string(),
             details: None,
@@ -12947,13 +14159,16 @@ async fn review_exit_clears_progress_status_and_unified_exec_footer_before_turn_
     });
 
     assert!(chat.bottom_pane.status_widget().is_none());
-    assert!(chat.pending_review_elapsed_secs.is_some());
+    assert!(chat.bottom_pane.status_widget_any().is_some());
     assert!(chat.bottom_pane.unified_exec_processes().is_empty());
     assert!(chat.unified_exec_processes.is_empty());
     assert!(chat.last_unified_wait.is_none());
     assert!(chat.unified_exec_wait_streak.is_none());
-    assert!(chat.retry_status.is_none());
-    assert_eq!(chat.current_status, StatusIndicatorState::working());
+    assert!(chat.status_machine.retry_status.is_none());
+    assert_eq!(
+        chat.status_machine.turn_status,
+        StatusIndicatorState::working()
+    );
     assert!(chat.bottom_pane.is_task_running());
 
     let visible_history = drain_insert_history(&mut rx)
@@ -12963,6 +14178,10 @@ async fn review_exit_clears_progress_status_and_unified_exec_footer_before_turn_
     assert!(
         visible_history.contains("Review output remains visible."),
         "review output should remain visible: {visible_history:?}"
+    );
+    assert!(
+        visible_history.contains("Streamed review answer."),
+        "streamed review answer should flush before exit: {visible_history:?}"
     );
     assert!(
         visible_history.contains("<< Code review finished >>"),
@@ -12988,7 +14207,7 @@ async fn review_exit_clears_progress_status_and_unified_exec_footer_before_turn_
         completion_history.contains("Inference:"),
         "review runtime separator should preserve runtime metrics: {completion_history:?}"
     );
-    assert!(chat.pending_review_elapsed_secs.is_none());
+    assert!(chat.bottom_pane.status_widget_any().is_none());
     assert!(!chat.bottom_pane.is_task_running());
 }
 
@@ -13031,7 +14250,7 @@ async fn interrupted_review_exit_clears_progress_ui() {
     });
 
     assert_eq!(
-        chat.current_status,
+        chat.status_machine.turn_status,
         StatusIndicatorState {
             header: "Planning evidence reference".to_string(),
             details: None,
@@ -13048,7 +14267,7 @@ async fn interrupted_review_exit_clears_progress_ui() {
     });
 
     assert!(chat.bottom_pane.status_widget().is_none());
-    assert!(chat.pending_review_elapsed_secs.is_some());
+    assert!(chat.bottom_pane.status_widget_any().is_some());
     assert!(chat.bottom_pane.unified_exec_processes().is_empty());
     assert!(chat.unified_exec_processes.is_empty());
     assert!(chat.reasoning_buffer.is_empty());
@@ -13061,7 +14280,7 @@ async fn interrupted_review_exit_clears_progress_ui() {
         }),
     });
 
-    assert!(chat.pending_review_elapsed_secs.is_none());
+    assert!(chat.bottom_pane.status_widget_any().is_none());
     assert!(!chat.bottom_pane.is_task_running());
 }
 
@@ -13242,7 +14461,7 @@ async fn title_only_reasoning_updates_status_without_visible_transcript() {
         }),
     });
     assert_eq!(
-        chat.current_status.header,
+        chat.status_machine.turn_status.header,
         "Locating agent status rendering logic"
     );
     chat.handle_codex_event(Event {
@@ -13270,7 +14489,10 @@ async fn titled_reasoning_displays_body_without_title() {
             delta: "**Finding the root cause**\n\nThe rendering cell preserves the heading.".into(),
         }),
     });
-    assert_eq!(chat.current_status.header, "Finding the root cause");
+    assert_eq!(
+        chat.status_machine.turn_status.header,
+        "Finding the root cause"
+    );
     chat.handle_codex_event(Event {
         id: "titled-reasoning-final".into(),
         msg: EventMsg::AgentReasoning(AgentReasoningEvent {
@@ -13303,7 +14525,7 @@ async fn untitled_reasoning_body_remains_visible_with_working_status() {
             delta: "The parser has no standalone status title for this explanation.".into(),
         }),
     });
-    assert_eq!(chat.current_status.header, "Working");
+    assert_eq!(chat.status_machine.turn_status.header, "Working");
     chat.handle_codex_event(Event {
         id: "untitled-reasoning-final".into(),
         msg: EventMsg::AgentReasoning(AgentReasoningEvent {
@@ -13339,7 +14561,10 @@ async fn multiple_reasoning_sections_hide_all_titles_and_keep_bodies() {
             delta: "<!-- -->**Checking the status restore**<!-- -->\n\nSecond body.".into(),
         }),
     });
-    assert_eq!(chat.current_status.header, "Checking the status restore");
+    assert_eq!(
+        chat.status_machine.turn_status.header,
+        "Checking the status restore"
+    );
     chat.handle_codex_event(Event {
         id: "multiple-reasoning-final".into(),
         msg: EventMsg::AgentReasoning(AgentReasoningEvent {
@@ -13374,7 +14599,7 @@ async fn inline_bold_reasoning_remains_transcript_content() {
             delta: "The **important detail** belongs in the reasoning body.".into(),
         }),
     });
-    assert_eq!(chat.current_status.header, "Working");
+    assert_eq!(chat.status_machine.turn_status.header, "Working");
     chat.handle_codex_event(Event {
         id: "inline-bold-reasoning-final".into(),
         msg: EventMsg::AgentReasoning(AgentReasoningEvent {

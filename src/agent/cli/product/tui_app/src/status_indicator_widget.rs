@@ -145,6 +145,11 @@ impl StatusIndicatorWidget {
         self.details.as_deref()
     }
 
+    #[cfg(test)]
+    pub(crate) fn inline_message(&self) -> Option<&str> {
+        self.inline_message.as_deref()
+    }
+
     pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) -> bool {
         let changed = self.show_interrupt_hint != visible;
         self.show_interrupt_hint = visible;
@@ -154,6 +159,11 @@ impl StatusIndicatorWidget {
     #[cfg(test)]
     pub(crate) fn interrupt_hint_visible(&self) -> bool {
         self.show_interrupt_hint
+    }
+
+    #[cfg(test)]
+    pub(crate) fn timer_is_paused(&self) -> bool {
+        self.is_paused
     }
 
     pub(crate) fn pause_timer(&mut self) {

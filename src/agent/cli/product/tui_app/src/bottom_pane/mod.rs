@@ -121,6 +121,108 @@ use crate::product::tui_app::status_indicator_widget::StatusIndicatorWidget;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StatusPresenter {
+    WindowsSetup,
+    Turn,
+    McpStartup,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StatusSuspensionReason {
+    StreamOutput,
+    TurnFinalizing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StatusVisibility {
+    Visible,
+    Suspended(StatusSuspensionReason),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StatusDirective {
+    pub(crate) running: bool,
+    pub(crate) presenter: Option<StatusPresenter>,
+    pub(crate) header: String,
+    pub(crate) details: Option<String>,
+    pub(crate) details_max_lines: usize,
+    pub(crate) visibility: StatusVisibility,
+    pub(crate) interruptible: bool,
+    pub(crate) rebuild_widget: bool,
+}
+
+impl StatusDirective {
+    pub(crate) fn idle() -> Self {
+        Self {
+            running: false,
+            presenter: None,
+            header: String::new(),
+            details: None,
+            details_max_lines: 1,
+            visibility: StatusVisibility::Visible,
+            interruptible: false,
+            rebuild_widget: false,
+        }
+    }
+}
+
+struct StatusEntry {
+    presenter: StatusPresenter,
+    widget: StatusIndicatorWidget,
+    interruptible: bool,
+}
+
+enum StatusSlot {
+    Absent,
+    Visible(StatusEntry),
+    Suspended {
+        entry: StatusEntry,
+        reason: StatusSuspensionReason,
+    },
+}
+
+impl StatusSlot {
+    fn entry(&self) -> Option<&StatusEntry> {
+        match self {
+            Self::Absent => None,
+            Self::Visible(entry) | Self::Suspended { entry, .. } => Some(entry),
+        }
+    }
+
+    fn entry_mut(&mut self) -> Option<&mut StatusEntry> {
+        match self {
+            Self::Absent => None,
+            Self::Visible(entry) | Self::Suspended { entry, .. } => Some(entry),
+        }
+    }
+
+    fn visible_entry(&self) -> Option<&StatusEntry> {
+        match self {
+            Self::Visible(entry) => Some(entry),
+            Self::Absent | Self::Suspended { .. } => None,
+        }
+    }
+
+    fn into_entry(self) -> Option<StatusEntry> {
+        match self {
+            Self::Absent => None,
+            Self::Visible(entry) | Self::Suspended { entry, .. } => Some(entry),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BottomPaneViewKind {
+    Generic,
+    BlockingPrompt,
+}
+
+struct BottomPaneViewEntry {
+    kind: BottomPaneViewKind,
+    view: Box<dyn BottomPaneView>,
+}
+
 /// Pane displayed in the lower half of the chat UI.
 ///
 /// This is the owning container for the prompt input (`ChatComposer`) and the view stack
@@ -132,7 +234,7 @@ pub(crate) struct BottomPane {
     composer: ChatComposer,
 
     /// Stack of views displayed instead of the composer (e.g. popups/modals).
-    view_stack: Vec<Box<dyn BottomPaneView>>,
+    view_stack: Vec<BottomPaneViewEntry>,
 
     app_event_tx: AppEventSender,
     frame_requester: FrameRequester,
@@ -144,10 +246,8 @@ pub(crate) struct BottomPane {
     esc_backtrack_hint: bool,
     animations_enabled: bool,
 
-    /// Inline status indicator shown above the composer while a task is running.
-    status: Option<StatusIndicatorWidget>,
-    /// Status indicator temporarily suppressed while streamed content is visible.
-    suspended_status: Option<StatusIndicatorWidget>,
+    /// Inline task status, including presenter identity and temporary suspension state.
+    status_slot: StatusSlot,
     /// Unified exec session summary shown above the composer.
     unified_exec_footer: UnifiedExecFooter,
     /// Queued user messages to show above the composer while a turn is running.
@@ -199,8 +299,7 @@ impl BottomPane {
             enhanced_keys_supported,
             disable_paste_burst,
             is_task_running: false,
-            status: None,
-            suspended_status: None,
+            status_slot: StatusSlot::Absent,
             unified_exec_footer: UnifiedExecFooter::new(),
             queued_user_messages: QueuedUserMessages::new(),
             esc_backtrack_hint: false,
@@ -298,19 +397,23 @@ impl BottomPane {
     }
 
     pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
-        self.status.as_ref()
+        self.status_slot.visible_entry().map(|entry| &entry.widget)
     }
 
-    fn visible_or_suspended_status(&self) -> Option<&StatusIndicatorWidget> {
-        self.status.as_ref().or(self.suspended_status.as_ref())
+    pub(crate) fn status_widget_any(&self) -> Option<&StatusIndicatorWidget> {
+        self.status_slot.entry().map(|entry| &entry.widget)
+    }
+
+    fn status_entry(&self) -> Option<&StatusEntry> {
+        self.status_slot.entry()
+    }
+
+    fn status_entry_mut(&mut self) -> Option<&mut StatusEntry> {
+        self.status_slot.entry_mut()
     }
 
     fn visible_or_suspended_status_mut(&mut self) -> Option<&mut StatusIndicatorWidget> {
-        if let Some(status) = self.status.as_mut() {
-            Some(status)
-        } else {
-            self.suspended_status.as_mut()
-        }
+        self.status_entry_mut().map(|entry| &mut entry.widget)
     }
 
     #[cfg(test)]
@@ -333,49 +436,99 @@ impl BottomPane {
     }
 
     fn active_view(&self) -> Option<&dyn BottomPaneView> {
-        self.view_stack.last().map(std::convert::AsRef::as_ref)
+        self.view_stack.last().map(|entry| entry.view.as_ref())
     }
 
-    fn push_view(&mut self, view: Box<dyn BottomPaneView>) {
-        self.view_stack.push(view);
+    fn blocking_prompt_count(&self) -> usize {
+        self.view_stack
+            .iter()
+            .filter(|entry| entry.kind == BottomPaneViewKind::BlockingPrompt)
+            .count()
+    }
+
+    fn sync_status_timer_pause_state(&mut self) {
+        let should_pause = self.blocking_prompt_count() > 0
+            || matches!(
+                self.status_slot,
+                StatusSlot::Suspended {
+                    reason: StatusSuspensionReason::TurnFinalizing,
+                    ..
+                }
+            );
+        if let Some(entry) = self.status_entry_mut() {
+            if should_pause {
+                entry.widget.pause_timer();
+            } else {
+                entry.widget.resume_timer();
+            }
+        }
+    }
+
+    fn push_view(&mut self, view: Box<dyn BottomPaneView>, kind: BottomPaneViewKind) {
+        self.view_stack.push(BottomPaneViewEntry { kind, view });
+        self.sync_status_timer_pause_state();
         self.request_redraw();
+    }
+
+    fn pop_active_view(&mut self) {
+        self.view_stack.pop();
+        self.sync_status_timer_pause_state();
+        if let Some(next_view) = self.view_stack.last()
+            && next_view.view.is_in_paste_burst()
+        {
+            self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
+        }
+    }
+
+    fn complete_active_view_normally(&mut self) {
+        let Some(kind) = self.view_stack.last().map(|entry| entry.kind) else {
+            return;
+        };
+        match kind {
+            BottomPaneViewKind::BlockingPrompt => {
+                self.view_stack.pop();
+            }
+            BottomPaneViewKind::Generic => {
+                while self
+                    .view_stack
+                    .last()
+                    .is_some_and(|entry| entry.kind == BottomPaneViewKind::Generic)
+                {
+                    self.view_stack.pop();
+                }
+            }
+        }
+        self.sync_status_timer_pause_state();
+        if let Some(next_view) = self.view_stack.last()
+            && next_view.view.is_in_paste_burst()
+        {
+            self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
+        }
     }
 
     /// Forward a key event to the active view or the composer.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
         // If a modal/view is active, handle it here; otherwise forward to composer.
         if !self.view_stack.is_empty() {
-            // We need three pieces of information after routing the key:
-            // whether Esc completed the view, whether the view finished for any
-            // reason, and whether a paste-burst timer should be scheduled.
-            let (ctrl_c_completed, view_complete, view_in_paste_burst) = {
+            let (view_complete, view_in_paste_burst) = {
                 let last_index = self.view_stack.len() - 1;
-                let view = &mut self.view_stack[last_index];
+                let view = &mut self.view_stack[last_index].view;
                 let prefer_esc =
                     key_event.code == KeyCode::Esc && view.prefer_esc_to_handle_key_event();
-                let ctrl_c_completed = key_event.code == KeyCode::Esc
-                    && !prefer_esc
-                    && matches!(view.on_ctrl_c(), CancellationEvent::Handled)
-                    && view.is_complete();
-                if ctrl_c_completed {
-                    (true, true, false)
+                if key_event.code == KeyCode::Esc && !prefer_esc {
+                    let _ = view.on_ctrl_c();
                 } else {
                     view.handle_key_event(key_event);
-                    (false, view.is_complete(), view.is_in_paste_burst())
                 }
+                (view.is_complete(), view.is_in_paste_burst())
             };
 
-            if ctrl_c_completed {
-                self.view_stack.pop();
-                self.on_active_view_complete();
-                if let Some(next_view) = self.view_stack.last()
-                    && next_view.is_in_paste_burst()
-                {
-                    self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
+            if view_complete {
+                if key_event.code == KeyCode::Esc {
+                    self.pop_active_view();
+                } else {
+                    self.complete_active_view_normally();
                 }
-            } else if view_complete {
-                self.view_stack.clear();
-                self.on_active_view_complete();
             } else if view_in_paste_burst {
                 self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
             }
@@ -388,10 +541,11 @@ impl BottomPane {
             if key_event.code == KeyCode::Esc
                 && self.is_task_running
                 && !self.composer.popup_active()
-                && let Some(status) = self.visible_or_suspended_status()
+                && let Some(entry) = self.status_entry()
+                && entry.interruptible
             {
                 // Send Op::Interrupt
-                status.interrupt();
+                entry.widget.interrupt();
                 self.request_redraw();
                 return InputResult::None;
             }
@@ -415,12 +569,11 @@ impl BottomPane {
     /// was received, but it does not decide whether the process should exit; `ChatWidget` owns the
     /// quit/interrupt state machine and uses the result to decide what happens next.
     pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
-        if let Some(view) = self.view_stack.last_mut() {
-            let event = view.on_ctrl_c();
+        if let Some(entry) = self.view_stack.last_mut() {
+            let event = entry.view.on_ctrl_c();
             if matches!(event, CancellationEvent::Handled) {
-                if view.is_complete() {
-                    self.view_stack.pop();
-                    self.on_active_view_complete();
+                if entry.view.is_complete() {
+                    self.pop_active_view();
                 }
                 self.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')));
                 self.request_redraw();
@@ -429,7 +582,6 @@ impl BottomPane {
         } else if self.composer_is_empty() {
             CancellationEvent::NotHandled
         } else {
-            self.view_stack.pop();
             self.clear_composer_for_ctrl_c();
             self.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')));
             self.request_redraw();
@@ -438,10 +590,11 @@ impl BottomPane {
     }
 
     pub fn handle_paste(&mut self, pasted: String) {
-        if let Some(view) = self.view_stack.last_mut() {
-            let needs_redraw = view.handle_paste(pasted);
-            if view.is_complete() {
-                self.on_active_view_complete();
+        if let Some(entry) = self.view_stack.last_mut() {
+            let needs_redraw = entry.view.handle_paste(pasted);
+            let view_complete = entry.view.is_complete();
+            if view_complete {
+                self.complete_active_view_normally();
             }
             if needs_redraw {
                 self.request_redraw();
@@ -491,6 +644,11 @@ impl BottomPane {
         self.composer.current_text()
     }
 
+    #[cfg(test)]
+    pub(crate) fn composer_input_enabled(&self) -> bool {
+        self.composer.input_enabled()
+    }
+
     pub(crate) fn composer_text_elements(&self) -> Vec<TextElement> {
         self.composer.text_elements()
     }
@@ -521,6 +679,7 @@ impl BottomPane {
     /// Update the status indicator header (defaults to "Working") and details below it.
     ///
     /// Passing `None` clears any existing details. No-ops if the status indicator is absent.
+    #[cfg(test)]
     pub(crate) fn update_status(
         &mut self,
         header: String,
@@ -528,7 +687,7 @@ impl BottomPane {
         capitalization: StatusDetailsCapitalization,
         details_max_lines: usize,
     ) {
-        let status_is_visible = self.status.is_some();
+        let status_is_visible = matches!(self.status_slot, StatusSlot::Visible(_));
         if let Some(status) = self.visible_or_suspended_status_mut() {
             let header_changed = status.update_header(header);
             let details_changed = status.update_details(details, capitalization, details_max_lines);
@@ -587,7 +746,32 @@ impl BottomPane {
 
     #[cfg(test)]
     pub(crate) fn status_indicator_visible(&self) -> bool {
-        self.status.is_some()
+        matches!(self.status_slot, StatusSlot::Visible(_))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn status_presenter(&self) -> Option<StatusPresenter> {
+        self.status_entry().map(|entry| entry.presenter)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn status_suspension_reason(&self) -> Option<StatusSuspensionReason> {
+        match self.status_slot {
+            StatusSlot::Suspended { reason, .. } => Some(reason),
+            StatusSlot::Absent | StatusSlot::Visible(_) => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn advance_status_elapsed_for_test(&mut self, duration: Duration) {
+        let simulated_now = std::time::Instant::now() + duration;
+        if let Some(entry) = self.status_entry_mut() {
+            let was_paused = entry.widget.timer_is_paused();
+            entry.widget.pause_timer_at(simulated_now);
+            if !was_paused {
+                entry.widget.resume_timer_at(simulated_now);
+            }
+        }
     }
 
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
@@ -606,105 +790,118 @@ impl BottomPane {
 
     // esc_backtrack_hint_visible removed; hints are controlled internally.
 
+    #[cfg(test)]
     pub fn set_task_running(&mut self, running: bool) {
         self.set_task_running_with_redraw(running, true);
     }
 
+    #[cfg(test)]
     pub fn set_task_running_with_redraw(&mut self, running: bool, request_redraw: bool) {
-        let was_running = self.is_task_running;
-        self.is_task_running = running;
-        self.composer.set_task_running(running);
-
         if running {
-            if !was_running {
-                if self.status.is_none() {
-                    self.status = Some(StatusIndicatorWidget::new(
-                        self.app_event_tx.clone(),
-                        self.frame_requester.clone(),
-                        self.animations_enabled,
-                    ));
-                }
-                if let Some(status) = self.status.as_mut() {
-                    status.set_interrupt_hint_visible(true);
-                }
-                self.sync_status_inline_message();
-                if request_redraw {
-                    self.request_redraw();
-                }
-            }
+            self.apply_status_directive(
+                StatusDirective {
+                    running: true,
+                    presenter: Some(StatusPresenter::Turn),
+                    header: "Working".to_string(),
+                    details: None,
+                    details_max_lines: 1,
+                    visibility: StatusVisibility::Visible,
+                    interruptible: true,
+                    rebuild_widget: false,
+                },
+                request_redraw,
+            );
         } else {
-            // Hide the status indicator when a task completes, but keep other modal views.
-            self.hide_status_indicator_with_redraw(request_redraw);
+            self.apply_status_directive(StatusDirective::idle(), request_redraw);
+        }
+    }
+
+    pub(crate) fn apply_status_directive(
+        &mut self,
+        directive: StatusDirective,
+        request_redraw: bool,
+    ) {
+        self.is_task_running = directive.running;
+        self.composer.set_task_running(directive.running);
+
+        let Some(presenter) = directive.presenter.filter(|_| directive.running) else {
+            self.status_slot = StatusSlot::Absent;
+            if request_redraw {
+                self.request_redraw();
+            }
+            return;
+        };
+
+        let previous = std::mem::replace(&mut self.status_slot, StatusSlot::Absent);
+        let mut entry = match previous.into_entry() {
+            Some(entry) if entry.presenter == presenter && !directive.rebuild_widget => entry,
+            _ => StatusEntry {
+                presenter,
+                widget: StatusIndicatorWidget::new(
+                    self.app_event_tx.clone(),
+                    self.frame_requester.clone(),
+                    self.animations_enabled,
+                ),
+                interruptible: directive.interruptible,
+            },
+        };
+        entry.interruptible = directive.interruptible;
+        entry.widget.update_header(directive.header);
+        entry.widget.update_details(
+            directive.details,
+            StatusDetailsCapitalization::Preserve,
+            directive.details_max_lines,
+        );
+        entry
+            .widget
+            .set_interrupt_hint_visible(directive.interruptible);
+
+        self.status_slot = match directive.visibility {
+            StatusVisibility::Visible => StatusSlot::Visible(entry),
+            StatusVisibility::Suspended(reason) => StatusSlot::Suspended { entry, reason },
+        };
+        self.sync_status_inline_message();
+        self.sync_status_timer_pause_state();
+        if request_redraw {
+            self.request_redraw();
         }
     }
 
     /// Permanently discard the status indicator while leaving task-running state untouched.
+    #[cfg(test)]
     pub(crate) fn hide_status_indicator(&mut self) {
         self.hide_status_indicator_with_redraw(true);
     }
 
+    #[cfg(test)]
     pub(crate) fn hide_status_indicator_with_redraw(&mut self, request_redraw: bool) {
-        let was_visible = self.status.take().is_some();
-        self.suspended_status = None;
+        let was_visible = matches!(self.status_slot, StatusSlot::Visible(_));
+        self.status_slot = StatusSlot::Absent;
         if was_visible && request_redraw {
             self.request_redraw();
         }
     }
 
     /// Temporarily hide the status indicator while retaining its current state.
+    #[cfg(test)]
     pub(crate) fn suspend_status_indicator(&mut self) {
         self.suspend_status_indicator_with_redraw(true);
     }
 
+    #[cfg(test)]
     pub(crate) fn suspend_status_indicator_with_redraw(&mut self, request_redraw: bool) {
-        if let Some(status) = self.status.take() {
-            debug_assert!(self.suspended_status.is_none());
-            self.suspended_status = Some(status);
+        let slot = std::mem::replace(&mut self.status_slot, StatusSlot::Absent);
+        if let StatusSlot::Visible(entry) = slot {
+            self.status_slot = StatusSlot::Suspended {
+                entry,
+                reason: StatusSuspensionReason::StreamOutput,
+            };
+            self.sync_status_timer_pause_state();
             if request_redraw {
                 self.request_redraw();
             }
-        }
-    }
-
-    fn restore_suspended_status_indicator(&mut self) {
-        if self.status.is_none()
-            && let Some(status) = self.suspended_status.take()
-        {
-            self.status = Some(status);
-            self.sync_status_inline_message();
-            self.request_redraw();
-        }
-    }
-
-    pub(crate) fn ensure_status_indicator(&mut self) {
-        if self.status.is_none() {
-            self.status = Some(self.suspended_status.take().unwrap_or_else(|| {
-                StatusIndicatorWidget::new(
-                    self.app_event_tx.clone(),
-                    self.frame_requester.clone(),
-                    self.animations_enabled,
-                )
-            }));
-            self.sync_status_inline_message();
-            self.request_redraw();
-        }
-    }
-
-    pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
-        self.set_interrupt_hint_visible_with_redraw(visible, true);
-    }
-
-    pub(crate) fn set_interrupt_hint_visible_with_redraw(
-        &mut self,
-        visible: bool,
-        request_redraw: bool,
-    ) {
-        let status_is_visible = self.status.is_some();
-        if let Some(status) = self.visible_or_suspended_status_mut() {
-            let changed = status.set_interrupt_hint_visible(visible);
-            if request_redraw && status_is_visible && changed {
-                self.request_redraw();
-            }
+        } else {
+            self.status_slot = slot;
         }
     }
 
@@ -724,7 +921,7 @@ impl BottomPane {
     /// Show a generic list selection view with the provided items.
     pub(crate) fn show_selection_view(&mut self, params: list_selection_view::SelectionViewParams) {
         let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());
-        self.push_view(Box::new(view));
+        self.push_view(Box::new(view), BottomPaneViewKind::Generic);
     }
 
     /// Update the queued messages preview shown above the composer.
@@ -790,28 +987,28 @@ impl BottomPane {
     pub(crate) fn allow_background_transcript_interaction(&self) -> bool {
         self.view_stack
             .last()
-            .is_some_and(|view| view.allow_background_transcript_interaction())
+            .is_some_and(|entry| entry.view.allow_background_transcript_interaction())
             && !self.composer.popup_active()
     }
 
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
-        self.push_view(view);
+        self.push_view(view, BottomPaneViewKind::Generic);
     }
 
     pub(crate) fn dismiss_active_view(&mut self) {
-        if let Some(view) = self.view_stack.last_mut() {
-            view.on_programmatic_dismiss();
+        if let Some(entry) = self.view_stack.last_mut() {
+            entry.view.on_programmatic_dismiss();
         }
-        if self.view_stack.pop().is_some() {
-            self.on_active_view_complete();
+        if !self.view_stack.is_empty() {
+            self.pop_active_view();
             self.request_redraw();
         }
     }
 
     /// Called when the agent requests user approval.
     pub fn push_approval_request(&mut self, request: ApprovalRequest, features: &Features) {
-        let request = if let Some(view) = self.view_stack.last_mut() {
-            match view.try_consume_approval_request(request) {
+        let request = if let Some(entry) = self.view_stack.last_mut() {
+            match entry.view.try_consume_approval_request(request) {
                 Some(request) => request,
                 None => {
                     self.request_redraw();
@@ -824,14 +1021,13 @@ impl BottomPane {
 
         // Otherwise create a new approval modal overlay.
         let modal = ApprovalOverlay::new(request, self.app_event_tx.clone(), features.clone());
-        self.pause_status_timer_for_modal();
-        self.push_view(Box::new(modal));
+        self.push_view(Box::new(modal), BottomPaneViewKind::BlockingPrompt);
     }
 
     /// Called when the agent requests user input.
     pub fn push_user_input_request(&mut self, request: RequestUserInputEvent) {
-        let request = if let Some(view) = self.view_stack.last_mut() {
-            match view.try_consume_user_input_request(request) {
+        let request = if let Some(entry) = self.view_stack.last_mut() {
+            match entry.view.try_consume_user_input_request(request) {
                 Some(request) => request,
                 None => {
                     self.request_redraw();
@@ -849,32 +1045,7 @@ impl BottomPane {
             self.enhanced_keys_supported,
             self.disable_paste_burst,
         );
-        self.pause_status_timer_for_modal();
-        self.set_composer_input_enabled(
-            false,
-            Some("Answer the questions to continue.".to_string()),
-        );
-        self.push_view(Box::new(modal));
-    }
-
-    fn on_active_view_complete(&mut self) {
-        self.resume_status_timer_after_modal();
-        self.set_composer_input_enabled(true, None);
-        if self.is_task_running {
-            self.restore_suspended_status_indicator();
-        }
-    }
-
-    fn pause_status_timer_for_modal(&mut self) {
-        if let Some(status) = self.visible_or_suspended_status_mut() {
-            status.pause_timer();
-        }
-    }
-
-    fn resume_status_timer_after_modal(&mut self) {
-        if let Some(status) = self.visible_or_suspended_status_mut() {
-            status.resume_timer();
-        }
+        self.push_view(Box::new(modal), BottomPaneViewKind::BlockingPrompt);
     }
 
     /// Height (terminal rows) required by the current bottom pane.
@@ -937,8 +1108,8 @@ impl BottomPane {
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
         // Give the active view the first chance to flush paste-burst state so
         // overlays that reuse the composer behave consistently.
-        if let Some(view) = self.view_stack.last_mut()
-            && view.flush_paste_burst_if_due()
+        if let Some(entry) = self.view_stack.last_mut()
+            && entry.view.flush_paste_burst_if_due()
         {
             return true;
         }
@@ -950,7 +1121,7 @@ impl BottomPane {
         // composer, so check it first.
         self.view_stack
             .last()
-            .is_some_and(|view| view.is_in_paste_burst())
+            .is_some_and(|entry| entry.view.is_in_paste_burst())
             || self.composer.is_in_paste_burst()
     }
 
@@ -998,15 +1169,15 @@ impl BottomPane {
             RenderableItem::Borrowed(view)
         } else {
             let mut flex = FlexRenderable::new();
-            if let Some(status) = &self.status {
-                flex.push(0, RenderableItem::Borrowed(status));
+            if let Some(entry) = self.status_slot.visible_entry() {
+                flex.push(0, RenderableItem::Borrowed(&entry.widget));
             }
-            if self.status.is_none() && !self.unified_exec_footer.is_empty() {
+            if self.status_slot.visible_entry().is_none() && !self.unified_exec_footer.is_empty() {
                 flex.push(0, RenderableItem::Borrowed(&self.unified_exec_footer));
             }
             let has_queued_messages = !self.queued_user_messages.messages.is_empty();
             let has_status_or_footer =
-                self.status.is_some() || !self.unified_exec_footer.is_empty();
+                self.status_slot.visible_entry().is_some() || !self.unified_exec_footer.is_empty();
             if has_queued_messages && has_status_or_footer {
                 flex.push(0, RenderableItem::Owned("".into()));
             }
@@ -1039,7 +1210,9 @@ mod tests {
     use super::*;
     use crate::product::agent::protocol::Op;
     use crate::product::protocol::protocol::SkillScope;
+    use crate::product::protocol::request_user_input::RequestUserInputQuestion;
     use crate::product::tui_app::app_event::AppEvent;
+    use assert_matches::assert_matches;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
@@ -1048,6 +1221,7 @@ mod tests {
     use std::cell::Cell;
     use std::path::PathBuf;
     use std::rc::Rc;
+    use std::time::Instant;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn snapshot_buffer(buf: &Buffer) -> String {
@@ -1074,6 +1248,94 @@ mod tests {
             command: vec!["echo".into(), "ok".into()],
             reason: None,
             proposed_execpolicy_amendment: None,
+        }
+    }
+
+    fn test_pane() -> (BottomPane, tokio::sync::mpsc::UnboundedReceiver<AppEvent>) {
+        let (tx_raw, rx) = unbounded_channel::<AppEvent>();
+        (
+            BottomPane::new(BottomPaneParams {
+                app_event_tx: AppEventSender::new(tx_raw),
+                frame_requester: FrameRequester::test_dummy(),
+                has_input_focus: true,
+                enhanced_keys_supported: false,
+                placeholder_text: "Ask LHA to do anything".to_string(),
+                disable_paste_burst: false,
+                animations_enabled: true,
+                skills: Some(Vec::new()),
+            }),
+            rx,
+        )
+    }
+
+    fn status_directive(
+        presenter: StatusPresenter,
+        header: &str,
+        visibility: StatusVisibility,
+        interruptible: bool,
+    ) -> StatusDirective {
+        StatusDirective {
+            running: true,
+            presenter: Some(presenter),
+            header: header.to_string(),
+            details: None,
+            details_max_lines: 3,
+            visibility,
+            interruptible,
+            rebuild_widget: false,
+        }
+    }
+
+    fn request_user_input_event() -> RequestUserInputEvent {
+        RequestUserInputEvent {
+            call_id: "request".to_string(),
+            turn_id: "turn".to_string(),
+            questions: vec![RequestUserInputQuestion {
+                id: "question".to_string(),
+                header: "Question".to_string(),
+                question: "Continue?".to_string(),
+                is_other: false,
+                is_secret: false,
+                options: None,
+            }],
+        }
+    }
+
+    #[derive(Default)]
+    struct CompletingView {
+        done: bool,
+        complete_on_paste: bool,
+        programmatic_dismissals: Option<Rc<Cell<usize>>>,
+    }
+
+    impl Renderable for CompletingView {
+        fn render(&self, _area: Rect, _buf: &mut Buffer) {}
+
+        fn desired_height(&self, _width: u16) -> u16 {
+            0
+        }
+    }
+
+    impl BottomPaneView for CompletingView {
+        fn handle_key_event(&mut self, _key_event: KeyEvent) {
+            self.done = true;
+        }
+
+        fn is_complete(&self) -> bool {
+            self.done
+        }
+
+        fn on_programmatic_dismiss(&mut self) {
+            if let Some(count) = self.programmatic_dismissals.as_ref() {
+                count.set(count.get().saturating_add(1));
+            }
+        }
+
+        fn handle_paste(&mut self, _pasted: String) -> bool {
+            if self.complete_on_paste {
+                self.done = true;
+            }
+            true
         }
     }
 
@@ -1462,6 +1724,11 @@ mod tests {
         });
 
         pane.set_task_running(true);
+        assert!(matches!(pane.status_slot, StatusSlot::Visible(_)));
+        pane.set_task_running(false);
+        assert!(matches!(pane.status_slot, StatusSlot::Absent));
+
+        pane.set_task_running(true);
         pane.update_status(
             "Waiting for background terminal".to_string(),
             Some("cargo test -p lha".to_string()),
@@ -1470,13 +1737,17 @@ mod tests {
         );
         pane.suspend_status_indicator();
 
-        assert!(pane.status.is_none());
-        assert!(pane.suspended_status.is_some());
+        assert!(matches!(
+            pane.status_slot,
+            StatusSlot::Suspended {
+                reason: StatusSuspensionReason::StreamOutput,
+                ..
+            }
+        ));
 
         pane.set_task_running(false);
 
-        assert!(pane.status.is_none());
-        assert!(pane.suspended_status.is_none());
+        assert!(matches!(pane.status_slot, StatusSlot::Absent));
 
         pane.set_task_running(true);
 
@@ -1507,7 +1778,7 @@ mod tests {
 
         pane.hide_status_indicator();
         assert!(pane.status_widget().is_none());
-        assert!(pane.suspended_status.is_none());
+        assert!(matches!(pane.status_slot, StatusSlot::Absent));
 
         pane.show_selection_view(SelectionViewParams {
             title: Some("How was this?".to_string()),
@@ -1517,11 +1788,11 @@ mod tests {
 
         assert!(pane.is_task_running());
         assert!(pane.status_widget().is_none());
-        assert!(pane.suspended_status.is_none());
+        assert!(matches!(pane.status_slot, StatusSlot::Absent));
     }
 
     #[test]
-    fn dismissing_view_restores_suspended_status() {
+    fn dismissing_generic_view_keeps_stream_status_suspended() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
@@ -1545,7 +1816,13 @@ mod tests {
         pane.suspend_status_indicator();
 
         assert!(pane.status_widget().is_none());
-        assert!(pane.suspended_status.is_some());
+        assert!(matches!(
+            pane.status_slot,
+            StatusSlot::Suspended {
+                reason: StatusSuspensionReason::StreamOutput,
+                ..
+            }
+        ));
 
         pane.show_selection_view(SelectionViewParams {
             title: Some("How was this?".to_string()),
@@ -1553,12 +1830,465 @@ mod tests {
         });
         pane.dismiss_active_view();
 
+        assert!(pane.status_widget().is_none());
         let status = pane
-            .status_widget()
-            .expect("dismissing a view should restore suspended status");
+            .status_widget_any()
+            .expect("generic dismissal should retain the suspended status");
         assert_eq!(status.header(), "Waiting for background terminal");
         assert_eq!(status.details(), Some("cargo test -p lha"));
-        assert!(pane.suspended_status.is_none());
+        assert!(matches!(
+            pane.status_slot,
+            StatusSlot::Suspended {
+                reason: StatusSuspensionReason::StreamOutput,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn status_directive_preserves_widget_for_same_presenter() {
+        let (mut pane, mut rx) = test_pane();
+        pane.apply_status_directive(
+            StatusDirective {
+                details: Some("cargo test -p lha".to_string()),
+                ..status_directive(
+                    StatusPresenter::Turn,
+                    "Waiting for background terminal",
+                    StatusVisibility::Visible,
+                    true,
+                )
+            },
+            true,
+        );
+        pane.set_unified_exec_processes(vec!["cargo test -p lha".to_string()]);
+        let preserved_inline = pane
+            .status_widget()
+            .and_then(StatusIndicatorWidget::inline_message)
+            .map(str::to_string);
+        pane.status_entry_mut()
+            .expect("turn status entry")
+            .widget
+            .pause_timer_at(Instant::now() + Duration::from_secs(5));
+
+        pane.apply_status_directive(
+            StatusDirective {
+                details: Some("cargo test -p lha".to_string()),
+                ..status_directive(
+                    StatusPresenter::Turn,
+                    "Waiting for background terminal",
+                    StatusVisibility::Suspended(StatusSuspensionReason::StreamOutput),
+                    true,
+                )
+            },
+            true,
+        );
+
+        let status = pane.status_widget_any().expect("suspended status retained");
+        assert_eq!(status.header(), "Waiting for background terminal");
+        assert_eq!(status.details(), Some("cargo test -p lha"));
+        assert_eq!(status.inline_message(), preserved_inline.as_deref());
+        assert!(status.elapsed_seconds() >= 5);
+        assert!(!status.timer_is_paused());
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt)));
+
+        pane.apply_status_directive(
+            StatusDirective {
+                details: Some("cargo test -p lha".to_string()),
+                ..status_directive(
+                    StatusPresenter::Turn,
+                    "Waiting for background terminal",
+                    StatusVisibility::Visible,
+                    true,
+                )
+            },
+            true,
+        );
+        let status = pane.status_widget().expect("status visible again");
+        assert_eq!(status.header(), "Waiting for background terminal");
+        assert_eq!(status.details(), Some("cargo test -p lha"));
+        assert_eq!(status.inline_message(), preserved_inline.as_deref());
+        assert!(status.elapsed_seconds() >= 5);
+    }
+
+    #[test]
+    fn status_directive_rebuilds_widget_for_same_presenter() {
+        let (mut pane, _rx) = test_pane();
+        pane.apply_status_directive(
+            StatusDirective {
+                details: Some("old details".to_string()),
+                ..status_directive(
+                    StatusPresenter::Turn,
+                    "Old work",
+                    StatusVisibility::Visible,
+                    true,
+                )
+            },
+            true,
+        );
+        pane.status_entry_mut()
+            .expect("turn status entry")
+            .widget
+            .pause_timer_at(Instant::now() + Duration::from_secs(5));
+
+        pane.apply_status_directive(
+            StatusDirective {
+                details: Some("new details".to_string()),
+                rebuild_widget: true,
+                ..status_directive(
+                    StatusPresenter::Turn,
+                    "New work",
+                    StatusVisibility::Visible,
+                    true,
+                )
+            },
+            true,
+        );
+
+        let status = pane.status_widget().expect("rebuilt turn status");
+        assert_eq!(status.header(), "New work");
+        assert_eq!(status.details(), Some("new details"));
+        assert_eq!(status.elapsed_seconds(), 0);
+    }
+
+    #[test]
+    fn finalizing_status_pauses_timer_and_disables_esc_interrupt() {
+        let (mut pane, mut rx) = test_pane();
+        pane.apply_status_directive(
+            status_directive(
+                StatusPresenter::Turn,
+                "Working",
+                StatusVisibility::Suspended(StatusSuspensionReason::TurnFinalizing),
+                false,
+            ),
+            true,
+        );
+
+        let status = pane
+            .status_widget_any()
+            .expect("finalizing status retained");
+        assert!(status.timer_is_paused());
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_matches!(
+            rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        );
+    }
+
+    #[test]
+    fn presenter_change_replaces_status_content() {
+        let (mut pane, _rx) = test_pane();
+        pane.apply_status_directive(
+            StatusDirective {
+                details: Some("turn details".to_string()),
+                ..status_directive(
+                    StatusPresenter::Turn,
+                    "Analyzing",
+                    StatusVisibility::Visible,
+                    true,
+                )
+            },
+            true,
+        );
+        pane.status_entry_mut()
+            .expect("turn status entry")
+            .widget
+            .pause_timer_at(Instant::now() + Duration::from_secs(5));
+        assert!(
+            pane.status_widget()
+                .expect("turn status visible")
+                .elapsed_seconds()
+                >= 5
+        );
+        pane.apply_status_directive(
+            status_directive(
+                StatusPresenter::McpStartup,
+                "Booting MCP server: alpha",
+                StatusVisibility::Visible,
+                true,
+            ),
+            true,
+        );
+
+        let status = pane.status_widget().expect("MCP status visible");
+        assert_eq!(pane.status_presenter(), Some(StatusPresenter::McpStartup));
+        assert_eq!(status.header(), "Booting MCP server: alpha");
+        assert_eq!(status.details(), None);
+        assert_eq!(status.elapsed_seconds(), 0);
+    }
+
+    #[test]
+    fn blocking_prompt_pauses_status_until_last_blocker_closes() {
+        let (mut pane, mut rx) = test_pane();
+        let features = Features::with_defaults();
+        pane.apply_status_directive(
+            status_directive(
+                StatusPresenter::Turn,
+                "Working",
+                StatusVisibility::Visible,
+                true,
+            ),
+            true,
+        );
+
+        pane.push_approval_request(exec_request(), &features);
+        assert!(
+            pane.status_widget_any()
+                .expect("status retained under approval")
+                .timer_is_paused()
+        );
+
+        pane.push_user_input_request(request_user_input_event());
+        pane.dismiss_active_view();
+        assert_eq!(pane.blocking_prompt_count(), 1);
+        assert!(
+            pane.status_widget_any()
+                .expect("status retained under remaining approval")
+                .timer_is_paused()
+        );
+        assert_matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt)));
+
+        pane.dismiss_active_view();
+        assert_eq!(pane.blocking_prompt_count(), 0);
+        assert!(
+            !pane
+                .status_widget()
+                .expect("status visible after blockers close")
+                .timer_is_paused()
+        );
+        let aborts = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter(|event| {
+                matches!(
+                    event,
+                    AppEvent::CodexOp(Op::ExecApproval {
+                        decision: crate::product::agent::protocol::ReviewDecision::Abort,
+                        ..
+                    })
+                )
+            })
+            .count();
+        assert_eq!(aborts, 1);
+    }
+
+    #[test]
+    fn generic_view_does_not_change_status_timer() {
+        let (mut pane, _rx) = test_pane();
+        pane.apply_status_directive(
+            status_directive(
+                StatusPresenter::Turn,
+                "Working",
+                StatusVisibility::Visible,
+                true,
+            ),
+            true,
+        );
+        pane.show_selection_view(SelectionViewParams::default());
+
+        assert!(
+            !pane
+                .status_widget_any()
+                .expect("status retained under generic view")
+                .timer_is_paused()
+        );
+        pane.dismiss_active_view();
+        assert!(pane.status_widget().is_some());
+    }
+
+    #[test]
+    fn generic_and_blocking_view_order_preserves_blocker_timer_rules() {
+        let features = Features::with_defaults();
+
+        let (mut blocker_over_generic, _rx) = test_pane();
+        blocker_over_generic.set_task_running(true);
+        blocker_over_generic.push_view(
+            Box::new(CompletingView::default()),
+            BottomPaneViewKind::Generic,
+        );
+        blocker_over_generic.push_approval_request(exec_request(), &features);
+        assert!(
+            blocker_over_generic
+                .status_widget_any()
+                .expect("status retained under blocker")
+                .timer_is_paused()
+        );
+        blocker_over_generic.dismiss_active_view();
+        assert_eq!(blocker_over_generic.view_stack.len(), 1);
+        assert!(
+            !blocker_over_generic
+                .status_widget()
+                .expect("generic view does not pause status")
+                .timer_is_paused()
+        );
+
+        let (mut generic_over_blocker, _rx) = test_pane();
+        generic_over_blocker.set_task_running(true);
+        generic_over_blocker.push_approval_request(exec_request(), &features);
+        generic_over_blocker.push_view(
+            Box::new(CompletingView::default()),
+            BottomPaneViewKind::Generic,
+        );
+        assert!(
+            generic_over_blocker
+                .status_widget_any()
+                .expect("status retained under blocker")
+                .timer_is_paused()
+        );
+        generic_over_blocker.dismiss_active_view();
+        assert_eq!(generic_over_blocker.blocking_prompt_count(), 1);
+        assert!(
+            generic_over_blocker
+                .status_widget_any()
+                .expect("remaining blocker keeps timer paused")
+                .timer_is_paused()
+        );
+        generic_over_blocker.dismiss_active_view();
+        assert!(
+            !generic_over_blocker
+                .status_widget()
+                .expect("status resumes after blocker closes")
+                .timer_is_paused()
+        );
+    }
+
+    #[test]
+    fn generic_completion_stops_at_blocking_prompt_barrier() {
+        let (mut pane, _rx) = test_pane();
+        let features = Features::with_defaults();
+        pane.push_view(
+            Box::new(CompletingView::default()),
+            BottomPaneViewKind::Generic,
+        );
+        pane.push_approval_request(exec_request(), &features);
+        pane.push_view(
+            Box::new(CompletingView::default()),
+            BottomPaneViewKind::Generic,
+        );
+        pane.push_view(
+            Box::new(CompletingView::default()),
+            BottomPaneViewKind::Generic,
+        );
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(pane.view_stack.len(), 2);
+        assert_eq!(pane.view_stack[0].kind, BottomPaneViewKind::Generic);
+        assert_eq!(pane.view_stack[1].kind, BottomPaneViewKind::BlockingPrompt);
+    }
+
+    #[test]
+    fn generic_flow_completion_clears_contiguous_generic_views() {
+        let (mut pane, _rx) = test_pane();
+        pane.push_view(
+            Box::new(CompletingView::default()),
+            BottomPaneViewKind::Generic,
+        );
+        pane.push_view(
+            Box::new(CompletingView::default()),
+            BottomPaneViewKind::Generic,
+        );
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(pane.view_stack.is_empty());
+    }
+
+    #[test]
+    fn paste_completion_removes_view() {
+        let (mut pane, _rx) = test_pane();
+        pane.push_view(
+            Box::new(CompletingView {
+                complete_on_paste: true,
+                ..Default::default()
+            }),
+            BottomPaneViewKind::Generic,
+        );
+
+        pane.handle_paste("pasted".to_string());
+
+        assert!(pane.view_stack.is_empty());
+    }
+
+    #[test]
+    fn programmatic_generic_dismiss_calls_hook_once_and_pops_one() {
+        let (mut pane, _rx) = test_pane();
+        let dismissals = Rc::new(Cell::new(0));
+        pane.push_view(
+            Box::new(CompletingView::default()),
+            BottomPaneViewKind::Generic,
+        );
+        pane.push_view(
+            Box::new(CompletingView {
+                programmatic_dismissals: Some(Rc::clone(&dismissals)),
+                ..Default::default()
+            }),
+            BottomPaneViewKind::Generic,
+        );
+
+        pane.dismiss_active_view();
+
+        assert_eq!(dismissals.get(), 1);
+        assert_eq!(pane.view_stack.len(), 1);
+    }
+
+    #[test]
+    fn programmatic_blocking_dismissals_emit_one_cancellation() {
+        let features = Features::with_defaults();
+        let (mut approval_pane, mut approval_rx) = test_pane();
+        approval_pane.push_approval_request(exec_request(), &features);
+        {
+            let view = &mut approval_pane
+                .view_stack
+                .last_mut()
+                .expect("approval view")
+                .view;
+            view.on_programmatic_dismiss();
+            view.on_programmatic_dismiss();
+        }
+        approval_pane.dismiss_active_view();
+        let aborts = std::iter::from_fn(|| approval_rx.try_recv().ok())
+            .filter(|event| {
+                matches!(
+                    event,
+                    AppEvent::CodexOp(Op::ExecApproval {
+                        decision: crate::product::agent::protocol::ReviewDecision::Abort,
+                        ..
+                    })
+                )
+            })
+            .count();
+        assert_eq!(aborts, 1);
+
+        let (mut input_pane, mut input_rx) = test_pane();
+        input_pane.push_user_input_request(request_user_input_event());
+        {
+            let view = &mut input_pane
+                .view_stack
+                .last_mut()
+                .expect("request user input view")
+                .view;
+            view.on_programmatic_dismiss();
+            view.on_programmatic_dismiss();
+        }
+        input_pane.dismiss_active_view();
+        let interrupts = std::iter::from_fn(|| input_rx.try_recv().ok())
+            .filter(|event| matches!(event, AppEvent::CodexOp(Op::Interrupt)))
+            .count();
+        assert_eq!(interrupts, 1);
+    }
+
+    #[test]
+    fn task_completion_inside_blocker_does_not_restore_status() {
+        let (mut pane, _rx) = test_pane();
+        pane.set_task_running(true);
+        pane.push_approval_request(exec_request(), &Features::with_defaults());
+
+        pane.set_task_running(false);
+        assert!(pane.status_widget_any().is_none());
+
+        pane.dismiss_active_view();
+
+        assert!(!pane.is_task_running());
+        assert!(pane.status_widget_any().is_none());
     }
 
     #[test]
@@ -1712,7 +2442,13 @@ mod tests {
         pane.set_task_running(true);
         pane.suspend_status_indicator();
         assert!(pane.status_widget().is_none());
-        assert!(pane.suspended_status.is_some());
+        assert!(matches!(
+            pane.status_slot,
+            StatusSlot::Suspended {
+                reason: StatusSuspensionReason::StreamOutput,
+                ..
+            }
+        ));
 
         pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
@@ -1774,10 +2510,13 @@ mod tests {
 
         let on_ctrl_c_calls = Rc::new(Cell::new(0));
         let handle_calls = Rc::new(Cell::new(0));
-        pane.push_view(Box::new(EscRoutingView {
-            on_ctrl_c_calls: Rc::clone(&on_ctrl_c_calls),
-            handle_calls: Rc::clone(&handle_calls),
-        }));
+        pane.push_view(
+            Box::new(EscRoutingView {
+                on_ctrl_c_calls: Rc::clone(&on_ctrl_c_calls),
+                handle_calls: Rc::clone(&handle_calls),
+            }),
+            BottomPaneViewKind::Generic,
+        );
 
         pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
