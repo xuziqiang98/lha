@@ -3816,7 +3816,7 @@ fn buffer_row_containing(buf: &Buffer, needle: &str) -> Option<u16> {
         let row = (buf.area.x..buf.area.right())
             .filter_map(|x| {
                 let cell = &buf[(x, *y)];
-                (!cell.skip).then(|| cell.symbol())
+                (!cell.skip).then_some(cell.symbol())
             })
             .collect::<String>();
         row.chars()
