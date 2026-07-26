@@ -2668,6 +2668,7 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
                 only_err: true,
                 include_angle_pipe: true,
                 include_prefix: true,
+                compact_blank_lines_when_truncated: false,
             },
         );
         lines.extend(output.lines);

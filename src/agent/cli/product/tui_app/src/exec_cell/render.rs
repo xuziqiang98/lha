@@ -36,6 +36,7 @@ pub(crate) struct OutputLinesParams {
     pub(crate) only_err: bool,
     pub(crate) include_angle_pipe: bool,
     pub(crate) include_prefix: bool,
+    pub(crate) compact_blank_lines_when_truncated: bool,
 }
 
 pub(crate) fn new_active_exec_command(
@@ -98,6 +99,79 @@ pub(crate) struct OutputLines {
     pub(crate) omitted: Option<usize>,
 }
 
+fn style_paints_whitespace(style: Style) -> bool {
+    let visible_modifiers = Modifier::REVERSED | Modifier::UNDERLINED | Modifier::CROSSED_OUT;
+    style.bg.is_some() || style.add_modifier.intersects(visible_modifiers)
+}
+
+fn line_is_visually_blank(line: &Line<'_>) -> bool {
+    line.styled_graphemes(Style::default()).all(|grapheme| {
+        grapheme.symbol.chars().all(char::is_whitespace) && !style_paints_whitespace(grapheme.style)
+    })
+}
+
+fn line_is_painted_whitespace(line: &Line<'_>) -> bool {
+    let mut has_painted_whitespace = false;
+    for grapheme in line.styled_graphemes(Style::default()) {
+        if !grapheme.symbol.chars().all(char::is_whitespace) {
+            return false;
+        }
+        has_painted_whitespace |= style_paints_whitespace(grapheme.style);
+    }
+    has_painted_whitespace
+}
+
+fn line_has_painted_whitespace(line: &Line<'_>) -> bool {
+    line.styled_graphemes(Style::default()).any(|grapheme| {
+        grapheme.symbol.chars().all(char::is_whitespace) && style_paints_whitespace(grapheme.style)
+    })
+}
+
+fn push_styled_grapheme(spans: &mut Vec<Span<'static>>, symbol: &str, style: Style) {
+    if let Some(last) = spans.last_mut()
+        && last.style == style
+    {
+        last.content.to_mut().push_str(symbol);
+        return;
+    }
+    spans.push(Span::styled(symbol.to_string(), style));
+}
+
+fn wrap_painted_whitespace_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
+    let width = width.max(1);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut row_width = 0usize;
+
+    for grapheme in line.styled_graphemes(Style::default()) {
+        let grapheme_width = UnicodeWidthStr::width(grapheme.symbol);
+        if !spans.is_empty() && row_width.saturating_add(grapheme_width) > width {
+            lines.push(Line::from(std::mem::take(&mut spans)));
+            row_width = 0;
+        }
+
+        push_styled_grapheme(&mut spans, grapheme.symbol, grapheme.style);
+        row_width = row_width.saturating_add(grapheme_width);
+        if row_width >= width {
+            lines.push(Line::from(std::mem::take(&mut spans)));
+            row_width = 0;
+        }
+    }
+
+    if !spans.is_empty() {
+        lines.push(Line::from(spans));
+    }
+    lines
+}
+
+fn raw_output_line_is_visually_blank(raw: &str) -> bool {
+    if raw.chars().all(char::is_whitespace) {
+        return true;
+    }
+
+    raw.contains('\x1b') && line_is_visually_blank(&ansi_escape_line(raw))
+}
+
 pub(crate) fn output_lines(
     output: Option<&CommandOutput>,
     params: OutputLinesParams,
@@ -107,6 +181,7 @@ pub(crate) fn output_lines(
         only_err,
         include_angle_pipe,
         include_prefix,
+        compact_blank_lines_when_truncated,
     } = params;
     let CommandOutput {
         aggregated_output, ..
@@ -127,7 +202,10 @@ pub(crate) fn output_lines(
     };
 
     let src = aggregated_output;
-    let lines: Vec<&str> = src.lines().collect();
+    let mut lines: Vec<&str> = src.lines().collect();
+    if compact_blank_lines_when_truncated && lines.len() > line_limit {
+        lines.retain(|line| !raw_output_line_is_visually_blank(line));
+    }
     let total = lines.len();
     let mut out: Vec<Line<'static>> = Vec::new();
 
@@ -457,6 +535,7 @@ impl ExecCell {
             } else {
                 TOOL_CALL_MAX_LINES
             };
+            let compact_blank_lines_when_truncated = !call.is_user_shell_command();
             let raw_output = output_lines(
                 Some(output),
                 OutputLinesParams {
@@ -464,6 +543,7 @@ impl ExecCell {
                     only_err: false,
                     include_angle_pipe: false,
                     include_prefix: false,
+                    compact_blank_lines_when_truncated,
                 },
             );
             let display_limit = if call.is_user_shell_command() {
@@ -472,14 +552,8 @@ impl ExecCell {
                 layout.output_max_lines
             };
 
-            if raw_output.lines.is_empty() {
-                if !call.is_unified_exec_interaction() {
-                    lines.extend(prefix_lines(
-                        vec![Line::from("(no output)".dim())],
-                        Span::from(layout.output_block.initial_prefix).dim(),
-                        Span::from(layout.output_block.subsequent_prefix),
-                    ));
-                }
+            let trimmed_output = if raw_output.lines.is_empty() {
+                Vec::new()
             } else {
                 // Wrap first so that truncation is applied to on-screen lines
                 // rather than logical lines. This ensures that a small number
@@ -489,30 +563,37 @@ impl ExecCell {
                 let output_opts =
                     RtOptions::new(output_wrap_width).word_splitter(WordSplitter::NoHyphenation);
                 for line in &raw_output.lines {
-                    push_owned_lines(
-                        &word_wrap_line(line, output_opts.clone()),
-                        &mut wrapped_output,
-                    );
+                    if line_is_painted_whitespace(line) {
+                        wrapped_output
+                            .extend(wrap_painted_whitespace_line(line, output_wrap_width));
+                    } else {
+                        push_owned_lines(
+                            &word_wrap_line(line, output_opts.clone()),
+                            &mut wrapped_output,
+                        );
+                    }
                 }
 
-                let prefixed_output = prefix_lines(
+                Self::truncate_output_lines_middle(
                     wrapped_output,
-                    Span::from(layout.output_block.initial_prefix).dim(),
-                    Span::from(layout.output_block.subsequent_prefix),
-                );
-                let trimmed_output = Self::truncate_output_lines_middle(
-                    &prefixed_output,
                     display_limit,
                     width,
                     raw_output.omitted,
-                    Some(Line::from(
-                        Span::from(layout.output_block.subsequent_prefix).dim(),
-                    )),
-                );
+                    layout.output_block,
+                    compact_blank_lines_when_truncated,
+                )
+            };
 
-                if !trimmed_output.is_empty() {
-                    lines.extend(trimmed_output);
+            if trimmed_output.is_empty() {
+                if !call.is_unified_exec_interaction() {
+                    lines.extend(prefix_lines(
+                        vec![Line::from("(no output)".dim())],
+                        Span::from(layout.output_block.initial_prefix).dim(),
+                        Span::from(layout.output_block.subsequent_prefix),
+                    ));
                 }
+            } else {
+                lines.extend(trimmed_output);
             }
         }
 
@@ -619,22 +700,48 @@ impl ExecCell {
     }
 
     fn truncate_output_lines_middle(
-        lines: &[Line<'static>],
+        mut lines: Vec<Line<'static>>,
         max_rows: usize,
         width: u16,
         omitted_hint: Option<usize>,
-        ellipsis_prefix: Option<Line<'static>>,
+        output_block: PrefixedBlock,
+        compact_blank_lines_when_truncated: bool,
     ) -> Vec<Line<'static>> {
-        Self::truncate_lines_middle(lines, max_rows, width, omitted_hint, ellipsis_prefix)
+        if compact_blank_lines_when_truncated {
+            let prefixed_lines = Self::prefix_output_lines(lines.clone(), output_block);
+            let total_rows: usize = prefixed_lines
+                .iter()
+                .map(|line| Self::line_row_count(line, width))
+                .sum();
+            if total_rows > max_rows {
+                lines.retain(|line| !line_is_visually_blank(line));
+            }
+        }
+
+        let prefixed_lines = Self::prefix_output_lines(lines, output_block);
+        Self::truncate_lines_middle(
+            &prefixed_lines,
+            max_rows,
+            width,
+            omitted_hint,
+            Some(Line::from(Span::from(output_block.subsequent_prefix).dim())),
+        )
+    }
+
+    fn prefix_output_lines(
+        lines: Vec<Line<'static>>,
+        output_block: PrefixedBlock,
+    ) -> Vec<Line<'static>> {
+        prefix_lines(
+            lines,
+            Span::from(output_block.initial_prefix).dim(),
+            Span::from(output_block.subsequent_prefix),
+        )
     }
 
     fn line_row_count(line: &Line<'static>, width: u16) -> usize {
         let width = width.max(1);
-        let is_whitespace_only = line
-            .spans
-            .iter()
-            .all(|span| span.content.chars().all(char::is_whitespace));
-        if is_whitespace_only {
+        if line_is_visually_blank(line) || line_has_painted_whitespace(line) {
             line.width().div_ceil(usize::from(width)).max(1)
         } else {
             Paragraph::new(Text::from(vec![line.clone()]))
@@ -650,23 +757,31 @@ impl ExecCell {
         max_rows: usize,
         prefix: Option<&Line<'static>>,
     ) -> Line<'static> {
-        [
+        let candidates = [
             Self::output_ellipsis_text_full(omitted),
             Self::output_ellipsis_text_short(omitted),
             Self::output_ellipsis_text_bare(omitted),
         ]
-        .into_iter()
         .map(|text| {
             let mut line = prefix.cloned().unwrap_or_default();
             line.push_span(text.dim());
             line
-        })
-        .find(|line| Self::line_row_count(line, width) <= max_rows)
-        .unwrap_or_else(|| {
-            let mut line = prefix.cloned().unwrap_or_default();
-            line.push_span(Self::output_ellipsis_text_bare(omitted).dim());
-            line
-        })
+        });
+
+        candidates
+            .iter()
+            .find(|line| Self::line_row_count(line, width) == 1)
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .find(|line| Self::line_row_count(line, width) <= max_rows)
+            })
+            .cloned()
+            .unwrap_or_else(|| {
+                let mut line = prefix.cloned().unwrap_or_default();
+                line.push_span(Self::output_ellipsis_text_bare(omitted).dim());
+                line
+            })
     }
 
     fn output_ellipsis_text_full(omitted: usize) -> String {
@@ -813,6 +928,7 @@ mod tests {
                 only_err: false,
                 include_angle_pipe: false,
                 include_prefix: false,
+                compact_blank_lines_when_truncated: false,
             },
         );
         let output_wrap_width = layout.output_block.wrap_width(width);
@@ -942,6 +1058,358 @@ mod tests {
         assert!(
             output_rows(&output_lines, width) <= EXEC_DISPLAY_LAYOUT.output_max_lines,
             "expected output rows to fit display limit"
+        );
+    }
+
+    fn completed_agent_exec(output: &str) -> ExecCell {
+        ExecCell::new(
+            ExecCall {
+                call_id: "call-id".to_string(),
+                command: vec!["bash".into(), "-lc".into(), "cargo test".into()],
+                parsed: Vec::new(),
+                output: Some(CommandOutput {
+                    exit_code: 0,
+                    aggregated_output: output.to_string(),
+                    formatted_output: output.to_string(),
+                }),
+                completed: true,
+                source: ExecCommandSource::Agent,
+                start_time: None,
+                duration: Some(Duration::from_millis(1)),
+                interaction_input: None,
+            },
+            false,
+        )
+    }
+
+    fn rendered_lines(lines: &[Line<'_>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn visual_blankness_distinguishes_painted_whitespace() {
+        let lines = [
+            ansi_escape_line("   "),
+            ansi_escape_line("\x1b[0m"),
+            ansi_escape_line("\x1b[31m   \x1b[0m"),
+            ansi_escape_line("\x1b[1;2;3;5;6;8m   \x1b[0m"),
+            ansi_escape_line("\x1b[41m   \x1b[0m"),
+            ansi_escape_line("\x1b[7m   \x1b[0m"),
+            ansi_escape_line("\x1b[4m   \x1b[0m"),
+            ansi_escape_line("\x1b[9m   \x1b[0m"),
+        ];
+
+        assert_eq!(
+            lines.map(|line| line_is_visually_blank(&line)),
+            [true, true, true, true, false, false, false, false]
+        );
+    }
+
+    #[test]
+    fn output_lines_preserves_painted_whitespace_before_sampling() {
+        let output = CommandOutput {
+            exit_code: 0,
+            aggregated_output: ["head", "\x1b[41m   \x1b[0m", "middle", "tail-1", "tail-2"]
+                .join("\n"),
+            formatted_output: String::new(),
+        };
+
+        let output = output_lines(
+            Some(&output),
+            OutputLinesParams {
+                line_limit: 2,
+                only_err: false,
+                include_angle_pipe: false,
+                include_prefix: false,
+                compact_blank_lines_when_truncated: true,
+            },
+        );
+
+        assert_eq!(
+            output.lines,
+            vec![
+                Line::from(vec![Span::default().dim(), "head".dim()]),
+                Line::from(vec![Span::default().dim(), "   ".on_red().dim()]),
+                Line::from("… +1 lines"),
+                Line::from("tail-1".dim()),
+                Line::from("tail-2".dim()),
+            ]
+        );
+        assert_eq!(output.omitted, Some(1));
+    }
+
+    #[test]
+    fn agent_preview_wraps_and_preserves_background_whitespace() {
+        let output = format!("\x1b[41m{}\x1b[0m", " ".repeat(96));
+        let cell = completed_agent_exec(&output);
+        let bar = " ".repeat(16);
+
+        assert_eq!(
+            cell.command_display_lines(20)
+                .into_iter()
+                .skip(1)
+                .collect::<Vec<_>>(),
+            vec![
+                Line::from(vec![
+                    "  └ ".dim(),
+                    Span::styled(bar.clone(), Style::new().on_red().dim()),
+                ]),
+                Line::from(vec![
+                    "    ".into(),
+                    Span::styled(bar.clone(), Style::new().on_red().dim()),
+                ]),
+                Line::from(vec!["    ".dim(), "… +2 lines".dim()]),
+                Line::from(vec![
+                    "    ".into(),
+                    Span::styled(bar.clone(), Style::new().on_red().dim()),
+                ]),
+                Line::from(vec![
+                    "    ".into(),
+                    Span::styled(bar, Style::new().on_red().dim()),
+                ]),
+            ]
+        );
+    }
+
+    #[test]
+    fn agent_output_compacts_leading_blank_when_wrapping_exceeds_limit() {
+        let chunk = "0123456789abcdef";
+        let cell = completed_agent_exec(&format!("\n{}", chunk.repeat(5)));
+
+        assert_eq!(
+            rendered_lines(&cell.display_lines(20)),
+            vec![
+                "• Ran cargo test".to_string(),
+                format!("  └ {chunk}"),
+                format!("    {chunk}"),
+                format!("    {chunk}"),
+                format!("    {chunk}"),
+                format!("    {chunk}"),
+            ]
+        );
+    }
+
+    #[test]
+    fn agent_output_preserves_leading_blank_when_wrapped_rows_fit() {
+        let chunk = "0123456789abcdef";
+        let cell = completed_agent_exec(&format!("\n{}", chunk.repeat(4)));
+
+        assert_eq!(
+            rendered_lines(&cell.display_lines(20)),
+            vec![
+                "• Ran cargo test".to_string(),
+                "  └ ".to_string(),
+                format!("    {chunk}"),
+                format!("    {chunk}"),
+                format!("    {chunk}"),
+                format!("    {chunk}"),
+            ]
+        );
+    }
+
+    #[test]
+    fn output_lines_compacts_ansi_only_rows_before_head_tail_sampling() {
+        let output = CommandOutput {
+            exit_code: 0,
+            aggregated_output: [
+                "\x1b[31mhead-1\x1b[0m",
+                "\x1b[0m",
+                "\x1b[31m   \x1b[0m",
+                "head-2",
+                "middle-1",
+                "middle-2",
+                "tail-1",
+                "\x1b[2K",
+                "\x1b[32mtail-2\x1b[0m",
+            ]
+            .join("\n"),
+            formatted_output: String::new(),
+        };
+
+        let output = output_lines(
+            Some(&output),
+            OutputLinesParams {
+                line_limit: 2,
+                only_err: false,
+                include_angle_pipe: false,
+                include_prefix: false,
+                compact_blank_lines_when_truncated: true,
+            },
+        );
+
+        assert_eq!(
+            output.lines,
+            vec![
+                Line::from(vec![Span::default().dim(), "head-1".red().dim()]),
+                Line::from(vec![Span::default().dim(), "head-2".dim()]),
+                Line::from("… +2 lines"),
+                Line::from("tail-1".dim()),
+                Line::from("tail-2".green().dim()),
+            ]
+        );
+        assert_eq!(output.omitted, Some(2));
+    }
+
+    #[test]
+    fn output_lines_non_compacting_preserves_ansi_only_rows() {
+        let output = CommandOutput {
+            exit_code: 0,
+            aggregated_output: ["head", "\x1b[0m", "middle", "\x1b[2K", "tail"].join("\n"),
+            formatted_output: String::new(),
+        };
+
+        let output = output_lines(
+            Some(&output),
+            OutputLinesParams {
+                line_limit: 2,
+                only_err: false,
+                include_angle_pipe: false,
+                include_prefix: false,
+                compact_blank_lines_when_truncated: false,
+            },
+        );
+
+        assert_eq!(
+            rendered_lines(&output.lines),
+            vec!["head", "", "… +1 lines", "", "tail"]
+        );
+        assert_eq!(output.omitted, Some(1));
+    }
+
+    #[test]
+    fn agent_preview_compacts_ansi_only_rows_but_transcript_preserves_them() {
+        let output = [
+            "\x1b[31mone\x1b[0m",
+            "\x1b[0m",
+            "two",
+            "three",
+            "\x1b[2K",
+            "four",
+            "\x1b[32mfive\x1b[0m",
+        ]
+        .join("\n");
+        let cell = completed_agent_exec(&output);
+
+        assert_eq!(
+            rendered_lines(&cell.display_lines(120)),
+            vec![
+                "• Ran cargo test",
+                "  └ one",
+                "    two",
+                "    three",
+                "    four",
+                "    five",
+            ]
+        );
+        assert_eq!(
+            rendered_lines(&cell.transcript_lines(120)),
+            vec![
+                "$ cargo test",
+                "one",
+                "",
+                "two",
+                "three",
+                "",
+                "four",
+                "five",
+                "✓ • 1ms",
+            ]
+        );
+    }
+
+    #[test]
+    fn agent_output_truncation_prioritizes_non_blank_lines() {
+        let output = [
+            "WARNING: proceeding",
+            "",
+            "running 29 tests",
+            ".............................",
+            "test result: ok. 29 passed",
+            "",
+            "EXIT:0",
+        ]
+        .join("\n");
+        let cell = completed_agent_exec(&output);
+
+        assert_eq!(
+            rendered_lines(&cell.display_lines(120)),
+            vec![
+                "• Ran cargo test",
+                "  └ WARNING: proceeding",
+                "    running 29 tests",
+                "    .............................",
+                "    test result: ok. 29 passed",
+                "    EXIT:0",
+            ]
+        );
+        assert_eq!(
+            rendered_lines(&cell.transcript_lines(120)),
+            vec![
+                "$ cargo test",
+                "WARNING: proceeding",
+                "",
+                "running 29 tests",
+                ".............................",
+                "test result: ok. 29 passed",
+                "",
+                "EXIT:0",
+                "✓ • 1ms",
+            ]
+        );
+    }
+
+    #[test]
+    fn short_agent_output_preserves_blank_lines() {
+        let cell = completed_agent_exec("section one\n\nsection two");
+
+        assert_eq!(
+            rendered_lines(&cell.display_lines(120)),
+            vec![
+                "• Ran cargo test",
+                "  └ section one",
+                "    ",
+                "    section two",
+            ]
+        );
+    }
+
+    #[test]
+    fn agent_output_ellipsis_counts_only_hidden_non_blank_lines() {
+        let output = [
+            "head-1", "", "head-2", "middle-1", "middle-2", "middle-3", "", "tail-1", "tail-2",
+        ]
+        .join("\n");
+        let cell = completed_agent_exec(&output);
+
+        assert_eq!(
+            rendered_lines(&cell.display_lines(120)),
+            vec![
+                "• Ran cargo test",
+                "  └ head-1",
+                "    head-2",
+                "    … +3 lines (ctrl + t to view transcript)",
+                "    tail-1",
+                "    tail-2",
+            ]
+        );
+    }
+
+    #[test]
+    fn blank_agent_output_uses_no_output_placeholder() {
+        let output = ["", " ", "\t", "", "  ", "\t"].join("\n");
+        let cell = completed_agent_exec(&output);
+
+        assert_eq!(
+            rendered_lines(&cell.display_lines(120)),
+            vec!["• Ran cargo test", "  └ (no output)"]
         );
     }
 }
