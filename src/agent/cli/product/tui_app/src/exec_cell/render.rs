@@ -101,7 +101,8 @@ pub(crate) struct OutputLines {
 
 fn style_paints_whitespace(style: Style) -> bool {
     let visible_modifiers = Modifier::REVERSED | Modifier::UNDERLINED | Modifier::CROSSED_OUT;
-    style.bg.is_some() || style.add_modifier.intersects(visible_modifiers)
+    let has_visible_background = style.bg.is_some_and(|bg| bg != Color::Reset);
+    has_visible_background || style.add_modifier.intersects(visible_modifiers)
 }
 
 fn line_is_visually_blank(line: &Line<'_>) -> bool {
@@ -119,12 +120,6 @@ fn line_is_painted_whitespace(line: &Line<'_>) -> bool {
         has_painted_whitespace |= style_paints_whitespace(grapheme.style);
     }
     has_painted_whitespace
-}
-
-fn line_has_painted_whitespace(line: &Line<'_>) -> bool {
-    line.styled_graphemes(Style::default()).any(|grapheme| {
-        grapheme.symbol.chars().all(char::is_whitespace) && style_paints_whitespace(grapheme.style)
-    })
 }
 
 fn push_styled_grapheme(spans: &mut Vec<Span<'static>>, symbol: &str, style: Style) {
@@ -741,7 +736,7 @@ impl ExecCell {
 
     fn line_row_count(line: &Line<'static>, width: u16) -> usize {
         let width = width.max(1);
-        if line_is_visually_blank(line) || line_has_painted_whitespace(line) {
+        if line_is_visually_blank(line) {
             line.width().div_ceil(usize::from(width)).max(1)
         } else {
             Paragraph::new(Text::from(vec![line.clone()]))
@@ -1099,6 +1094,8 @@ mod tests {
         let lines = [
             ansi_escape_line("   "),
             ansi_escape_line("\x1b[0m"),
+            ansi_escape_line("\x1b[0m   "),
+            ansi_escape_line("\x1b[49m   "),
             ansi_escape_line("\x1b[31m   \x1b[0m"),
             ansi_escape_line("\x1b[1;2;3;5;6;8m   \x1b[0m"),
             ansi_escape_line("\x1b[41m   \x1b[0m"),
@@ -1109,7 +1106,9 @@ mod tests {
 
         assert_eq!(
             lines.map(|line| line_is_visually_blank(&line)),
-            [true, true, true, true, false, false, false, false]
+            [
+                true, true, true, true, true, true, false, false, false, false
+            ]
         );
     }
 
@@ -1148,34 +1147,35 @@ mod tests {
 
     #[test]
     fn agent_preview_wraps_and_preserves_background_whitespace() {
+        let width = 20;
         let output = format!("\x1b[41m{}\x1b[0m", " ".repeat(96));
         let cell = completed_agent_exec(&output);
         let bar = " ".repeat(16);
+        let lines = cell
+            .command_display_lines(width)
+            .into_iter()
+            .skip(1)
+            .collect::<Vec<_>>();
 
         assert_eq!(
-            cell.command_display_lines(20)
-                .into_iter()
-                .skip(1)
-                .collect::<Vec<_>>(),
+            lines,
             vec![
                 Line::from(vec![
                     "  └ ".dim(),
                     Span::styled(bar.clone(), Style::new().on_red().dim()),
                 ]),
-                Line::from(vec![
-                    "    ".into(),
-                    Span::styled(bar.clone(), Style::new().on_red().dim()),
-                ]),
-                Line::from(vec!["    ".dim(), "… +2 lines".dim()]),
-                Line::from(vec![
-                    "    ".into(),
-                    Span::styled(bar.clone(), Style::new().on_red().dim()),
-                ]),
+                Line::from(vec!["    ".dim(), "… +4 lines".dim()]),
                 Line::from(vec![
                     "    ".into(),
                     Span::styled(bar, Style::new().on_red().dim()),
                 ]),
             ]
+        );
+        let physical_rows = output_rows(&lines, width);
+        let max_rows = EXEC_DISPLAY_LAYOUT.output_max_lines;
+        assert!(
+            physical_rows <= max_rows,
+            "expected at most {max_rows} physical output rows, got {physical_rows}",
         );
     }
 
@@ -1221,7 +1221,8 @@ mod tests {
             exit_code: 0,
             aggregated_output: [
                 "\x1b[31mhead-1\x1b[0m",
-                "\x1b[0m",
+                "\x1b[0m   ",
+                "\x1b[49m   ",
                 "\x1b[31m   \x1b[0m",
                 "head-2",
                 "middle-1",
