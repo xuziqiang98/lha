@@ -2902,7 +2902,7 @@ dependencies = [
 
 [[package]]
 name = "lha"
-version = "1.0.12"
+version = "1.0.13"
 dependencies = [
  "ansi-to-tui",
  "anyhow",
