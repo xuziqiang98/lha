@@ -1,0 +1,27 @@
+---
+source: src/agent/cli/src/../product/tui_app/src/markdown_render_tests.rs
+expression: "plain_lines(&text).join(\"\\n\")"
+---
+ Name
+  renderer
+ Owner
+  tui
+ Status
+  ready
+ Description
+  Preserves every
+  value when the
+  terminal is
+  extremely narrow.
+──────────────────────
+ Name
+  replay
+ Owner
+  history
+ Status
+  done
+ Description
+  Recomputes the
+  layout from the
+  original Markdown
+  source.

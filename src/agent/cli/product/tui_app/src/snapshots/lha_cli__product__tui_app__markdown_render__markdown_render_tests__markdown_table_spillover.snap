@@ -1,0 +1,11 @@
+---
+source: src/agent/cli/src/../product/tui_app/src/markdown_render_tests.rs
+expression: rendered
+---
+ Name        State
+━━━━━━━━━━  ━━━━━━━
+ renderer    ready
+Ordinary paragraph after the table.
+| later | pipe |
+HTML block:
+<div>visible html</div>

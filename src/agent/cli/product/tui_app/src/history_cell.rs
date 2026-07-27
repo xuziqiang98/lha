@@ -2846,6 +2846,7 @@ mod tests {
     use crate::product::tui_app::exec_cell::CommandOutput;
     use crate::product::tui_app::exec_cell::ExecCall;
     use crate::product::tui_app::exec_cell::ExecCell;
+    use crate::product::tui_app::markdown_render::render_markdown_text_with_width;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -3401,6 +3402,120 @@ mod tests {
                 &format!("history cell width {width}"),
             );
         }
+    }
+
+    #[test]
+    fn markdown_agent_message_table_rows_fit_requested_width() {
+        let source = r#"| Unit | Files | Count | Notes |
+| --- | --- | ---: | --- |
+| 中文 renderer | /Users/example/lha/src/agent/runtime/markdown_table_renderer.rs:104 | 42 | Preserves CJK, emoji 🚀, and readable prose. |
+"#;
+        let cell = AgentMessageCell::new_markdown(source.to_string(), true);
+
+        for width in [24, 40, 96] {
+            let lines = cell.display_lines(width);
+            assert!(
+                lines.iter().all(|line| line.width() <= usize::from(width)),
+                "width {width} overflowed: {:?}",
+                render_lines(&lines)
+            );
+            let compact = render_lines(&lines)
+                .join("")
+                .chars()
+                .filter(|character| !character.is_whitespace())
+                .collect::<String>();
+            for expected in [
+                "中文",
+                "renderer",
+                "markdown_table_renderer.rs:104",
+                "42",
+                "emoji",
+                "🚀",
+            ] {
+                assert!(
+                    compact.contains(expected),
+                    "width {width} lost {expected:?}: {compact:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn markdown_agent_message_table_reflows_wide_narrow_wide_without_stale_cache() {
+        let source = r#"| Name | Owner | Status | Description |
+| --- | --- | --- | --- |
+| renderer | tui | ready | The table switches layouts when the terminal width changes. |
+"#;
+        let cell = AgentMessageCell::new_markdown(source.to_string(), true);
+
+        let first_wide = cell.display_lines(96);
+        let narrow = cell.display_lines(24);
+        let second_wide = cell.display_lines(96);
+
+        assert_eq!(second_wide, first_wide);
+        assert!(
+            render_lines(&first_wide)
+                .iter()
+                .any(|line| line.contains('━'))
+        );
+        assert!(!render_lines(&narrow).iter().any(|line| line.contains('━')));
+    }
+
+    #[test]
+    fn markdown_agent_message_table_proposed_plan_uses_inner_width_and_styles() {
+        let source = r#"| Step | Owner | Notes |
+| --- | --- | --- |
+| Verify renderer | TUI | The narrative column wraps at the proposed-plan content width. |
+"#;
+        let width = 32u16;
+        let cell = new_proposed_plan(source.to_string());
+        let lines = cell.display_lines(width);
+        let body = &lines[3..lines.len() - 1];
+        let expected = render_markdown_text_with_width(
+            source,
+            Some(usize::from(width.saturating_sub(4).max(1))),
+        );
+        let expected_body = expected
+            .lines
+            .iter()
+            .map(|line| {
+                let text = line
+                    .spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>();
+                if text.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!("  {text}")
+                }
+            })
+            .collect::<Vec<_>>();
+        let wider_budget = render_markdown_text_with_width(
+            source,
+            Some(usize::from(width.saturating_sub(2).max(1))),
+        );
+
+        assert_eq!(render_lines(body), expected_body);
+        assert_ne!(render_lines(body), render_lines(&wider_budget.lines));
+
+        let header_line = body
+            .iter()
+            .find(|line| line.spans.iter().any(|span| span.content.contains("Step")))
+            .expect("proposed-plan table header");
+        let header_span = header_line
+            .spans
+            .iter()
+            .find(|span| span.content.contains("Step"))
+            .expect("proposed-plan table header span");
+        let effective_style = header_line.style.patch(header_span.style);
+        assert!(effective_style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(effective_style.bg, proposed_plan_style().bg);
+        assert_cell_background_fills_text_row(
+            Box::new(new_proposed_plan(source.to_string())),
+            width,
+            "Step",
+        );
     }
 
     #[test]

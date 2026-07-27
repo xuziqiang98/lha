@@ -1,0 +1,19 @@
+---
+source: src/agent/cli/src/../product/tui_app/src/markdown_render_tests.rs
+expression: "plain_lines(&text).join(\"\\n\")"
+---
+ Unit                 Files               Adds    Notes
+━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━  ━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━
+ Suggestion engine    /Users/example/      704    Sampling workflow
+                      lha/src/agent/              remains readable
+                      runtime/                    while the path wraps
+                      next_prompt_sugg            first.
+                      estion_tests.rs:
+                      104
+───────────────────  ──────────────────  ──────  ───────────────────────
+ Context isolation    /Users/example/       54    Ordinary prose keeps
+                      lha/src/core/               a useful width.
+                      context/
+                      contextual_user_
+                      message_tests.rs
+                      :88

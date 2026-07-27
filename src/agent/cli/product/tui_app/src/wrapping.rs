@@ -1,8 +1,10 @@
+use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use std::borrow::Cow;
 use std::ops::Range;
 use textwrap::Options;
+use unicode_width::UnicodeWidthStr;
 
 use crate::product::tui_app::render::line_utils::push_owned_lines;
 
@@ -232,6 +234,132 @@ where
     }
 
     out
+}
+
+pub(crate) fn word_wrap_line_grapheme_safe(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
+    let width = width.max(1);
+    let graphemes = line
+        .styled_graphemes(Style::default())
+        .map(|grapheme| {
+            (
+                grapheme.symbol.to_string(),
+                grapheme.style,
+                UnicodeWidthStr::width(grapheme.symbol),
+                grapheme.symbol.chars().all(char::is_whitespace),
+            )
+        })
+        .collect::<Vec<_>>();
+    if graphemes
+        .iter()
+        .all(|(symbol, _, _, _)| symbol.chars().count() <= 1)
+    {
+        let wrapped = word_wrap_line(line, width);
+        let mut owned = Vec::new();
+        push_owned_lines(&wrapped, &mut owned);
+        return owned;
+    }
+    if graphemes.is_empty() {
+        return vec![Line::default().style(line.style)];
+    }
+
+    fn push_grapheme(spans: &mut Vec<Span<'static>>, symbol: &str, style: Style) {
+        if let Some(last) = spans.last_mut()
+            && last.style == style
+        {
+            last.content.to_mut().push_str(symbol);
+        } else {
+            spans.push(Span::styled(symbol.to_string(), style));
+        }
+    }
+
+    fn flush_line(
+        output: &mut Vec<Line<'static>>,
+        spans: &mut Vec<Span<'static>>,
+        line_width: &mut usize,
+    ) {
+        if !spans.is_empty() {
+            output.push(Line::from(std::mem::take(spans)));
+            *line_width = 0;
+        }
+    }
+
+    let mut output = Vec::new();
+    let mut spans = Vec::new();
+    let mut line_width = 0usize;
+    let mut index = 0;
+    while index < graphemes.len() {
+        if graphemes[index].3 {
+            let whitespace_start = index;
+            while index < graphemes.len() && graphemes[index].3 {
+                index += 1;
+            }
+            if spans.is_empty() || index == graphemes.len() {
+                continue;
+            }
+            let whitespace_width = graphemes[whitespace_start..index]
+                .iter()
+                .map(|(_, _, width, _)| *width)
+                .sum::<usize>();
+            let mut word_end = index;
+            while word_end < graphemes.len() && !graphemes[word_end].3 {
+                word_end += 1;
+            }
+            let word_width = graphemes[index..word_end]
+                .iter()
+                .map(|(_, _, width, _)| *width)
+                .sum::<usize>();
+            if line_width
+                .saturating_add(whitespace_width)
+                .saturating_add(word_width)
+                <= width
+            {
+                for (symbol, style, grapheme_width, _) in &graphemes[whitespace_start..index] {
+                    push_grapheme(&mut spans, symbol, *style);
+                    line_width = line_width.saturating_add(*grapheme_width);
+                }
+            } else {
+                flush_line(&mut output, &mut spans, &mut line_width);
+            }
+            continue;
+        }
+
+        let word_start = index;
+        while index < graphemes.len() && !graphemes[index].3 {
+            index += 1;
+        }
+        let word = &graphemes[word_start..index];
+        let word_width = word
+            .iter()
+            .map(|(_, _, grapheme_width, _)| *grapheme_width)
+            .sum::<usize>();
+        if !spans.is_empty() && line_width.saturating_add(word_width) > width {
+            flush_line(&mut output, &mut spans, &mut line_width);
+        }
+
+        if word_width <= width {
+            for (symbol, style, grapheme_width, _) in word {
+                push_grapheme(&mut spans, symbol, *style);
+                line_width = line_width.saturating_add(*grapheme_width);
+            }
+            continue;
+        }
+
+        for (symbol, style, grapheme_width, _) in word {
+            if !spans.is_empty() && line_width.saturating_add(*grapheme_width) > width {
+                flush_line(&mut output, &mut spans, &mut line_width);
+            }
+            push_grapheme(&mut spans, symbol, *style);
+            line_width = line_width.saturating_add(*grapheme_width);
+            if line_width >= width {
+                flush_line(&mut output, &mut spans, &mut line_width);
+            }
+        }
+    }
+    flush_line(&mut output, &mut spans, &mut line_width);
+    if output.is_empty() {
+        output.push(Line::default().style(line.style));
+    }
+    output
 }
 
 /// Utilities to allow wrapping either borrowed or owned lines.
@@ -693,6 +821,19 @@ mod tests {
         assert_eq!(word_wrap_line(&line, 4).len(), 2);
         assert_eq!(word_wrap_line(&line, 2).len(), 3);
         assert_eq!(word_wrap_line(&line, 6).len(), 1);
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_keeps_zwj_emoji_and_styles_intact() {
+        let line = Line::from(vec!["👨‍👩‍👧‍👦".red(), " team".cyan()]);
+        let wrapped = word_wrap_line_grapheme_safe(&line, 4);
+
+        assert_eq!(
+            wrapped.iter().map(concat_line).collect::<Vec<_>>(),
+            vec!["👨‍👩‍👧‍👦", "team"]
+        );
+        assert_eq!(wrapped[0].spans[0].style.fg, Some(Color::Red));
+        assert_eq!(wrapped[1].spans[0].style.fg, Some(Color::Cyan));
     }
 
     #[test]

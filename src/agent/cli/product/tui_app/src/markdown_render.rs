@@ -1,6 +1,8 @@
 use crate::product::tui_app::render::line_utils::line_to_static;
 use crate::product::tui_app::wrapping::RtOptions;
 use crate::product::tui_app::wrapping::word_wrap_line;
+use crate::product::tui_app::wrapping::word_wrap_line_grapheme_safe;
+use pulldown_cmark::Alignment;
 use pulldown_cmark::CodeBlockKind;
 use pulldown_cmark::CowStr;
 use pulldown_cmark::Event;
@@ -13,6 +15,16 @@ use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
+use std::borrow::Cow;
+use std::ops::Range;
+use unicode_width::UnicodeWidthStr;
+
+mod table_key_value;
+
+const TABLE_COLUMN_GAP: usize = 2;
+const TABLE_CELL_PADDING: usize = 1;
+const TABLE_HEADER_SEPARATOR_CHAR: char = '━';
+const TABLE_BODY_SEPARATOR_CHAR: char = '─';
 
 struct MarkdownStyles {
     h1: Style,
@@ -29,6 +41,8 @@ struct MarkdownStyles {
     unordered_list_marker: Style,
     link: Style,
     blockquote: Style,
+    table_header: Style,
+    table_separator: Style,
 }
 
 impl Default for MarkdownStyles {
@@ -50,6 +64,8 @@ impl Default for MarkdownStyles {
             unordered_list_marker: Style::new(),
             link: Style::new().cyan().underlined(),
             blockquote: Style::new().green(),
+            table_header: Style::new().bold(),
+            table_separator: Style::new().dim(),
         }
     }
 }
@@ -71,6 +87,95 @@ impl IndentContext {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+struct TableCell {
+    lines: Vec<Line<'static>>,
+}
+
+impl TableCell {
+    fn ensure_line(&mut self) {
+        if self.lines.is_empty() {
+            self.lines.push(Line::default());
+        }
+    }
+
+    fn push_span(&mut self, span: Span<'static>) {
+        self.ensure_line();
+        if let Some(line) = self.lines.last_mut() {
+            line.push_span(span);
+        }
+    }
+
+    fn hard_break(&mut self) {
+        self.lines.push(Line::default());
+    }
+
+    fn plain_text(&self) -> String {
+        let mut text = String::new();
+        for (line_index, line) in self.lines.iter().enumerate() {
+            if line_index > 0 {
+                text.push(' ');
+            }
+            for span in &line.spans {
+                text.push_str(&span.content);
+            }
+        }
+        text
+    }
+}
+
+#[derive(Debug)]
+struct TableBodyRow {
+    cells: Vec<TableCell>,
+    has_table_pipe_syntax: bool,
+}
+
+#[derive(Debug)]
+struct TableState {
+    alignments: Vec<Alignment>,
+    header: Option<Vec<TableCell>>,
+    rows: Vec<TableBodyRow>,
+    current_row: Option<Vec<TableCell>>,
+    current_row_has_table_pipe_syntax: bool,
+    current_cell: Option<TableCell>,
+    in_header: bool,
+}
+
+impl TableState {
+    fn new(alignments: Vec<Alignment>) -> Self {
+        Self {
+            alignments,
+            header: None,
+            rows: Vec::new(),
+            current_row: None,
+            current_row_has_table_pipe_syntax: false,
+            current_cell: None,
+            in_header: false,
+        }
+    }
+}
+
+struct RenderedTableLines {
+    table_lines: Vec<Line<'static>>,
+    table_lines_prewrapped: bool,
+    spillover_lines: Vec<Line<'static>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TableColumnKind {
+    Narrative,
+    TokenHeavy,
+    Compact,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TableColumnMetrics {
+    max_width: usize,
+    header_token_width: usize,
+    body_token_width: usize,
+    kind: TableColumnKind,
+}
+
 pub fn render_markdown_text(input: &str) -> Text<'static> {
     render_markdown_text_with_width(input, None)
 }
@@ -78,16 +183,68 @@ pub fn render_markdown_text(input: &str) -> Text<'static> {
 pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>) -> Text<'static> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
-    let parser = Parser::new_ext(input, options);
-    let mut w = Writer::new(parser, width);
+    let (parser_input, inline_code_pipe_sentinel) = mask_inline_code_pipes(input, options);
+    options.insert(Options::ENABLE_TABLES);
+    let parser = Parser::new_ext(parser_input.as_ref(), options).into_offset_iter();
+    let mut w = Writer::new(
+        parser_input.as_ref(),
+        parser,
+        width,
+        inline_code_pipe_sentinel,
+    );
     w.run();
     w.text
 }
 
+fn mask_inline_code_pipes(input: &str, options: Options) -> (Cow<'_, str>, Option<char>) {
+    let code_ranges = Parser::new_ext(input, options)
+        .into_offset_iter()
+        .filter_map(|(event, range)| {
+            matches!(event, Event::Code(_))
+                .then(|| {
+                    input
+                        .get(range.clone())
+                        .is_some_and(|source| source.contains('|'))
+                })
+                .filter(|contains_pipe| *contains_pipe)
+                .map(|_| range)
+        })
+        .collect::<Vec<_>>();
+    if code_ranges.is_empty() {
+        return (Cow::Borrowed(input), None);
+    }
+
+    let sentinel = (0xE000..=0xF8FF)
+        .chain(0xF0000..=0xFFFFD)
+        .filter_map(char::from_u32)
+        .find(|candidate| !input.contains(*candidate));
+    let Some(sentinel) = sentinel else {
+        return (Cow::Borrowed(input), None);
+    };
+
+    let mut output = String::with_capacity(input.len() + code_ranges.len());
+    let mut cursor = 0;
+    for range in code_ranges {
+        output.push_str(&input[cursor..range.start]);
+        for character in input[range.clone()].chars() {
+            output.push(if character == '|' {
+                sentinel
+            } else {
+                character
+            });
+        }
+        cursor = range.end;
+    }
+    output.push_str(&input[cursor..]);
+    (Cow::Owned(output), Some(sentinel))
+}
+
 struct Writer<'a, I>
 where
-    I: Iterator<Item = Event<'a>>,
+    I: Iterator<Item = (Event<'a>, Range<usize>)>,
 {
+    input: &'a str,
+    inline_code_pipe_sentinel: Option<char>,
     iter: I,
     text: Text<'static>,
     styles: MarkdownStyles,
@@ -105,14 +262,22 @@ where
     current_subsequent_indent: Vec<Span<'static>>,
     current_line_style: Style,
     current_line_in_code_block: bool,
+    table_state: Option<TableState>,
 }
 
 impl<'a, I> Writer<'a, I>
 where
-    I: Iterator<Item = Event<'a>>,
+    I: Iterator<Item = (Event<'a>, Range<usize>)>,
 {
-    fn new(iter: I, wrap_width: Option<usize>) -> Self {
+    fn new(
+        input: &'a str,
+        iter: I,
+        wrap_width: Option<usize>,
+        inline_code_pipe_sentinel: Option<char>,
+    ) -> Self {
         Self {
+            input,
+            inline_code_pipe_sentinel,
             iter,
             text: Text::default(),
             styles: MarkdownStyles::default(),
@@ -130,19 +295,20 @@ where
             current_subsequent_indent: Vec::new(),
             current_line_style: Style::default(),
             current_line_in_code_block: false,
+            table_state: None,
         }
     }
 
     fn run(&mut self) {
-        while let Some(ev) = self.iter.next() {
-            self.handle_event(ev);
+        while let Some((event, range)) = self.iter.next() {
+            self.handle_event(event, range);
         }
         self.flush_current_line();
     }
 
-    fn handle_event(&mut self, event: Event<'a>) {
+    fn handle_event(&mut self, event: Event<'a>, range: Range<usize>) {
         match event {
-            Event::Start(tag) => self.start_tag(tag),
+            Event::Start(tag) => self.start_tag(tag, range),
             Event::End(tag) => self.end_tag(tag),
             Event::Text(text) => self.text(text),
             Event::Code(code) => self.code(code),
@@ -163,7 +329,7 @@ where
         }
     }
 
-    fn start_tag(&mut self, tag: Tag<'a>) {
+    fn start_tag(&mut self, tag: Tag<'a>, range: Range<usize>) {
         match tag {
             Tag::Paragraph => self.start_paragraph(),
             Tag::Heading { level, .. } => self.start_heading(level),
@@ -185,12 +351,12 @@ where
             Tag::Strong => self.push_inline_style(self.styles.strong),
             Tag::Strikethrough => self.push_inline_style(self.styles.strikethrough),
             Tag::Link { dest_url, .. } => self.push_link(dest_url.to_string()),
+            Tag::Table(alignments) => self.start_table(alignments),
+            Tag::TableHead => self.start_table_head(),
+            Tag::TableRow => self.start_table_row(range),
+            Tag::TableCell => self.start_table_cell(),
             Tag::HtmlBlock
             | Tag::FootnoteDefinition(_)
-            | Tag::Table(_)
-            | Tag::TableHead
-            | Tag::TableRow
-            | Tag::TableCell
             | Tag::Image { .. }
             | Tag::MetadataBlock(_) => {}
         }
@@ -209,18 +375,21 @@ where
             }
             TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => self.pop_inline_style(),
             TagEnd::Link => self.pop_link(),
+            TagEnd::Table => self.end_table(),
+            TagEnd::TableHead => self.end_table_head(),
+            TagEnd::TableRow => self.end_table_row(),
+            TagEnd::TableCell => self.end_table_cell(),
             TagEnd::HtmlBlock
             | TagEnd::FootnoteDefinition
-            | TagEnd::Table
-            | TagEnd::TableHead
-            | TagEnd::TableRow
-            | TagEnd::TableCell
             | TagEnd::Image
             | TagEnd::MetadataBlock(_) => {}
         }
     }
 
     fn start_paragraph(&mut self) {
+        if self.in_table_cell() {
+            return;
+        }
         if self.needs_newline {
             self.push_blank_line();
         }
@@ -230,12 +399,18 @@ where
     }
 
     fn end_paragraph(&mut self) {
+        if self.in_table_cell() {
+            return;
+        }
         self.needs_newline = true;
         self.in_paragraph = false;
         self.pending_marker_line = false;
     }
 
     fn start_heading(&mut self, level: HeadingLevel) {
+        if self.in_table_cell() {
+            return;
+        }
         if self.needs_newline {
             self.push_line(Line::default());
             self.needs_newline = false;
@@ -255,11 +430,17 @@ where
     }
 
     fn end_heading(&mut self) {
+        if self.in_table_cell() {
+            return;
+        }
         self.needs_newline = true;
         self.pop_inline_style();
     }
 
     fn start_blockquote(&mut self) {
+        if self.in_table_cell() {
+            return;
+        }
         if self.needs_newline {
             self.push_blank_line();
             self.needs_newline = false;
@@ -269,11 +450,18 @@ where
     }
 
     fn end_blockquote(&mut self) {
+        if self.in_table_cell() {
+            return;
+        }
         self.indent_stack.pop();
         self.needs_newline = true;
     }
 
     fn text(&mut self, text: CowStr<'a>) {
+        if self.in_table_cell() {
+            self.push_text_to_table_cell(&text);
+            return;
+        }
         if self.pending_marker_line {
             self.push_line(Line::default());
         }
@@ -313,17 +501,40 @@ where
     }
 
     fn code(&mut self, code: CowStr<'a>) {
+        let mut code = code.into_string();
+        if let Some(sentinel) = self.inline_code_pipe_sentinel
+            && code.contains(sentinel)
+        {
+            code = code.replace(sentinel, "|");
+        }
+        if self.in_table_cell() {
+            self.push_span_to_table_cell(Span::from(code).style(self.styles.code));
+            return;
+        }
         if self.pending_marker_line {
             self.push_line(Line::default());
             self.pending_marker_line = false;
         }
-        let span = Span::from(code.into_string()).style(self.styles.code);
+        let span = Span::from(code).style(self.styles.code);
         self.push_span(span);
     }
 
     fn html(&mut self, html: CowStr<'a>, inline: bool) {
         let html = strip_leading_html_comments_from_html(&html);
         if html.is_empty() {
+            return;
+        }
+        if self.in_table_cell() {
+            let style = self.inline_styles.last().copied().unwrap_or_default();
+            for (line_index, line) in html.lines().enumerate() {
+                if line_index > 0 {
+                    self.push_table_cell_hard_break();
+                }
+                self.push_span_to_table_cell(Span::styled(line.to_string(), style));
+            }
+            if !inline {
+                self.push_table_cell_hard_break();
+            }
             return;
         }
         self.pending_marker_line = false;
@@ -342,10 +553,19 @@ where
     }
 
     fn hard_break(&mut self) {
+        if self.in_table_cell() {
+            self.push_table_cell_hard_break();
+            return;
+        }
         self.push_line(Line::default());
     }
 
     fn soft_break(&mut self) {
+        if self.in_table_cell() {
+            let style = self.inline_styles.last().copied().unwrap_or_default();
+            self.push_span_to_table_cell(Span::styled(" ".to_string(), style));
+            return;
+        }
         self.push_line(Line::default());
     }
 
@@ -418,6 +638,684 @@ where
         self.indent_stack.pop();
     }
 
+    fn start_table(&mut self, alignments: Vec<Alignment>) {
+        self.flush_current_line();
+        if self.needs_newline {
+            self.push_blank_line();
+            self.needs_newline = false;
+        }
+        self.table_state = Some(TableState::new(alignments));
+    }
+
+    fn end_table(&mut self) {
+        let Some(table_state) = self.table_state.take() else {
+            return;
+        };
+        let RenderedTableLines {
+            table_lines,
+            table_lines_prewrapped,
+            spillover_lines,
+        } = self.render_table_lines(table_state);
+        let mut pending_marker_line = self.pending_marker_line;
+        for line in table_lines {
+            if table_lines_prewrapped {
+                self.push_prewrapped_line(line, pending_marker_line);
+            } else {
+                self.push_line(line);
+                self.flush_current_line();
+            }
+            pending_marker_line = false;
+        }
+        self.pending_marker_line = false;
+        for spillover_line in spillover_lines {
+            self.push_line(spillover_line);
+            self.flush_current_line();
+        }
+        self.needs_newline = true;
+    }
+
+    fn start_table_head(&mut self) {
+        if let Some(table_state) = self.table_state.as_mut() {
+            table_state.in_header = true;
+            table_state.current_row = Some(Vec::new());
+        }
+    }
+
+    fn end_table_head(&mut self) {
+        let Some(table_state) = self.table_state.as_mut() else {
+            return;
+        };
+        if let Some(current_cell) = table_state.current_cell.take() {
+            table_state
+                .current_row
+                .get_or_insert_with(Vec::new)
+                .push(current_cell);
+        }
+        if let Some(row) = table_state.current_row.take() {
+            table_state.header = Some(row);
+        }
+        table_state.in_header = false;
+    }
+
+    fn start_table_row(&mut self, source_range: Range<usize>) {
+        let has_table_pipe_syntax = self.has_table_row_boundary_pipe(source_range);
+        if let Some(table_state) = self.table_state.as_mut() {
+            table_state.current_row = Some(Vec::new());
+            table_state.current_row_has_table_pipe_syntax = has_table_pipe_syntax;
+        }
+    }
+
+    fn has_table_row_boundary_pipe(&self, source_range: Range<usize>) -> bool {
+        let Some(source) = self.input.get(source_range) else {
+            return false;
+        };
+        let source = source.trim();
+        source.starts_with('|') || source.ends_with('|')
+    }
+
+    fn end_table_row(&mut self) {
+        let Some(table_state) = self.table_state.as_mut() else {
+            return;
+        };
+        if let Some(current_cell) = table_state.current_cell.take() {
+            table_state
+                .current_row
+                .get_or_insert_with(Vec::new)
+                .push(current_cell);
+        }
+        let Some(row) = table_state.current_row.take() else {
+            return;
+        };
+        if table_state.in_header {
+            table_state.header = Some(row);
+        } else {
+            table_state.rows.push(TableBodyRow {
+                cells: row,
+                has_table_pipe_syntax: table_state.current_row_has_table_pipe_syntax,
+            });
+        }
+        table_state.current_row_has_table_pipe_syntax = false;
+    }
+
+    fn start_table_cell(&mut self) {
+        if let Some(table_state) = self.table_state.as_mut() {
+            table_state.current_cell = Some(TableCell::default());
+        }
+    }
+
+    fn end_table_cell(&mut self) {
+        let Some(table_state) = self.table_state.as_mut() else {
+            return;
+        };
+        if let Some(cell) = table_state.current_cell.take() {
+            table_state
+                .current_row
+                .get_or_insert_with(Vec::new)
+                .push(cell);
+        }
+    }
+
+    fn in_table_cell(&self) -> bool {
+        self.table_state
+            .as_ref()
+            .and_then(|table_state| table_state.current_cell.as_ref())
+            .is_some()
+    }
+
+    fn push_span_to_table_cell(&mut self, span: Span<'static>) {
+        if let Some(table_state) = self.table_state.as_mut()
+            && let Some(cell) = table_state.current_cell.as_mut()
+        {
+            cell.push_span(span);
+        }
+    }
+
+    fn push_table_cell_hard_break(&mut self) {
+        if let Some(table_state) = self.table_state.as_mut()
+            && let Some(cell) = table_state.current_cell.as_mut()
+        {
+            cell.hard_break();
+        }
+    }
+
+    fn push_text_to_table_cell(&mut self, text: &str) {
+        let style = self.inline_styles.last().copied().unwrap_or_default();
+        for (line_index, line) in text.lines().enumerate() {
+            if line_index > 0 {
+                self.push_table_cell_hard_break();
+            }
+            self.push_span_to_table_cell(Span::styled(line.to_string(), style));
+        }
+    }
+
+    fn render_table_lines(&self, mut table_state: TableState) -> RenderedTableLines {
+        let column_count = table_state.alignments.len();
+        if column_count == 0 {
+            return RenderedTableLines {
+                table_lines: Vec::new(),
+                table_lines_prewrapped: true,
+                spillover_lines: Vec::new(),
+            };
+        }
+
+        let mut spillover_lines = Vec::new();
+        let mut rows = Vec::with_capacity(table_state.rows.len());
+        let mut in_spillover = false;
+        for (row_index, row) in table_state.rows.iter().enumerate() {
+            let next_row = table_state.rows.get(row_index + 1);
+            if in_spillover || column_count > 1 && Self::is_spillover_row(row, next_row) {
+                in_spillover = true;
+                spillover_lines.extend(Self::spillover_row_lines(row));
+            } else {
+                rows.push(row.cells.clone());
+            }
+        }
+
+        let mut header = table_state
+            .header
+            .take()
+            .unwrap_or_else(|| vec![TableCell::default(); column_count]);
+        Self::normalize_row(&mut header, column_count);
+        for row in &mut rows {
+            Self::normalize_row(row, column_count);
+        }
+
+        let metrics = Self::collect_table_column_metrics(&header, &rows, column_count);
+        let widths =
+            Self::compute_column_widths(&metrics, self.available_table_width(column_count));
+
+        let Some(column_widths) = widths else {
+            if !rows.is_empty() {
+                return RenderedTableLines {
+                    table_lines: table_key_value::render_records(
+                        &header,
+                        &rows,
+                        &metrics,
+                        self.available_record_width(),
+                        self.styles.table_header,
+                        self.styles.table_separator,
+                    ),
+                    table_lines_prewrapped: true,
+                    spillover_lines,
+                };
+            }
+            return RenderedTableLines {
+                table_lines: self.render_table_pipe_fallback(
+                    &header,
+                    &rows,
+                    &table_state.alignments,
+                ),
+                table_lines_prewrapped: false,
+                spillover_lines,
+            };
+        };
+
+        if table_key_value::should_render_records(&rows, &column_widths, &metrics) {
+            return RenderedTableLines {
+                table_lines: table_key_value::render_records(
+                    &header,
+                    &rows,
+                    &metrics,
+                    self.available_record_width(),
+                    self.styles.table_header,
+                    self.styles.table_separator,
+                ),
+                table_lines_prewrapped: true,
+                spillover_lines,
+            };
+        }
+
+        let mut table_lines = Vec::with_capacity(2 + rows.len() * 2);
+        table_lines.extend(self.render_table_row(
+            &header,
+            &column_widths,
+            &table_state.alignments,
+            self.styles.table_header,
+        ));
+        table_lines.push(Self::render_table_separator(
+            &column_widths,
+            TABLE_HEADER_SEPARATOR_CHAR,
+            self.styles.table_separator,
+        ));
+        for (row_index, row) in rows.iter().enumerate() {
+            table_lines.extend(self.render_table_row(
+                row,
+                &column_widths,
+                &table_state.alignments,
+                Style::default(),
+            ));
+            if row_index + 1 < rows.len() {
+                table_lines.push(Self::render_table_separator(
+                    &column_widths,
+                    TABLE_BODY_SEPARATOR_CHAR,
+                    self.styles.table_separator,
+                ));
+            }
+        }
+
+        RenderedTableLines {
+            table_lines,
+            table_lines_prewrapped: true,
+            spillover_lines,
+        }
+    }
+
+    fn normalize_row(row: &mut Vec<TableCell>, column_count: usize) {
+        row.truncate(column_count);
+        row.resize(column_count, TableCell::default());
+    }
+
+    fn available_table_width(&self, column_count: usize) -> Option<usize> {
+        self.wrap_width.map(|wrap_width| {
+            let prefix_width =
+                Self::spans_display_width(&self.prefix_spans(self.pending_marker_line));
+            let reserved = prefix_width
+                + (column_count.saturating_sub(1) * TABLE_COLUMN_GAP)
+                + (column_count * TABLE_CELL_PADDING * 2);
+            wrap_width.saturating_sub(reserved)
+        })
+    }
+
+    fn available_record_width(&self) -> Option<usize> {
+        self.wrap_width.map(|wrap_width| {
+            let prefix_width =
+                Self::spans_display_width(&self.prefix_spans(self.pending_marker_line));
+            wrap_width.saturating_sub(prefix_width)
+        })
+    }
+
+    fn compute_column_widths(
+        metrics: &[TableColumnMetrics],
+        available_width: Option<usize>,
+    ) -> Option<Vec<usize>> {
+        let min_column_width = 3;
+        let mut widths: Vec<usize> = metrics
+            .iter()
+            .map(|column| column.max_width.max(min_column_width))
+            .collect();
+
+        let Some(max_width) = available_width else {
+            return Some(widths);
+        };
+        let minimum_total = metrics.len() * min_column_width;
+        if max_width < minimum_total {
+            return None;
+        }
+
+        let mut floors: Vec<usize> = metrics
+            .iter()
+            .map(|column| Self::preferred_column_floor(column, min_column_width))
+            .collect();
+        let floor_total: usize = floors.iter().sum();
+        if floor_total > max_width {
+            let minimums = vec![min_column_width; floors.len()];
+            Self::shrink_columns(&mut floors, &minimums, metrics, floor_total - max_width);
+        }
+
+        let total_width: usize = widths.iter().sum();
+        if total_width > max_width {
+            let remaining =
+                Self::shrink_columns(&mut widths, &floors, metrics, total_width - max_width);
+            if remaining > 0 {
+                return None;
+            }
+        }
+
+        Some(widths)
+    }
+
+    fn collect_table_column_metrics(
+        header: &[TableCell],
+        rows: &[Vec<TableCell>],
+        column_count: usize,
+    ) -> Vec<TableColumnMetrics> {
+        let mut metrics = Vec::with_capacity(column_count);
+        for column in 0..column_count {
+            let header_cell = &header[column];
+            let header_plain = header_cell.plain_text();
+            let header_token_width = Self::longest_token_width(&header_plain);
+            let mut max_width = Self::cell_display_width(header_cell);
+            let mut body_token_width = 0usize;
+            let mut body_token_count = 0usize;
+            let mut long_body_token_count = 0usize;
+            let mut total_words = 0usize;
+            let mut total_cells = 0usize;
+            let mut total_cell_width = 0usize;
+
+            for row in rows {
+                let cell = &row[column];
+                max_width = max_width.max(Self::cell_display_width(cell));
+                let plain = cell.plain_text();
+                let mut word_count = 0;
+                for token in plain.split_whitespace() {
+                    let token_width = token.width();
+                    body_token_width = body_token_width.max(token_width);
+                    long_body_token_count += usize::from(Self::is_token_heavy_token(token));
+                    word_count += 1;
+                }
+                if word_count > 0 {
+                    body_token_count += word_count;
+                    total_words += word_count;
+                    total_cells += 1;
+                    total_cell_width += plain.width();
+                }
+            }
+
+            let avg_words_per_cell = if total_cells == 0 {
+                header_plain.split_whitespace().count() as f64
+            } else {
+                total_words as f64 / total_cells as f64
+            };
+            let avg_cell_width = if total_cells == 0 {
+                header_plain.width() as f64
+            } else {
+                total_cell_width as f64 / total_cells as f64
+            };
+            let kind = if long_body_token_count > 0
+                && long_body_token_count >= body_token_count.saturating_sub(long_body_token_count)
+            {
+                TableColumnKind::TokenHeavy
+            } else if avg_words_per_cell >= 4.0 || avg_cell_width >= 28.0 {
+                TableColumnKind::Narrative
+            } else {
+                TableColumnKind::Compact
+            };
+
+            metrics.push(TableColumnMetrics {
+                max_width,
+                header_token_width,
+                body_token_width,
+                kind,
+            });
+        }
+
+        metrics
+    }
+
+    fn preferred_column_floor(metrics: &TableColumnMetrics, min_column_width: usize) -> usize {
+        let token_target = match metrics.kind {
+            TableColumnKind::Narrative | TableColumnKind::TokenHeavy => 16,
+            TableColumnKind::Compact => metrics
+                .header_token_width
+                .max(metrics.body_token_width.min(16)),
+        };
+        token_target.max(min_column_width).min(metrics.max_width)
+    }
+
+    fn shrink_columns(
+        widths: &mut [usize],
+        floors: &[usize],
+        metrics: &[TableColumnMetrics],
+        mut amount: usize,
+    ) -> usize {
+        for kind in [
+            TableColumnKind::TokenHeavy,
+            TableColumnKind::Narrative,
+            TableColumnKind::Compact,
+        ] {
+            let slack_total = widths
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| metrics[*index].kind == kind)
+                .map(|(index, width)| width.saturating_sub(floors[index]))
+                .sum::<usize>();
+            let to_remove = amount.min(slack_total);
+            if to_remove == 0 {
+                continue;
+            }
+
+            let mut low = 0;
+            let mut high = widths
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| metrics[*index].kind == kind)
+                .map(|(index, width)| width.saturating_sub(floors[index]))
+                .max()
+                .unwrap_or(0);
+            while low < high {
+                let cap = low + (high - low) / 2;
+                let removed = widths
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| metrics[*index].kind == kind)
+                    .map(|(index, width)| width.saturating_sub(floors[index]).saturating_sub(cap))
+                    .sum::<usize>();
+                if removed > to_remove {
+                    low = cap + 1;
+                } else {
+                    high = cap;
+                }
+            }
+
+            let cap = low;
+            let mut removed = 0;
+            for (index, width) in widths.iter_mut().enumerate() {
+                if metrics[index].kind != kind {
+                    continue;
+                }
+                let reduction = width.saturating_sub(floors[index]).saturating_sub(cap);
+                *width -= reduction;
+                removed += reduction;
+            }
+
+            let mut remainder = to_remove - removed;
+            for (index, width) in widths.iter_mut().enumerate() {
+                if remainder == 0 {
+                    break;
+                }
+                if metrics[index].kind == kind && width.saturating_sub(floors[index]) == cap {
+                    *width -= 1;
+                    remainder -= 1;
+                }
+            }
+
+            amount -= to_remove;
+            if amount == 0 {
+                break;
+            }
+        }
+
+        amount
+    }
+
+    fn render_table_separator(
+        column_widths: &[usize],
+        separator_char: char,
+        style: Style,
+    ) -> Line<'static> {
+        let segment_char = separator_char.to_string();
+        let gap = " ".repeat(TABLE_COLUMN_GAP);
+        let text = column_widths
+            .iter()
+            .map(|width| segment_char.repeat(*width + (TABLE_CELL_PADDING * 2)))
+            .collect::<Vec<_>>()
+            .join(&gap);
+        Line::from(Span::styled(text, style))
+    }
+
+    fn render_table_row(
+        &self,
+        row: &[TableCell],
+        column_widths: &[usize],
+        alignments: &[Alignment],
+        row_style: Style,
+    ) -> Vec<Line<'static>> {
+        let wrapped_cells: Vec<Vec<Line<'static>>> = row
+            .iter()
+            .zip(column_widths)
+            .map(|(cell, width)| self.wrap_cell(cell, *width))
+            .collect();
+        let row_height = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1);
+
+        let mut output = Vec::with_capacity(row_height);
+        for row_line in 0..row_height {
+            let Some(last_visible_column) = wrapped_cells.iter().rposition(|lines| {
+                lines
+                    .get(row_line)
+                    .is_some_and(|line| Self::line_display_width(line) > 0)
+            }) else {
+                output.push(Line::default());
+                continue;
+            };
+
+            let mut spans = Vec::new();
+            for (column, width) in column_widths
+                .iter()
+                .enumerate()
+                .take(last_visible_column + 1)
+            {
+                spans.push(Span::raw(" ".repeat(TABLE_CELL_PADDING)));
+                let mut line = wrapped_cells[column]
+                    .get(row_line)
+                    .cloned()
+                    .unwrap_or_default();
+                for span in &mut line.spans {
+                    span.style = span.style.patch(row_style);
+                }
+                let line_width = Self::line_display_width(&line);
+                let remaining = width.saturating_sub(line_width);
+                let (left_padding, right_padding) = match alignments[column] {
+                    Alignment::Left | Alignment::None => (0, remaining),
+                    Alignment::Center => (remaining / 2, remaining - (remaining / 2)),
+                    Alignment::Right => (remaining, 0),
+                };
+                if left_padding > 0 {
+                    spans.push(Span::raw(" ".repeat(left_padding)));
+                }
+                spans.append(&mut line.spans);
+                let is_last_column = column == last_visible_column;
+                if right_padding > 0 && !is_last_column {
+                    spans.push(Span::raw(" ".repeat(right_padding)));
+                }
+                if !is_last_column {
+                    spans.push(Span::raw(" ".repeat(TABLE_CELL_PADDING)));
+                    spans.push(Span::raw(" ".repeat(TABLE_COLUMN_GAP)));
+                }
+            }
+            output.push(Line::from(spans));
+        }
+
+        output
+    }
+
+    fn render_table_pipe_fallback(
+        &self,
+        header: &[TableCell],
+        rows: &[Vec<TableCell>],
+        alignments: &[Alignment],
+    ) -> Vec<Line<'static>> {
+        let mut output = vec![
+            Self::row_to_pipe_line(header),
+            Line::from(Self::alignments_to_pipe_delimiter(alignments)),
+        ];
+        output.extend(rows.iter().map(|row| Self::row_to_pipe_line(row)));
+        output
+    }
+
+    fn row_to_pipe_line(row: &[TableCell]) -> Line<'static> {
+        let mut spans = vec!["|".into()];
+        for cell in row {
+            spans.push(" ".into());
+            for (line_index, line) in cell.lines.iter().enumerate() {
+                if line_index > 0 {
+                    spans.push(" ".into());
+                }
+                for span in &line.spans {
+                    spans.push(Span::styled(span.content.replace('|', "\\|"), span.style));
+                }
+            }
+            spans.push(" |".into());
+        }
+        Line::from(spans)
+    }
+
+    fn alignments_to_pipe_delimiter(alignments: &[Alignment]) -> String {
+        let mut output = String::from("|");
+        for alignment in alignments {
+            let segment = match alignment {
+                Alignment::Left => ":---",
+                Alignment::Center => ":---:",
+                Alignment::Right => "---:",
+                Alignment::None => "---",
+            };
+            output.push_str(segment);
+            output.push('|');
+        }
+        output
+    }
+
+    fn wrap_cell(&self, cell: &TableCell, width: usize) -> Vec<Line<'static>> {
+        if cell.lines.is_empty() {
+            return vec![Line::default()];
+        }
+        let mut wrapped = Vec::new();
+        for source_line in &cell.lines {
+            let rendered = word_wrap_line_grapheme_safe(source_line, width);
+            if rendered.is_empty() {
+                wrapped.push(Line::default());
+            } else {
+                wrapped.extend(rendered);
+            }
+        }
+        if wrapped.is_empty() {
+            wrapped.push(Line::default());
+        }
+        wrapped
+    }
+
+    fn is_spillover_row(row: &TableBodyRow, _next_row: Option<&TableBodyRow>) -> bool {
+        !row.has_table_pipe_syntax && Self::first_non_empty_only_text(&row.cells).is_some()
+    }
+
+    fn spillover_row_lines(row: &TableBodyRow) -> Vec<Line<'static>> {
+        if !row.has_table_pipe_syntax
+            && let Some(cell) = row.cells.first()
+            && Self::first_non_empty_only_text(&row.cells).is_some()
+        {
+            return cell.lines.clone();
+        }
+        vec![Self::row_to_pipe_line(&row.cells)]
+    }
+
+    fn first_non_empty_only_text(row: &[TableCell]) -> Option<String> {
+        let first = row.first()?.plain_text();
+        if first.trim().is_empty() {
+            return None;
+        }
+        row[1..]
+            .iter()
+            .all(|cell| cell.plain_text().trim().is_empty())
+            .then_some(first)
+    }
+
+    fn spans_display_width(spans: &[Span<'_>]) -> usize {
+        spans.iter().map(|span| span.content.width()).sum()
+    }
+
+    fn line_display_width(line: &Line<'_>) -> usize {
+        Self::spans_display_width(&line.spans)
+    }
+
+    fn cell_display_width(cell: &TableCell) -> usize {
+        cell.lines
+            .iter()
+            .map(Self::line_display_width)
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn longest_token_width(text: &str) -> usize {
+        text.split_whitespace().map(str::width).max().unwrap_or(0)
+    }
+
+    fn is_token_heavy_token(token: &str) -> bool {
+        token.width() >= 20
+            && (token.is_ascii()
+                || token.contains('/')
+                || token.contains('\\')
+                || token.contains("::"))
+    }
+
     fn push_inline_style(&mut self, style: Style) {
         let current = self.inline_styles.last().copied().unwrap_or_default();
         let merged = current.patch(style);
@@ -434,9 +1332,15 @@ where
 
     fn pop_link(&mut self) {
         if let Some(link) = self.link.take() {
-            self.push_span(" (".into());
-            self.push_span(Span::styled(link, self.styles.link));
-            self.push_span(")".into());
+            if self.in_table_cell() {
+                self.push_span_to_table_cell(" (".into());
+                self.push_span_to_table_cell(Span::styled(link, self.styles.link));
+                self.push_span_to_table_cell(")".into());
+            } else {
+                self.push_span(" (".into());
+                self.push_span(Span::styled(link, self.styles.link));
+                self.push_span(")".into());
+            }
         }
     }
 
@@ -466,13 +1370,27 @@ where
         }
     }
 
+    fn is_blockquote_active(&self) -> bool {
+        self.indent_stack
+            .iter()
+            .any(|context| context.prefix.iter().any(|span| span.content.contains('>')))
+    }
+
+    fn push_prewrapped_line(&mut self, mut line: Line<'static>, pending_marker_line: bool) {
+        self.flush_current_line();
+        let style = if self.is_blockquote_active() {
+            self.styles.blockquote.patch(line.style)
+        } else {
+            line.style
+        };
+        let mut spans = self.prefix_spans(pending_marker_line);
+        spans.append(&mut line.spans);
+        self.text.lines.push(Line::from(spans).style(style));
+    }
+
     fn push_line(&mut self, line: Line<'static>) {
         self.flush_current_line();
-        let blockquote_active = self
-            .indent_stack
-            .iter()
-            .any(|ctx| ctx.prefix.iter().any(|s| s.content.contains('>')));
-        let style = if blockquote_active {
+        let style = if self.is_blockquote_active() {
             self.styles.blockquote
         } else {
             line.style
@@ -564,6 +1482,7 @@ mod markdown_render_tests {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use ratatui::style::Stylize;
     use ratatui::text::Text;
 
     fn lines_to_strings(text: &Text<'_>) -> Vec<String> {
@@ -693,5 +1612,249 @@ mod tests {
             lines,
             vec!["fn main() { println!(\"hi from a long line\"); }".to_string(),]
         );
+    }
+
+    type TestWriter<'a> = Writer<'a, std::iter::Empty<(Event<'a>, Range<usize>)>>;
+
+    fn make_cell(text: &str) -> TableCell {
+        let mut cell = TableCell::default();
+        cell.push_span(Span::raw(text.to_string()));
+        cell
+    }
+
+    fn make_body_row(cells: Vec<TableCell>, has_table_pipe_syntax: bool) -> TableBodyRow {
+        TableBodyRow {
+            cells,
+            has_table_pipe_syntax,
+        }
+    }
+
+    #[test]
+    fn normalize_row_pads_and_truncates() {
+        let mut short = vec![make_cell("one")];
+        TestWriter::normalize_row(&mut short, 3);
+        assert_eq!(
+            short,
+            vec![make_cell("one"), TableCell::default(), TableCell::default(),]
+        );
+
+        let mut long = vec![
+            make_cell("one"),
+            make_cell("two"),
+            make_cell("three"),
+            make_cell("ignored"),
+        ];
+        TestWriter::normalize_row(&mut long, 3);
+        assert_eq!(
+            long,
+            vec![make_cell("one"), make_cell("two"), make_cell("three")]
+        );
+    }
+
+    #[test]
+    fn column_widths_fit_budget_or_fall_back_below_minimum() {
+        let metrics = [
+            TableColumnMetrics {
+                max_width: 40,
+                header_token_width: 4,
+                body_token_width: 40,
+                kind: TableColumnKind::TokenHeavy,
+            },
+            TableColumnMetrics {
+                max_width: 30,
+                header_token_width: 11,
+                body_token_width: 10,
+                kind: TableColumnKind::Narrative,
+            },
+            TableColumnMetrics {
+                max_width: 8,
+                header_token_width: 6,
+                body_token_width: 8,
+                kind: TableColumnKind::Compact,
+            },
+        ];
+
+        let widths =
+            TestWriter::compute_column_widths(&metrics, Some(48)).expect("table should fit");
+        assert_eq!(widths.iter().sum::<usize>(), 48);
+        assert!(widths.iter().all(|width| *width >= 3));
+        assert_eq!(TestWriter::compute_column_widths(&metrics, Some(8)), None);
+    }
+
+    #[test]
+    fn wrap_cell_preserves_hard_breaks_styles_and_display_width() {
+        let mut cell = TableCell::default();
+        cell.push_span(Span::styled("中中", Style::new().bold()));
+        cell.hard_break();
+        cell.push_span(Span::styled("👨‍💻", Style::new().italic()));
+        cell.push_span(Span::styled(" code", Style::new().cyan()));
+
+        let writer = TestWriter::new("", std::iter::empty(), Some(80), None);
+        let wrapped = writer.wrap_cell(&cell, 4);
+        let rendered = wrapped
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(rendered, vec!["中中", "👨‍💻", "code"]);
+        assert!(wrapped.iter().all(|line| line.width() <= 4));
+        assert!(
+            wrapped[0].spans[0]
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD)
+        );
+        assert!(
+            wrapped[1].spans[0]
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::ITALIC)
+        );
+        assert_eq!(
+            wrapped[2].spans[0].style.fg,
+            Some(ratatui::style::Color::Cyan)
+        );
+    }
+
+    #[test]
+    fn spillover_classification_is_table_driven() {
+        struct Case {
+            name: &'static str,
+            row: TableBodyRow,
+            next: Option<TableBodyRow>,
+            expected: bool,
+        }
+
+        let cases = [
+            Case {
+                name: "plain paragraph",
+                row: make_body_row(vec![make_cell("ordinary paragraph")], false),
+                next: None,
+                expected: true,
+            },
+            Case {
+                name: "explicit sparse pipe row",
+                row: make_body_row(vec![make_cell("sparse value")], true),
+                next: None,
+                expected: false,
+            },
+            Case {
+                name: "html content",
+                row: make_body_row(vec![make_cell("<div>content</div>"), make_cell("")], false),
+                next: None,
+                expected: true,
+            },
+            Case {
+                name: "explicit sparse html row",
+                row: make_body_row(vec![make_cell("<div>content</div>"), make_cell("")], true),
+                next: None,
+                expected: false,
+            },
+            Case {
+                name: "html label before block",
+                row: make_body_row(vec![make_cell("HTML block:"), make_cell("")], false),
+                next: Some(make_body_row(
+                    vec![make_cell("<div>content</div>"), make_cell("")],
+                    false,
+                )),
+                expected: true,
+            },
+            Case {
+                name: "ordinary sparse label",
+                row: make_body_row(vec![make_cell("Status:"), make_cell("")], true),
+                next: Some(make_body_row(vec![make_cell("ready"), make_cell("")], true)),
+                expected: false,
+            },
+        ];
+
+        for case in cases {
+            assert_eq!(
+                TestWriter::is_spillover_row(&case.row, case.next.as_ref()),
+                case.expected,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn column_compression_prefers_token_heavy_then_narrative_then_compact() {
+        let metrics = [
+            TableColumnMetrics {
+                max_width: 40,
+                header_token_width: 4,
+                body_token_width: 40,
+                kind: TableColumnKind::TokenHeavy,
+            },
+            TableColumnMetrics {
+                max_width: 30,
+                header_token_width: 11,
+                body_token_width: 10,
+                kind: TableColumnKind::Narrative,
+            },
+            TableColumnMetrics {
+                max_width: 8,
+                header_token_width: 6,
+                body_token_width: 8,
+                kind: TableColumnKind::Compact,
+            },
+        ];
+
+        assert_eq!(
+            TestWriter::compute_column_widths(&metrics, Some(48)),
+            Some(vec![16, 24, 8])
+        );
+    }
+
+    #[test]
+    fn long_cjk_prose_is_classified_as_narrative() {
+        let header = vec![make_cell("说明")];
+        let rows = vec![vec![make_cell(
+            "这是一段没有空格但仍应按照自然语言说明列处理的中文内容",
+        )]];
+
+        let metrics = TestWriter::collect_table_column_metrics(&header, &rows, 1);
+        assert_eq!(metrics[0].kind, TableColumnKind::Narrative);
+    }
+
+    #[test]
+    fn key_value_switch_requires_systemic_fragmentation() {
+        let metrics = [TableColumnMetrics {
+            max_width: 16,
+            header_token_width: 3,
+            body_token_width: 16,
+            kind: TableColumnKind::Compact,
+        }];
+        let occasional = vec![
+            vec![make_cell("ok")],
+            vec![make_cell("verylongvalue")],
+            vec![make_cell("done")],
+        ];
+        let systemic = vec![
+            vec![make_cell("firstlongvalue")],
+            vec![make_cell("secondlongvalue")],
+            vec![make_cell("done")],
+        ];
+
+        assert!(!table_key_value::should_render_records(
+            &occasional,
+            &[4],
+            &metrics
+        ));
+        assert!(!table_key_value::should_render_records(
+            &[vec![make_cell("verylongvalue")]],
+            &[4],
+            &metrics
+        ));
+        assert!(table_key_value::should_render_records(
+            &systemic,
+            &[4],
+            &metrics
+        ));
     }
 }

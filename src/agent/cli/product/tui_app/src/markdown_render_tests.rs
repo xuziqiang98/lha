@@ -1,11 +1,33 @@
 use pretty_assertions::assert_eq;
+use ratatui::style::Color;
+use ratatui::style::Modifier;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
+use unicode_width::UnicodeWidthStr;
 
 use crate::product::tui_app::markdown_render::render_markdown_text;
+use crate::product::tui_app::markdown_render::render_markdown_text_with_width;
 use insta::assert_snapshot;
+
+fn plain_lines(text: &Text<'_>) -> Vec<String> {
+    text.lines.iter().map(plain_line).collect()
+}
+
+fn plain_line(line: &Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+fn display_column(line: &str, needle: &str) -> usize {
+    let byte_index = line
+        .find(needle)
+        .unwrap_or_else(|| panic!("expected {needle:?} in {line:?}"));
+    line[..byte_index].width()
+}
 
 #[test]
 fn empty() {
@@ -1019,4 +1041,298 @@ fn nested_item_continuation_paragraph_is_indented() {
         Line::from_iter(["2. ".light_blue(), "C".into()]),
     ]);
     assert_eq!(text, expected);
+}
+
+#[test]
+fn markdown_table_grid_snapshot() {
+    let md = r#"| Left | Center | Right |
+| :--- | :----: | ----: |
+| alpha | 12 | ready |
+| 中文 | 7 | 完成 |
+"#;
+    let text = render_markdown_text_with_width(md, Some(80));
+
+    assert_snapshot!("markdown_table_grid", plain_lines(&text).join("\n"));
+}
+
+#[test]
+fn markdown_table_long_path_width_allocation_snapshot() {
+    let md = r#"| Unit | Files | Adds | Notes |
+| --- | --- | ---: | --- |
+| Suggestion engine | /Users/example/lha/src/agent/runtime/next_prompt_suggestion_tests.rs:104 | 704 | Sampling workflow remains readable while the path wraps first. |
+| Context isolation | /Users/example/lha/src/core/context/contextual_user_message_tests.rs:88 | 54 | Ordinary prose keeps a useful width. |
+"#;
+    let text = render_markdown_text_with_width(md, Some(72));
+
+    assert_snapshot!(
+        "markdown_table_long_path",
+        plain_lines(&text).join("\n")
+    );
+}
+
+#[test]
+fn markdown_table_narrow_key_value_snapshot() {
+    let md = r#"| Name | Owner | Status | Description |
+| --- | --- | --- | --- |
+| renderer | tui | ready | Preserves every value when the terminal is extremely narrow. |
+| replay | history | done | Recomputes the layout from the original Markdown source. |
+"#;
+    let text = render_markdown_text_with_width(md, Some(22));
+
+    assert_snapshot!(
+        "markdown_table_narrow_key_value",
+        plain_lines(&text).join("\n")
+    );
+}
+
+#[test]
+fn markdown_table_spillover_snapshot() {
+    let md = r#"| Name | State |
+| --- | --- |
+| renderer | ready |
+Ordinary paragraph after the table.
+| later | pipe |
+HTML block:
+<div>visible html</div>
+"#;
+    let text = render_markdown_text(md);
+    let rendered = plain_lines(&text).join("\n");
+
+    assert!(
+        rendered.find("Ordinary paragraph").expect("paragraph")
+            < rendered.find("| later | pipe |").expect("later pipe row")
+    );
+    assert!(
+        rendered.find("| later | pipe |").expect("later pipe row")
+            < rendered.find("HTML block:").expect("HTML label")
+    );
+    assert_snapshot!("markdown_table_spillover", rendered);
+}
+
+#[test]
+fn markdown_table_keeps_grid_for_one_fragmented_compact_value() {
+    let md = r#"| Key | Date | State |
+| --- | --- | --- |
+| short | 2025-01-01 | Ready |
+| verylongidentifier | 2025-02-02 | Ready |
+| final | 2025-03-03 | Done |
+"#;
+    let lines = plain_lines(&render_markdown_text_with_width(md, Some(40)));
+
+    assert!(lines.iter().any(|line| line.contains('━')));
+    assert!(lines.iter().any(|line| line.contains('─')));
+    assert!(lines.iter().any(|line| line.contains("verylong")));
+}
+
+#[test]
+fn markdown_table_uses_records_for_systemic_fragmentation() {
+    let md = r#"| Key | Notes |
+| --- | --- |
+| firstlongid | A readable explanatory sentence for this row. |
+| secondlongid | Another readable explanatory sentence for this row. |
+| short | A final readable explanatory sentence for this row. |
+"#;
+    let lines = plain_lines(&render_markdown_text_with_width(md, Some(17)));
+    let rendered = lines.join("\n");
+
+    assert!(!rendered.contains('━'));
+    assert!(rendered.contains("firstlongid"));
+    assert!(rendered.contains("secondlongid"));
+    assert!(rendered.contains("explanatory"));
+}
+
+#[test]
+fn markdown_table_extremely_narrow_records_do_not_lose_content() {
+    let md = r#"| One | Two | Three | Four |
+| --- | --- | --- | --- |
+| alpha | beta | gamma | delta |
+"#;
+    let text = render_markdown_text_with_width(md, Some(3));
+    let rendered = plain_lines(&text).join("\n");
+    let compact = rendered
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+
+    for expected in [
+        "One", "alpha", "Two", "beta", "Three", "gamma", "Four", "delta",
+    ] {
+        assert!(
+            compact.contains(expected),
+            "missing {expected:?} from {rendered:?}"
+        );
+    }
+    assert!(!rendered.contains('━'));
+    assert!(text.lines.iter().all(|line| line.width() <= 3));
+}
+
+#[test]
+fn markdown_table_preserves_header_separator_and_inline_styles() {
+    let md = r#"| *Kind* | Content |
+| --- | --- |
+| rich | **bold** *italic* ~~gone~~ `code` [docs](https://example.com) |
+"#;
+    let text = render_markdown_text(md);
+
+    let header_span = text.lines[0]
+        .spans
+        .iter()
+        .find(|span| span.content.contains("Kind"))
+        .expect("table header span");
+    assert!(header_span.style.add_modifier.contains(Modifier::BOLD));
+    assert!(header_span.style.add_modifier.contains(Modifier::ITALIC));
+    assert!(
+        text.lines[1].spans[0]
+            .style
+            .add_modifier
+            .contains(Modifier::DIM)
+    );
+
+    let styled_spans = text
+        .lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .collect::<Vec<_>>();
+    assert!(styled_spans.iter().any(|span| {
+        span.content == "bold" && span.style.add_modifier.contains(Modifier::BOLD)
+    }));
+    assert!(styled_spans.iter().any(|span| {
+        span.content == "italic" && span.style.add_modifier.contains(Modifier::ITALIC)
+    }));
+    assert!(styled_spans.iter().any(|span| {
+        span.content == "gone" && span.style.add_modifier.contains(Modifier::CROSSED_OUT)
+    }));
+    assert!(
+        styled_spans
+            .iter()
+            .any(|span| span.content == "code" && span.style.fg == Some(Color::Cyan))
+    );
+    assert!(styled_spans.iter().any(|span| {
+        span.content == "https://example.com"
+            && span.style.add_modifier.contains(Modifier::UNDERLINED)
+    }));
+
+    let narrow = render_markdown_text_with_width(md, Some(6));
+    let narrow_header = narrow
+        .lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .find(|span| span.content.contains("Kind"))
+        .expect("key-value header span");
+    assert!(
+        narrow_header
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD | Modifier::ITALIC)
+    );
+}
+
+#[test]
+fn markdown_table_aligns_cjk_emoji_and_combined_emoji_by_display_width() {
+    let md = r#"| 名称 | 图标 | 状态 |
+| --- | --- | --- |
+| 中文 | 🧪 | ready |
+| family | 👨‍👩‍👧‍👦 | 完成 |
+"#;
+    let lines = plain_lines(&render_markdown_text(md));
+    let header = lines
+        .iter()
+        .find(|line| line.contains("名称"))
+        .expect("header");
+    let first = lines
+        .iter()
+        .find(|line| line.contains("🧪"))
+        .expect("emoji row");
+    let second = lines
+        .iter()
+        .find(|line| line.contains("👨‍👩‍👧‍👦"))
+        .unwrap_or_else(|| panic!("combined emoji row: {lines:?}"));
+
+    assert_eq!(
+        [
+            display_column(header, "图标"),
+            display_column(first, "🧪"),
+            display_column(second, "👨‍👩‍👧‍👦"),
+        ],
+        [display_column(header, "图标"); 3]
+    );
+    assert_eq!(
+        [
+            display_column(header, "状态"),
+            display_column(first, "ready"),
+            display_column(second, "完成"),
+        ],
+        [display_column(header, "状态"); 3]
+    );
+}
+
+#[test]
+fn markdown_table_reserves_blockquote_and_list_prefix_width() {
+    let quoted = render_markdown_text_with_width(
+        "> | A | B |\n> | --- | --- |\n> | 中文 | 🚀 |\n",
+        Some(24),
+    );
+    assert!(
+        quoted
+            .lines
+            .iter()
+            .all(|line| line.width() <= 24 && plain_line(line).starts_with("> "))
+    );
+
+    let listed = render_markdown_text_with_width(
+        "- Results:\n\n  | A | B |\n  | --- | --- |\n  | 中文 | 🚀 |\n",
+        Some(28),
+    );
+    let listed_lines = plain_lines(&listed);
+    let table_lines = listed
+        .lines
+        .iter()
+        .zip(&listed_lines)
+        .filter(|(_, line)| line.contains('━') || line.contains("中文"))
+        .collect::<Vec<_>>();
+    assert!(!table_lines.is_empty());
+    assert!(
+        table_lines
+            .iter()
+            .all(|(line, text)| line.width() <= 28 && text.starts_with("  "))
+    );
+}
+
+#[test]
+fn markdown_table_normalizes_row_lengths_and_preserves_pipes() {
+    let md = r#"| A | B | C |
+| --- | --- | --- |
+| one | two |
+| x | y | z | ignored |
+| a \| b | `c|d` | ok |
+"#;
+    let rendered = plain_lines(&render_markdown_text(md)).join("\n");
+
+    assert!(rendered.contains("one"));
+    assert!(rendered.contains("two"));
+    assert!(!rendered.contains("ignored"));
+    assert!(rendered.contains("a | b"));
+    assert!(rendered.contains("c|d"), "{rendered:?}");
+}
+
+#[test]
+fn markdown_table_inside_code_fence_stays_code() {
+    let md = "```markdown\n| A | B |\n| --- | --- |\n| 1 | 2 |\n```\n";
+    let rendered = plain_lines(&render_markdown_text(md)).join("\n");
+
+    assert!(rendered.contains("| A | B |"));
+    assert!(rendered.contains("| --- | --- |"));
+    assert!(!rendered.contains('━'));
+}
+
+#[test]
+fn inline_code_pipe_outside_table_is_unchanged() {
+    let text = render_markdown_text("Use `a|b` here.");
+    assert_eq!(plain_lines(&text), vec!["Use a|b here."]);
+    let code = text.lines[0]
+        .spans
+        .iter()
+        .find(|span| span.content == "a|b")
+        .expect("inline code span");
+    assert_eq!(code.style.fg, Some(Color::Cyan));
 }

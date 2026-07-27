@@ -907,6 +907,194 @@ async fn streaming_cjk_deltas_preserve_terminal_grid_when_bottom_anchor_shifts_r
 }
 
 #[tokio::test]
+async fn streaming_table_chunks_match_static_render() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let width = 80;
+    let header = "| Name | Icon | State |\n";
+    let delimiter = "| --- | :---: | ---: |\n";
+    let first_row = "| 中文 | 🧪 | ready |\n";
+    let second_row = "| family | 👨‍👩‍👧‍👦 | 完成 |\n";
+    let source = format!("{header}{delimiter}{first_row}{second_row}");
+
+    chat.on_agent_message_delta(header.to_string());
+    chat.on_commit_tick();
+    let header_only = chat
+        .transcript_live_tail_for_mode(width, TranscriptRenderMode::Display)
+        .expect("header-only live tail");
+    assert!(
+        lines_to_strings(&header_only.lines)
+            .iter()
+            .any(|line| line.contains("| Name | Icon | State |"))
+    );
+
+    chat.on_agent_message_delta(delimiter.to_string());
+    chat.on_commit_tick();
+    let parsed_header = chat
+        .transcript_live_tail_for_mode(width, TranscriptRenderMode::Display)
+        .expect("parsed table header");
+    assert!(
+        lines_to_strings(&parsed_header.lines)
+            .iter()
+            .any(|line| line.contains('━'))
+    );
+
+    chat.on_agent_message_delta(first_row.to_string());
+    chat.on_commit_tick();
+    chat.on_agent_message_delta(second_row.to_string());
+    chat.on_commit_tick();
+
+    let live = chat
+        .transcript_live_tail_for_mode(width, TranscriptRenderMode::Display)
+        .expect("complete streaming table");
+    let expected = AgentMessageCell::new_markdown(source, true).display_lines(width);
+    assert_eq!(live.lines, expected);
+
+    chat.flush_answer_stream_with_separator();
+    let committed = drain_events(&mut rx)
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .find(|cell| lines_to_single_string(&cell.display_lines(width)).contains("family"))
+        .expect("committed table cell");
+    assert_eq!(committed.display_lines(width), expected);
+}
+
+#[tokio::test]
+async fn streaming_table_reflows_wide_narrow_wide() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let source = r#"| Name | Owner | Status | Description |
+| --- | --- | --- | --- |
+| renderer | tui | ready | The live table recomputes its layout after every resize. |
+"#;
+    chat.on_agent_message_delta(source.to_string());
+    chat.on_commit_tick();
+
+    let first_wide = chat
+        .transcript_live_tail_for_mode(96, TranscriptRenderMode::Display)
+        .expect("wide table")
+        .lines;
+    let narrow = chat
+        .transcript_live_tail_for_mode(24, TranscriptRenderMode::Display)
+        .expect("narrow table")
+        .lines;
+    let second_wide = chat
+        .transcript_live_tail_for_mode(96, TranscriptRenderMode::Display)
+        .expect("wide table after resize")
+        .lines;
+
+    assert_eq!(second_wide, first_wide);
+    assert!(
+        lines_to_strings(&first_wide)
+            .iter()
+            .any(|line| line.contains('━'))
+    );
+    assert!(
+        !lines_to_strings(&narrow)
+            .iter()
+            .any(|line| line.contains('━'))
+    );
+    let narrow_text = lines_to_single_string(&narrow);
+    for expected in ["Name", "renderer", "Description", "recomputes"] {
+        assert!(
+            narrow_text.contains(expected),
+            "narrow table lost {expected:?}: {narrow_text:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn streaming_table_growth_preserves_bottom_anchor_vt100_grid() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let width = 44;
+    let height = 16;
+    chat.insert_transcript_cell(Arc::new(AgentMessageCell::new_markdown(
+        "稳定历史行保持完整。".to_string(),
+        true,
+    )));
+    chat.on_task_started();
+    chat.on_agent_message_delta(
+        "| Name | Icon | State |\n| --- | --- | --- |\n| 一 | 🧪 | ready |\n".to_string(),
+    );
+    chat.on_commit_tick();
+
+    let backend = AuditedVT100Backend::new(width, height);
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(backend)
+        .expect("audited terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    render_chat_to_audited_terminal(&chat, &mut terminal);
+    let before = terminal.last_frame_buffer().clone();
+    let stable_row_before =
+        buffer_row_containing(&before, "稳定历史行保持完整。").unwrap_or_else(|| {
+            panic!(
+                "stable row before table growth:\n{}",
+                buffer_to_string(&before)
+            )
+        });
+
+    terminal.backend_mut().clear_frames();
+    chat.on_agent_message_delta("| 二 | 🚀 | running |\n| 三 | 🌟 | done |\n".to_string());
+    chat.on_commit_tick();
+    render_chat_to_audited_terminal(&chat, &mut terminal);
+    let after = terminal.last_frame_buffer().clone();
+    let stable_row_after =
+        buffer_row_containing(&after, "稳定历史行保持完整。").unwrap_or_else(|| {
+            panic!(
+                "stable row after table growth:\n{}",
+                buffer_to_string(&after)
+            )
+        });
+
+    assert!(
+        stable_row_after < stable_row_before,
+        "expected bottom anchoring to move the stable row upward: before={stable_row_before}, \
+         after={stable_row_after}\n{}",
+        buffer_to_string(&after)
+    );
+    assert!(buffer_row_containing(&after, "三").is_some());
+    assert_sparse_frame("streaming table growth", &before, &after, &terminal);
+}
+
+#[tokio::test]
+async fn streaming_table_right_edge_preserves_vt100_grid() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let width = 20;
+    let height = 12;
+    chat.on_task_started();
+    chat.on_agent_message_delta(
+        "| AAAAAA | BBBBBB |\n| --- | --- |\n| 中中中 | 🚀🚀🚀 |\n".to_string(),
+    );
+    chat.on_commit_tick();
+
+    let backend = AuditedVT100Backend::new(width, height);
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(backend)
+        .expect("audited terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    render_chat_to_audited_terminal(&chat, &mut terminal);
+    let before = terminal.last_frame_buffer().clone();
+    let separator_row = buffer_row_containing(&before, "━━━━").expect("table header separator row");
+    assert_eq!(before[(width - 1, separator_row)].symbol(), "━");
+    let wide_row = buffer_row_containing(&before, "中中中").expect("wide table row");
+    let wide_starts = (0..width)
+        .filter(|x| before[(*x, wide_row)].symbol() == "中")
+        .collect::<Vec<_>>();
+    assert_eq!(wide_starts.len(), 3);
+    assert!(
+        wide_starts
+            .iter()
+            .all(|x| before[(x + 1, wide_row)].symbol() == " "),
+        "expected wide-cell trailing placeholders:\n{}",
+        buffer_to_string(&before),
+    );
+
+    terminal.backend_mut().clear_frames();
+    chat.on_agent_message_delta("| 文文文 | 🧪🧪🧪 |\n".to_string());
+    chat.on_commit_tick();
+    render_chat_to_audited_terminal(&chat, &mut terminal);
+    let after = terminal.last_frame_buffer().clone();
+
+    assert_sparse_frame("streaming table right edge", &before, &after, &terminal);
+}
+
+#[tokio::test]
 async fn finalizing_stream_does_not_repaint_stable_rows() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let width = 80;
