@@ -173,30 +173,53 @@ fn render_stacked_field(
     available_width: Option<usize>,
     label_style: Style,
 ) {
-    let leading_padding = available_width
-        .map(|width| FIELD_LEADING_PADDING.min(width.saturating_sub(1)))
-        .unwrap_or(FIELD_LEADING_PADDING);
-    let label_width = available_width
-        .map(|width| width.saturating_sub(leading_padding).max(1))
-        .unwrap_or_else(|| header_label_line(header, label_style).width().max(1));
     let label = header_label_line(header, label_style);
-    for label_line in word_wrap_line_grapheme_safe(&label, label_width) {
+    let (leading_padding, wrapped_label) = wrap_with_soft_indent(
+        available_width,
+        FIELD_LEADING_PADDING,
+        label.width().max(1),
+        |width| word_wrap_line_grapheme_safe(&label, width),
+    );
+    for label_line in wrapped_label {
         let mut spans = vec![Span::raw(" ".repeat(leading_padding))];
         spans.extend(label_line.spans);
         out.push(Line::from(spans));
     }
 
-    let value_indent = available_width
-        .map(|width| STACKED_VALUE_INDENT.min(width.saturating_sub(1)))
-        .unwrap_or(STACKED_VALUE_INDENT);
-    let value_width = available_width
-        .map(|width| width.saturating_sub(value_indent).max(1))
-        .unwrap_or_else(|| cell_width(value).max(1));
-    for value_line in wrap_cell(value, value_width) {
+    let (value_indent, wrapped_value) = wrap_with_soft_indent(
+        available_width,
+        STACKED_VALUE_INDENT,
+        cell_width(value).max(1),
+        |width| wrap_cell(value, width),
+    );
+    for value_line in wrapped_value {
         let mut spans = vec![Span::raw(" ".repeat(value_indent))];
         spans.extend(value_line.spans);
         out.push(Line::from(spans));
     }
+}
+
+fn wrap_with_soft_indent<F>(
+    available_width: Option<usize>,
+    preferred_indent: usize,
+    natural_width: usize,
+    mut wrap: F,
+) -> (usize, Vec<Line<'static>>)
+where
+    F: FnMut(usize) -> Vec<Line<'static>>,
+{
+    let Some(available_width) = available_width else {
+        return (preferred_indent, wrap(natural_width.max(1)));
+    };
+    let mut indent = preferred_indent.min(available_width.saturating_sub(1));
+    let mut wrapped = wrap(available_width.saturating_sub(indent).max(1));
+    let widest = widest_line_width(&wrapped);
+    let adjusted_indent = indent.min(available_width.saturating_sub(widest.min(available_width)));
+    if adjusted_indent < indent {
+        indent = adjusted_indent;
+        wrapped = wrap(available_width.saturating_sub(indent).max(1));
+    }
+    (indent, wrapped)
 }
 
 fn header_label_line(header: &TableCell, label_style: Style) -> Line<'static> {

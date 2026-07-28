@@ -959,6 +959,54 @@ async fn streaming_table_chunks_match_static_render() {
 }
 
 #[tokio::test]
+async fn streaming_table_raw_code_header_waits_for_delimiter_and_matches_static_render() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let width = 80;
+    let chunks = [
+        "| `",
+        "A|",
+        "B` | C |\n",
+        "| --- | --- |\n",
+        "| `x|y` | ok |\n",
+    ];
+    let mut source = String::new();
+
+    for (chunk_index, chunk) in chunks.into_iter().enumerate() {
+        source.push_str(chunk);
+        chat.on_agent_message_delta(chunk.to_string());
+        chat.on_commit_tick();
+        let live = chat
+            .transcript_live_tail_for_mode(width, TranscriptRenderMode::Display)
+            .expect("streaming raw-code table");
+        let rendered = lines_to_single_string(&live.lines);
+
+        assert!(
+            !rendered.contains('\u{e000}'),
+            "{chunk_index}: {rendered:?}"
+        );
+        assert_eq!(
+            rendered.contains('━'),
+            chunk_index >= 3,
+            "{chunk_index}: {rendered:?}"
+        );
+    }
+
+    let live = chat
+        .transcript_live_tail_for_mode(width, TranscriptRenderMode::Display)
+        .expect("complete raw-code table");
+    let expected = AgentMessageCell::new_markdown(source, true).display_lines(width);
+    assert_eq!(live.lines, expected);
+
+    chat.flush_answer_stream_with_separator();
+    let committed = drain_events(&mut rx)
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .find(|cell| lines_to_single_string(&cell.display_lines(width)).contains("x|y"))
+        .expect("committed raw-code table cell");
+    assert_eq!(committed.display_lines(width), expected);
+}
+
+#[tokio::test]
 async fn streaming_table_reflows_wide_narrow_wide() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     let source = r#"| Name | Owner | Status | Description |

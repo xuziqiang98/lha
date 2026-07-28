@@ -3462,6 +3462,35 @@ mod tests {
     }
 
     #[test]
+    fn markdown_agent_message_table_raw_code_reflows_wide_narrow_wide() {
+        let source = r#"| `Name|Kind` | Owner | Description |
+| --- | --- | --- |
+| `renderer|table` | tui | The table keeps raw code pipes through every layout. |
+"#;
+        let cell = AgentMessageCell::new_markdown(source.to_string(), true);
+
+        let first_wide = cell.display_lines(96);
+        let narrow = cell.display_lines(24);
+        let second_wide = cell.display_lines(96);
+
+        assert_eq!(second_wide, first_wide);
+        for (width, lines) in [(96, &first_wide), (24, &narrow)] {
+            let rendered = render_lines(lines).join("\n");
+            let code = lines
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .filter(|span| span.style.fg == Some(Color::Cyan))
+                .map(|span| span.content.as_ref())
+                .collect::<String>();
+            assert_eq!(code, "Name|Kindrenderer|table", "width {width}");
+            assert!(
+                !rendered.contains('\u{e000}'),
+                "width {width}: {rendered:?}"
+            );
+        }
+    }
+
+    #[test]
     fn markdown_agent_message_table_proposed_plan_uses_inner_width_and_styles() {
         let source = r#"| Step | Owner | Notes |
 | --- | --- | --- |

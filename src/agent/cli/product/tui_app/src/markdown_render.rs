@@ -3,23 +3,29 @@ use crate::product::tui_app::wrapping::RtOptions;
 use crate::product::tui_app::wrapping::word_wrap_line;
 use crate::product::tui_app::wrapping::word_wrap_line_grapheme_safe;
 use pulldown_cmark::Alignment;
+use pulldown_cmark::BrokenLink;
+use pulldown_cmark::BrokenLinkCallback;
 use pulldown_cmark::CodeBlockKind;
 use pulldown_cmark::CowStr;
 use pulldown_cmark::Event;
 use pulldown_cmark::HeadingLevel;
+use pulldown_cmark::OffsetIter;
 use pulldown_cmark::Options;
 use pulldown_cmark::Parser;
+use pulldown_cmark::RefDefs;
 use pulldown_cmark::Tag;
 use pulldown_cmark::TagEnd;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
-use std::borrow::Cow;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ops::Range;
 use unicode_width::UnicodeWidthStr;
 
 mod table_key_value;
+mod table_source;
 
 const TABLE_COLUMN_GAP: usize = 2;
 const TABLE_CELL_PADDING: usize = 1;
@@ -128,6 +134,7 @@ impl TableCell {
 struct TableBodyRow {
     cells: Vec<TableCell>,
     has_table_pipe_syntax: bool,
+    source_range: Range<usize>,
 }
 
 #[derive(Debug)]
@@ -137,6 +144,7 @@ struct TableState {
     rows: Vec<TableBodyRow>,
     current_row: Option<Vec<TableCell>>,
     current_row_has_table_pipe_syntax: bool,
+    current_row_source_range: Option<Range<usize>>,
     current_cell: Option<TableCell>,
     in_header: bool,
 }
@@ -149,6 +157,7 @@ impl TableState {
             rows: Vec::new(),
             current_row: None,
             current_row_has_table_pipe_syntax: false,
+            current_row_source_range: None,
             current_cell: None,
             in_header: false,
         }
@@ -183,65 +192,105 @@ pub fn render_markdown_text(input: &str) -> Text<'static> {
 pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>) -> Text<'static> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
-    let (parser_input, inline_code_pipe_sentinel) = mask_inline_code_pipes(input, options);
+    let (parser_input, inline_code_pipe_sentinel) = table_source::prepare_markdown(input, options);
     options.insert(Options::ENABLE_TABLES);
-    let parser = Parser::new_ext(parser_input.as_ref(), options).into_offset_iter();
-    let mut w = Writer::new(
+    render_prepared_markdown(
         parser_input.as_ref(),
-        parser,
         width,
         inline_code_pipe_sentinel,
-    );
+        options,
+    )
+}
+
+fn render_prepared_markdown(
+    input: &str,
+    width: Option<usize>,
+    inline_code_pipe_sentinel: Option<char>,
+    options: Options,
+) -> Text<'static> {
+    let parser = Parser::new_ext(input, options).into_offset_iter();
+    let mut w = Writer::new(input, parser, width, inline_code_pipe_sentinel);
     w.run();
     w.text
 }
 
-fn mask_inline_code_pipes(input: &str, options: Options) -> (Cow<'_, str>, Option<char>) {
-    let code_ranges = Parser::new_ext(input, options)
-        .into_offset_iter()
-        .filter_map(|(event, range)| {
-            matches!(event, Event::Code(_))
-                .then(|| {
-                    input
-                        .get(range.clone())
-                        .is_some_and(|source| source.contains('|'))
-                })
-                .filter(|contains_pipe| *contains_pipe)
-                .map(|_| range)
-        })
-        .collect::<Vec<_>>();
-    if code_ranges.is_empty() {
-        return (Cow::Borrowed(input), None);
-    }
+trait MarkdownEventIterator<'a>: Iterator<Item = (Event<'a>, Range<usize>)> {
+    // RefDefs is owned by the offset iterator, so access it without a self-referential borrow.
+    fn reference_definitions(&self) -> &RefDefs<'_>;
+}
 
-    let sentinel = (0xE000..=0xF8FF)
-        .chain(0xF0000..=0xFFFFD)
-        .filter_map(char::from_u32)
-        .find(|candidate| !input.contains(*candidate));
-    let Some(sentinel) = sentinel else {
-        return (Cow::Borrowed(input), None);
-    };
-
-    let mut output = String::with_capacity(input.len() + code_ranges.len());
-    let mut cursor = 0;
-    for range in code_ranges {
-        output.push_str(&input[cursor..range.start]);
-        for character in input[range.clone()].chars() {
-            output.push(if character == '|' {
-                sentinel
-            } else {
-                character
-            });
-        }
-        cursor = range.end;
+impl<'a, F> MarkdownEventIterator<'a> for OffsetIter<'a, F>
+where
+    F: BrokenLinkCallback<'a>,
+{
+    fn reference_definitions(&self) -> &RefDefs<'_> {
+        OffsetIter::reference_definitions(self)
     }
-    output.push_str(&input[cursor..]);
-    (Cow::Owned(output), Some(sentinel))
+}
+
+struct BrokenLinkCollector<'labels> {
+    labels: &'labels mut HashSet<String>,
+}
+
+impl<'input> BrokenLinkCallback<'input> for BrokenLinkCollector<'_> {
+    fn handle_broken_link(
+        &mut self,
+        link: BrokenLink<'input>,
+    ) -> Option<(CowStr<'input>, CowStr<'input>)> {
+        self.labels.insert(link.reference.into_string());
+        None
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct FragmentReferenceResolver {
+    definitions: HashMap<String, (String, String)>,
+}
+
+impl FragmentReferenceResolver {
+    fn from_fragment(source: &str, options: Options, reference_definitions: &RefDefs<'_>) -> Self {
+        // Collect fragment-broken labels first, then own only the matching document definitions.
+        let mut labels = HashSet::new();
+        let collector = BrokenLinkCollector {
+            labels: &mut labels,
+        };
+        Parser::new_with_broken_link_callback(source, options, Some(collector)).for_each(drop);
+
+        let definitions = labels
+            .into_iter()
+            .filter_map(|label| {
+                let definition = reference_definitions.get(&label)?;
+                let destination = definition.dest.to_string();
+                let title = definition
+                    .title
+                    .as_ref()
+                    .map_or_else(String::new, ToString::to_string);
+                Some((label, (destination, title)))
+            })
+            .collect();
+        Self { definitions }
+    }
+}
+
+impl<'input> BrokenLinkCallback<'input> for FragmentReferenceResolver {
+    fn handle_broken_link(
+        &mut self,
+        link: BrokenLink<'input>,
+    ) -> Option<(CowStr<'input>, CowStr<'input>)> {
+        self.definitions
+            .get(link.reference.as_ref())
+            .map(|(destination, title)| {
+                (
+                    CowStr::from(destination.clone()),
+                    CowStr::from(title.clone()),
+                )
+            })
+    }
 }
 
 struct Writer<'a, I>
 where
-    I: Iterator<Item = (Event<'a>, Range<usize>)>,
+    I: MarkdownEventIterator<'a>,
 {
     input: &'a str,
     inline_code_pipe_sentinel: Option<char>,
@@ -267,7 +316,7 @@ where
 
 impl<'a, I> Writer<'a, I>
 where
-    I: Iterator<Item = (Event<'a>, Range<usize>)>,
+    I: MarkdownEventIterator<'a>,
 {
     fn new(
         input: &'a str,
@@ -698,10 +747,11 @@ where
     }
 
     fn start_table_row(&mut self, source_range: Range<usize>) {
-        let has_table_pipe_syntax = self.has_table_row_boundary_pipe(source_range);
+        let has_table_pipe_syntax = self.has_table_row_boundary_pipe(source_range.clone());
         if let Some(table_state) = self.table_state.as_mut() {
             table_state.current_row = Some(Vec::new());
             table_state.current_row_has_table_pipe_syntax = has_table_pipe_syntax;
+            table_state.current_row_source_range = Some(source_range);
         }
     }
 
@@ -710,7 +760,9 @@ where
             return false;
         };
         let source = source.trim();
-        source.starts_with('|') || source.ends_with('|')
+        let has_trailing_boundary = source.ends_with('|')
+            && !table_source::is_backslash_escaped(source, source.len().saturating_sub(1));
+        source.starts_with('|') || has_trailing_boundary
     }
 
     fn end_table_row(&mut self) {
@@ -726,12 +778,14 @@ where
         let Some(row) = table_state.current_row.take() else {
             return;
         };
+        let source_range = table_state.current_row_source_range.take();
         if table_state.in_header {
             table_state.header = Some(row);
         } else {
             table_state.rows.push(TableBodyRow {
                 cells: row,
                 has_table_pipe_syntax: table_state.current_row_has_table_pipe_syntax,
+                source_range: source_range.unwrap_or_default(),
             });
         }
         table_state.current_row_has_table_pipe_syntax = false;
@@ -805,7 +859,7 @@ where
             let next_row = table_state.rows.get(row_index + 1);
             if in_spillover || column_count > 1 && Self::is_spillover_row(row, next_row) {
                 in_spillover = true;
-                spillover_lines.extend(Self::spillover_row_lines(row));
+                spillover_lines.extend(self.render_spillover_row_source(row));
             } else {
                 rows.push(row.cells.clone());
             }
@@ -1205,14 +1259,14 @@ where
         alignments: &[Alignment],
     ) -> Vec<Line<'static>> {
         let mut output = vec![
-            Self::row_to_pipe_line(header),
+            Self::render_pipe_fallback_row(header),
             Line::from(Self::alignments_to_pipe_delimiter(alignments)),
         ];
-        output.extend(rows.iter().map(|row| Self::row_to_pipe_line(row)));
+        output.extend(rows.iter().map(|row| Self::render_pipe_fallback_row(row)));
         output
     }
 
-    fn row_to_pipe_line(row: &[TableCell]) -> Line<'static> {
+    fn render_pipe_fallback_row(row: &[TableCell]) -> Line<'static> {
         let mut spans = vec!["|".into()];
         for cell in row {
             spans.push(" ".into());
@@ -1220,9 +1274,7 @@ where
                 if line_index > 0 {
                     spans.push(" ".into());
                 }
-                for span in &line.spans {
-                    spans.push(Span::styled(span.content.replace('|', "\\|"), span.style));
-                }
+                spans.extend(line.spans.iter().cloned());
             }
             spans.push(" |".into());
         }
@@ -1267,14 +1319,44 @@ where
         !row.has_table_pipe_syntax && Self::first_non_empty_only_text(&row.cells).is_some()
     }
 
-    fn spillover_row_lines(row: &TableBodyRow) -> Vec<Line<'static>> {
-        if !row.has_table_pipe_syntax
-            && let Some(cell) = row.cells.first()
+    fn render_spillover_row_source(&self, row: &TableBodyRow) -> Vec<Line<'static>> {
+        let input = self.input;
+        if let Some(source) = input.get(row.source_range.clone()) {
+            let mut options = Options::empty();
+            options.insert(Options::ENABLE_STRIKETHROUGH);
+            let resolver = FragmentReferenceResolver::from_fragment(
+                source,
+                options,
+                self.iter.reference_definitions(),
+            );
+            let parser = Parser::new_with_broken_link_callback(source, options, Some(resolver))
+                .into_offset_iter();
+            let mut writer = Writer::new(source, parser, None, self.inline_code_pipe_sentinel);
+            writer.run();
+            return writer.text.lines;
+        }
+        Self::spillover_row_fallback(row)
+    }
+
+    fn spillover_row_fallback(row: &TableBodyRow) -> Vec<Line<'static>> {
+        if let Some(cell) = row.cells.first()
             && Self::first_non_empty_only_text(&row.cells).is_some()
         {
             return cell.lines.clone();
         }
-        vec![Self::row_to_pipe_line(&row.cells)]
+        let mut spans = Vec::new();
+        for (cell_index, cell) in row.cells.iter().enumerate() {
+            if cell_index > 0 {
+                spans.push(" | ".into());
+            }
+            for (line_index, line) in cell.lines.iter().enumerate() {
+                if line_index > 0 {
+                    spans.push(" ".into());
+                }
+                spans.extend(line.spans.iter().cloned());
+            }
+        }
+        vec![Line::from(spans)]
     }
 
     fn first_non_empty_only_text(row: &[TableCell]) -> Option<String> {
@@ -1614,7 +1696,7 @@ mod tests {
         );
     }
 
-    type TestWriter<'a> = Writer<'a, std::iter::Empty<(Event<'a>, Range<usize>)>>;
+    type TestWriter<'a> = Writer<'a, OffsetIter<'a, pulldown_cmark::DefaultBrokenLinkCallback>>;
 
     fn make_cell(text: &str) -> TableCell {
         let mut cell = TableCell::default();
@@ -1626,6 +1708,7 @@ mod tests {
         TableBodyRow {
             cells,
             has_table_pipe_syntax,
+            source_range: 0..0,
         }
     }
 
@@ -1689,7 +1772,7 @@ mod tests {
         cell.push_span(Span::styled("👨‍💻", Style::new().italic()));
         cell.push_span(Span::styled(" code", Style::new().cyan()));
 
-        let writer = TestWriter::new("", std::iter::empty(), Some(80), None);
+        let writer = TestWriter::new("", Parser::new("").into_offset_iter(), Some(80), None);
         let wrapped = writer.wrap_cell(&cell, 4);
         let rendered = wrapped
             .iter()
@@ -1719,6 +1802,26 @@ mod tests {
             wrapped[2].spans[0].style.fg,
             Some(ratatui::style::Color::Cyan)
         );
+    }
+
+    #[test]
+    fn trailing_table_boundary_uses_backslash_parity() {
+        for backslash_count in 0..=5 {
+            let source = format!("value{}|", "\\".repeat(backslash_count));
+            let writer =
+                TestWriter::new(&source, Parser::new(&source).into_offset_iter(), None, None);
+
+            assert_eq!(
+                writer.has_table_row_boundary_pipe(0..source.len()),
+                backslash_count % 2 == 0,
+                "{backslash_count}: {source:?}"
+            );
+            assert_eq!(
+                table_source::is_backslash_escaped(&source, source.len() - 1),
+                backslash_count % 2 == 1,
+                "{backslash_count}: {source:?}"
+            );
+        }
     }
 
     #[test]

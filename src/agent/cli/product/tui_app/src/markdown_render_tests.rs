@@ -1167,6 +1167,33 @@ fn markdown_table_extremely_narrow_records_do_not_lose_content() {
 }
 
 #[test]
+fn markdown_table_extremely_narrow_wide_records_fit_when_indent_can_shrink() {
+    let cjk = render_markdown_text_with_width("| 键 |\n| --- |\n| 值 |\n", Some(3));
+    assert!(cjk.lines.iter().all(|line| line.width() <= 3));
+    assert_eq!(
+        plain_lines(&cjk)
+            .join("")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>(),
+        "键值"
+    );
+    assert!(
+        plain_lines(&cjk)
+            .iter()
+            .any(|line| line.starts_with(' ') && line.ends_with('值'))
+    );
+
+    let emoji =
+        render_markdown_text_with_width("| Icon |\n| --- |\n| 👨‍👩‍👧‍👦 |\n", Some(3));
+    assert!(emoji.lines.iter().all(|line| line.width() <= 3));
+    assert!(plain_lines(&emoji).join("\n").contains("👨‍👩‍👧‍👦"));
+
+    let ascii = render_markdown_text_with_width("| K |\n| --- |\n| v |\n", Some(3));
+    assert!(plain_lines(&ascii).iter().any(|line| line == "  v"));
+}
+
+#[test]
 fn markdown_table_preserves_header_separator_and_inline_styles() {
     let md = r#"| *Kind* | Content |
 | --- | --- |
@@ -1313,6 +1340,421 @@ fn markdown_table_normalizes_row_lengths_and_preserves_pipes() {
     assert!(!rendered.contains("ignored"));
     assert!(rendered.contains("a | b"));
     assert!(rendered.contains("c|d"), "{rendered:?}");
+}
+
+#[test]
+fn markdown_table_preserves_native_escaped_code_pipe_semantics() {
+    let md = r#"| A | B |
+| --- | --- |
+| `a\|b` | one |
+| `a\\|b` | two |
+"#;
+    let text = render_markdown_text(md);
+    let code_spans = text
+        .lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .filter(|span| span.style.fg == Some(Color::Cyan))
+        .map(|span| span.content.as_ref())
+        .collect::<Vec<_>>();
+
+    assert_eq!(code_spans, vec!["a|b", r"a\|b"]);
+}
+
+#[test]
+fn markdown_table_keeps_lone_backticks_in_separate_cells() {
+    let md = r#"| A | B |
+| --- | --- |
+| ` | ` |
+"#;
+    let text = render_markdown_text(md);
+    let rendered = plain_lines(&text).join("\n");
+
+    assert!(rendered.contains('━'));
+    assert_eq!(rendered.matches('`').count(), 2, "{rendered:?}");
+    assert!(
+        text.lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .all(|span| !(span.content == "|" && span.style.fg == Some(Color::Cyan)))
+    );
+}
+
+#[test]
+fn markdown_table_prefers_cell_local_code_over_cross_cell_backticks() {
+    let md = r#"| A | B | C |
+| --- | --- | --- |
+| ` | `a|b` | ok |
+"#;
+    let text = render_markdown_text(md);
+    let rendered = plain_lines(&text).join("\n");
+
+    assert_eq!(rendered.matches('`').count(), 1, "{rendered:?}");
+    assert!(rendered.contains("ok"), "{rendered:?}");
+    assert!(
+        text.lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .any(|span| span.content == "a|b" && span.style.fg == Some(Color::Cyan))
+    );
+}
+
+#[test]
+fn markdown_table_masks_code_pipes_before_normalizing_long_and_sparse_rows() {
+    let md = r#"| A | B | C |
+| --- | --- | --- |
+| `a|b` | ok | value | ignored |
+| `c|d` | next |
+"#;
+    let text = render_markdown_text(md);
+    let rendered = plain_lines(&text).join("\n");
+    let code = text
+        .lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .filter(|span| span.style.fg == Some(Color::Cyan))
+        .map(|span| span.content.as_ref())
+        .collect::<Vec<_>>();
+
+    assert_eq!(code, vec!["a|b", "c|d"]);
+    for expected in ["ok", "value", "next"] {
+        assert!(rendered.contains(expected), "missing {expected:?}: {rendered:?}");
+    }
+    assert!(!rendered.contains("ignored"), "{rendered:?}");
+}
+
+#[test]
+fn markdown_table_recovers_explicit_header_with_raw_code_pipe() {
+    let md = r#"| `A|B` | C |
+| --- | --- |
+| x | y |
+"#;
+    let text = render_markdown_text(md);
+    let rendered = plain_lines(&text).join("\n");
+
+    assert!(rendered.contains('━'), "{rendered:?}");
+    assert!(rendered.contains("x"), "{rendered:?}");
+    assert!(rendered.contains("y"), "{rendered:?}");
+    assert!(
+        text.lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .any(|span| span.content == "A|B" && span.style.fg == Some(Color::Cyan))
+    );
+}
+
+#[test]
+fn markdown_table_recovers_blockquoted_explicit_header_with_raw_code_pipe() {
+    let md = r#"> | `A|B` | C |
+> | --- | --- |
+> | x | y |
+"#;
+    let text = render_markdown_text(md);
+    let rendered = plain_lines(&text).join("\n");
+
+    assert!(rendered.contains('━'), "{rendered:?}");
+    assert!(
+        text.lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .any(|span| span.content == "A|B" && span.style.fg == Some(Color::Cyan))
+    );
+}
+
+#[test]
+fn markdown_table_recognized_light_syntax_body_supports_raw_code_pipe() {
+    let md = r#"A | B
+--- | ---
+`a|b` | ok
+"#;
+    let text = render_markdown_text(md);
+    let rendered = plain_lines(&text).join("\n");
+
+    assert!(rendered.contains('━'), "{rendered:?}");
+    assert!(rendered.contains("ok"), "{rendered:?}");
+    assert!(
+        text.lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .any(|span| span.content == "a|b" && span.style.fg == Some(Color::Cyan))
+    );
+}
+
+#[test]
+fn markdown_table_supports_multiple_embedded_and_long_delimiter_code_spans() {
+    let md = r#"| One | Two | Three |
+| --- | --- | --- |
+| ``a`|b`` | `c|d` and `e|f` | prefix `g | h` suffix |
+"#;
+    let text = render_markdown_text(md);
+    let rendered = plain_lines(&text).join("\n");
+    let code = text
+        .lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .filter(|span| span.style.fg == Some(Color::Cyan))
+        .map(|span| span.content.as_ref())
+        .collect::<Vec<_>>();
+
+    for expected in ["a`|b", "c|d", "e|f", "g | h"] {
+        assert!(code.contains(&expected), "missing {expected:?}: {code:?}");
+    }
+    for expected in ["and", "prefix", "suffix"] {
+        assert!(rendered.contains(expected), "missing {expected:?}: {rendered:?}");
+    }
+}
+
+#[test]
+fn markdown_table_pipe_only_code_requires_standard_escape() {
+    let md = r#"| A | B |
+| --- | --- |
+| ` | ` |
+| `\|` | ok |
+"#;
+    let text = render_markdown_text(md);
+    let rendered = plain_lines(&text).join("\n");
+
+    assert_eq!(rendered.matches('`').count(), 2, "{rendered:?}");
+    assert!(rendered.contains("ok"), "{rendered:?}");
+    assert!(
+        text.lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .any(|span| span.content == "|" && span.style.fg == Some(Color::Cyan))
+    );
+}
+
+#[test]
+fn markdown_table_code_pipe_mask_never_leaks_sentinel() {
+    let md = r#"| `A|B` | C |
+| --- | --- |
+| `x|y` | ok |
+"#;
+    let rendered = plain_lines(&render_markdown_text(md)).join("\n");
+
+    assert!(!rendered.contains('\u{e000}'), "{rendered:?}");
+    assert!(rendered.contains("A|B"), "{rendered:?}");
+    assert!(rendered.contains("x|y"), "{rendered:?}");
+}
+
+#[test]
+fn markdown_table_body_keeps_unescaped_code_pipe_and_following_cell() {
+    let md = r#"| A | B |
+| --- | --- |
+| `c|d` | ok |
+"#;
+    let text = render_markdown_text(md);
+    let rendered = plain_lines(&text).join("\n");
+    let code = text
+        .lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .find(|span| span.content == "c|d")
+        .expect("code span");
+
+    assert_eq!(code.style.fg, Some(Color::Cyan));
+    assert!(rendered.contains("ok"), "{rendered:?}");
+}
+
+#[test]
+fn inline_code_pipe_does_not_turn_non_table_into_table() {
+    let md = "A | `b|c`\n---|---\n";
+    let text = render_markdown_text(md);
+    let rendered = plain_lines(&text).join("\n");
+
+    assert!(!rendered.contains('━'), "{rendered:?}");
+    assert!(rendered.contains("---|---"), "{rendered:?}");
+    assert!(
+        text.lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .any(|span| span.content == "b|c" && span.style.fg == Some(Color::Cyan))
+    );
+}
+
+#[test]
+fn markdown_table_spillover_ignores_escaped_trailing_pipe_boundary() {
+    let md = r#"| A | B |
+| --- | --- |
+| x | y |
+Paragraph ending with \|
+"#;
+    let text = render_markdown_text(md);
+
+    assert!(
+        plain_lines(&text)
+            .iter()
+            .any(|line| line == "Paragraph ending with |")
+    );
+}
+
+#[test]
+fn markdown_table_spillover_reparses_inline_code_without_synthetic_pipes() {
+    let md = r#"| A | B |
+| --- | --- |
+| x | y |
+Plain paragraph
+`a|b` | tail
+one | two | three
+"#;
+    let text = render_markdown_text(md);
+    let lines = plain_lines(&text);
+    let code_line = lines
+        .iter()
+        .position(|line| line.contains("a|b"))
+        .expect("spillover code line");
+    let code = text.lines[code_line]
+        .spans
+        .iter()
+        .find(|span| span.content == "a|b")
+        .expect("spillover code span");
+
+    assert_eq!(lines[code_line], "a|b | tail");
+    assert_eq!(code.style.fg, Some(Color::Cyan));
+    assert!(!lines[code_line].contains(r"\|"));
+    assert!(lines.iter().any(|line| line == "one | two | three"));
+}
+
+#[test]
+fn markdown_table_spillover_resolves_reference_definitions_before_and_after_table() {
+    let cases = [
+        (
+            "definition before",
+            r#"[docs]: https://example.com "Docs"
+
+| A | B |
+| --- | --- |
+| x | y |
+Plain paragraph
+Read [docs].
+"#,
+        ),
+        (
+            "definition after",
+            r#"| A | B |
+| --- | --- |
+| x | y |
+Plain paragraph
+Read [docs].
+
+[docs]: https://example.com "Docs"
+"#,
+        ),
+    ];
+
+    for (name, md) in cases {
+        let text = render_markdown_text(md);
+        let rendered = plain_lines(&text).join("\n");
+        assert!(
+            rendered.contains("Read docs (https://example.com)."),
+            "{name}: {rendered:?}"
+        );
+        assert!(
+            text.lines
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .any(|span| {
+                    span.content == "https://example.com"
+                        && span
+                            .style
+                            .add_modifier
+                            .contains(Modifier::UNDERLINED)
+                }),
+            "{name}: {text:?}"
+        );
+    }
+}
+
+#[test]
+fn markdown_table_spillover_keeps_unresolved_reference_literal() {
+    let md = r#"| A | B |
+| --- | --- |
+| x | y |
+Plain paragraph
+Read [missing].
+"#;
+    let rendered = plain_lines(&render_markdown_text(md)).join("\n");
+
+    assert!(rendered.contains("Read [missing]."), "{rendered:?}");
+}
+
+#[test]
+fn markdown_table_spillover_preserves_source_boundaries() {
+    let md = r#"| A | B |
+| --- | --- |
+| x | y |
+Plain paragraph
+| later | pipe |
+"#;
+    let lines = plain_lines(&render_markdown_text(md));
+
+    assert!(lines.iter().any(|line| line == "Plain paragraph"));
+    assert!(lines.iter().any(|line| line == "| later | pipe |"));
+    assert!(!lines.iter().any(|line| line == "| Plain paragraph |"));
+}
+
+#[test]
+fn markdown_table_pipe_fallback_does_not_reescape_rendered_code() {
+    let md = r#"| `a|b` | C |
+| --- | --- |
+"#;
+    let text = render_markdown_text_with_width(md, Some(1));
+    let rendered = plain_lines(&text).join("\n");
+    let code = text
+        .lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .filter(|span| span.style.fg == Some(Color::Cyan))
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+
+    assert_eq!(code, "a|b");
+    assert!(!rendered.contains(r"\|"), "{rendered:?}");
+}
+
+#[test]
+fn markdown_table_interior_pipe_keeps_pulldown_backslash_semantics() {
+    for backslash_count in 0..=5 {
+        let backslashes = "\\".repeat(backslash_count);
+        let md = format!(
+            "| A | B |\n| --- | --- |\n| left{backslashes}|right | tail |\n"
+        );
+        let rendered = plain_lines(&render_markdown_text(&md)).join("\n");
+
+        assert!(rendered.contains("right"), "{backslash_count}: {rendered:?}");
+        assert_eq!(
+            rendered.contains("tail"),
+            backslash_count > 0,
+            "{backslash_count}: {rendered:?}"
+        );
+    }
+}
+
+#[test]
+fn markdown_table_code_pipe_backslashes_follow_native_semantics() {
+    for backslash_count in 0..=5 {
+        let backslashes = "\\".repeat(backslash_count);
+        let md = format!(
+            "| A | B |\n| --- | --- |\n| `a{backslashes}|b` | row-{backslash_count} |\n"
+        );
+        let text = render_markdown_text(&md);
+        let rendered = plain_lines(&text).join("\n");
+        let code = text
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .filter(|span| span.style.fg == Some(Color::Cyan))
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        let expected = format!("a{}|b", "\\".repeat(backslash_count.saturating_sub(1)));
+
+        assert_eq!(code, expected, "{backslash_count}: {text:?}");
+        assert!(
+            rendered.contains(&format!("row-{backslash_count}")),
+            "{backslash_count}: {rendered:?}"
+        );
+        assert!(!rendered.contains('\u{e000}'), "{backslash_count}: {rendered:?}");
+    }
 }
 
 #[test]

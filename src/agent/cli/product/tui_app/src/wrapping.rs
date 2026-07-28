@@ -6,6 +6,7 @@ use std::ops::Range;
 use textwrap::Options;
 use unicode_width::UnicodeWidthStr;
 
+use crate::product::tui_app::render::line_utils::line_to_static;
 use crate::product::tui_app::render::line_utils::push_owned_lines;
 
 pub(crate) fn wrap_ranges<'a, O>(text: &str, width_or_options: O) -> Vec<Range<usize>>
@@ -238,6 +239,9 @@ where
 
 pub(crate) fn word_wrap_line_grapheme_safe(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
     let width = width.max(1);
+    if line.width() <= width {
+        return vec![line_to_static(line)];
+    }
     let graphemes = line
         .styled_graphemes(Style::default())
         .map(|grapheme| {
@@ -834,6 +838,26 @@ mod tests {
         );
         assert_eq!(wrapped[0].spans[0].style.fg, Some(Color::Red));
         assert_eq!(wrapped[1].spans[0].style.fg, Some(Color::Cyan));
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_preserves_fitting_line_with_leading_space() {
+        let line = Line::from(" 👨‍👩‍👧‍👦".cyan()).style(Style::new().bold());
+
+        assert_eq!(
+            word_wrap_line_grapheme_safe(&line, line.width()),
+            vec![line_to_static(&line)]
+        );
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_keeps_lam_alef_on_one_line() {
+        let line = Line::from("لا");
+        assert_eq!(line.width(), 1);
+        assert_eq!(
+            word_wrap_line_grapheme_safe(&line, 1),
+            vec![line_to_static(&line)]
+        );
     }
 
     #[test]
