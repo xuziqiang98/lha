@@ -1,9 +1,11 @@
+use ratatui::layout::Alignment;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use std::borrow::Cow;
 use std::ops::Range;
 use textwrap::Options;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::product::tui_app::render::line_utils::line_to_static;
@@ -237,54 +239,237 @@ where
     out
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WrapGrapheme {
+    symbol: String,
+    style: Style,
+    width: usize,
+    breakable_whitespace: bool,
+    non_breaking_whitespace: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WrapUnit {
+    range: Range<usize>,
+    contextual_width: usize,
+    rendered_width: usize,
+}
+
+fn is_non_breaking_space(character: char) -> bool {
+    matches!(character, '\u{00A0}' | '\u{2007}' | '\u{202F}')
+}
+
+fn is_breakable_whitespace(symbol: &str) -> bool {
+    symbol.chars().all(char::is_whitespace) && !symbol.chars().any(is_non_breaking_space)
+}
+
+fn collect_wrap_graphemes(line: &Line<'_>) -> Vec<WrapGrapheme> {
+    fn push_style_run(output: &mut Vec<WrapGrapheme>, text: &str, style: Style) {
+        output.extend(
+            text.graphemes(true)
+                .filter(|symbol| *symbol != "\n")
+                .map(|symbol| WrapGrapheme {
+                    symbol: symbol.to_string(),
+                    style,
+                    width: UnicodeWidthStr::width(symbol),
+                    breakable_whitespace: is_breakable_whitespace(symbol),
+                    non_breaking_whitespace: symbol.chars().any(is_non_breaking_space),
+                }),
+        );
+    }
+
+    let mut graphemes = Vec::new();
+    let mut run = String::new();
+    let mut run_style = None;
+    for span in &line.spans {
+        if span.content.is_empty() {
+            continue;
+        }
+        let style = line.style.patch(span.style);
+        if run_style != Some(style) {
+            if let Some(style) = run_style {
+                push_style_run(&mut graphemes, &run, style);
+                run.clear();
+            }
+            run_style = Some(style);
+        }
+        run.push_str(span.content.as_ref());
+    }
+    if let Some(style) = run_style {
+        push_style_run(&mut graphemes, &run, style);
+    }
+    graphemes
+}
+
+fn push_grapheme(spans: &mut Vec<Span<'static>>, grapheme: &WrapGrapheme) {
+    if let Some(last) = spans.last_mut()
+        && last.style == grapheme.style
+    {
+        last.content.to_mut().push_str(&grapheme.symbol);
+    } else {
+        spans.push(Span::styled(grapheme.symbol.clone(), grapheme.style));
+    }
+}
+
+fn push_grapheme_range(spans: &mut Vec<Span<'static>>, graphemes: &[WrapGrapheme]) {
+    for grapheme in graphemes {
+        push_grapheme(spans, grapheme);
+    }
+}
+
+fn coalesced_wrap_line(line: &Line<'_>, graphemes: &[WrapGrapheme]) -> Line<'static> {
+    let mut spans = Vec::new();
+    push_grapheme_range(&mut spans, graphemes);
+    let mut output = Line::from(spans);
+    output.alignment = line.alignment;
+    output
+}
+
+pub(crate) fn coalesce_line_graphemes(line: &Line<'_>) -> Line<'static> {
+    let graphemes = collect_wrap_graphemes(line);
+    if graphemes.is_empty() {
+        line_to_static(line)
+    } else {
+        coalesced_wrap_line(line, &graphemes)
+    }
+}
+
+fn grapheme_range_width(graphemes: &[WrapGrapheme]) -> usize {
+    let mut width = 0usize;
+    let mut run = String::new();
+    let mut run_style = None;
+    for grapheme in graphemes {
+        if run_style == Some(grapheme.style) {
+            run.push_str(&grapheme.symbol);
+            continue;
+        }
+        width = width.saturating_add(UnicodeWidthStr::width(run.as_str()));
+        run.clear();
+        run.push_str(&grapheme.symbol);
+        run_style = Some(grapheme.style);
+    }
+    width.saturating_add(UnicodeWidthStr::width(run.as_str()))
+}
+
+pub(crate) fn line_width_grapheme_safe(line: &Line<'_>) -> usize {
+    collect_wrap_graphemes(line)
+        .iter()
+        .fold(0usize, |width, grapheme| {
+            width.saturating_add(grapheme.width)
+        })
+}
+
+fn wrap_unit(graphemes: &[WrapGrapheme], range: Range<usize>) -> WrapUnit {
+    let contextual_width = if range.end - range.start == 1 {
+        graphemes[range.start].width
+    } else {
+        grapheme_range_width(&graphemes[range.clone()])
+    };
+    let rendered_width = graphemes[range.clone()]
+        .iter()
+        .fold(0usize, |width, grapheme| {
+            width.saturating_add(grapheme.width)
+        });
+    WrapUnit {
+        range,
+        contextual_width,
+        rendered_width,
+    }
+}
+
+fn boundary_requires_same_unit(graphemes: &[WrapGrapheme], right: usize) -> bool {
+    let left = &graphemes[right - 1];
+    let right_grapheme = &graphemes[right];
+    left.non_breaking_whitespace
+        || right_grapheme.non_breaking_whitespace
+        || grapheme_range_width(&graphemes[right - 1..=right])
+            != left.width.saturating_add(right_grapheme.width)
+}
+
+fn build_wrap_units_with_word_width(
+    graphemes: &[WrapGrapheme],
+    word_width: usize,
+) -> Vec<WrapUnit> {
+    if graphemes.is_empty() {
+        return Vec::new();
+    }
+
+    let mut units = Vec::new();
+    let mut start = 0;
+    for right in 1..graphemes.len() {
+        if !boundary_requires_same_unit(graphemes, right) {
+            units.push(wrap_unit(graphemes, start..right));
+            start = right;
+        }
+    }
+    units.push(wrap_unit(graphemes, start..graphemes.len()));
+
+    let unit_width = units.iter().fold(0usize, |width, unit| {
+        width.saturating_add(unit.contextual_width)
+    });
+    if unit_width == word_width {
+        units
+    } else {
+        // Preserve shaping if a future contextual-width rule spans more than one boundary.
+        vec![WrapUnit {
+            range: 0..graphemes.len(),
+            contextual_width: word_width,
+            rendered_width: graphemes.iter().fold(0usize, |width, grapheme| {
+                width.saturating_add(grapheme.width)
+            }),
+        }]
+    }
+}
+
+fn build_wrap_units(graphemes: &[WrapGrapheme]) -> Vec<WrapUnit> {
+    build_wrap_units_with_word_width(graphemes, grapheme_range_width(graphemes))
+}
+
+fn flush_grapheme_line(
+    output: &mut Vec<Line<'static>>,
+    spans: &mut Vec<Span<'static>>,
+    line_width: &mut usize,
+    alignment: Option<Alignment>,
+) {
+    if !spans.is_empty() {
+        let mut line = Line::from(std::mem::take(spans));
+        line.alignment = alignment;
+        output.push(line);
+        *line_width = 0;
+    }
+}
+
 pub(crate) fn word_wrap_line_grapheme_safe(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
     let width = width.max(1);
-    if line.width() <= width {
+    let graphemes = collect_wrap_graphemes(line);
+    if graphemes.is_empty() {
         return vec![line_to_static(line)];
     }
-    let graphemes = line
-        .styled_graphemes(Style::default())
-        .map(|grapheme| {
-            (
-                grapheme.symbol.to_string(),
-                grapheme.style,
-                UnicodeWidthStr::width(grapheme.symbol),
-                grapheme.symbol.chars().all(char::is_whitespace),
-            )
-        })
-        .collect::<Vec<_>>();
-    if graphemes
+    let rendered_width = graphemes.iter().fold(0usize, |width, grapheme| {
+        width.saturating_add(grapheme.width)
+    });
+    if rendered_width <= width {
+        return vec![coalesced_wrap_line(line, &graphemes)];
+    }
+    let contextual_width = grapheme_range_width(&graphemes);
+    let scalar_graphemes = graphemes
         .iter()
-        .all(|(symbol, _, _, _)| symbol.chars().count() <= 1)
-    {
-        let wrapped = word_wrap_line(line, width);
+        .all(|grapheme| grapheme.symbol.chars().count() <= 1);
+    let has_non_breaking_whitespace = graphemes
+        .iter()
+        .any(|grapheme| grapheme.non_breaking_whitespace);
+    let additive_styled_widths = graphemes.iter().fold(0usize, |width, grapheme| {
+        width.saturating_add(grapheme.width)
+    }) == contextual_width;
+    if scalar_graphemes && !has_non_breaking_whitespace && additive_styled_widths {
+        let coalesced = coalesced_wrap_line(line, &graphemes);
+        let wrapped = word_wrap_line(&coalesced, width);
         let mut owned = Vec::new();
         push_owned_lines(&wrapped, &mut owned);
+        for line in &mut owned {
+            line.alignment = coalesced.alignment;
+        }
         return owned;
-    }
-    if graphemes.is_empty() {
-        return vec![Line::default().style(line.style)];
-    }
-
-    fn push_grapheme(spans: &mut Vec<Span<'static>>, symbol: &str, style: Style) {
-        if let Some(last) = spans.last_mut()
-            && last.style == style
-        {
-            last.content.to_mut().push_str(symbol);
-        } else {
-            spans.push(Span::styled(symbol.to_string(), style));
-        }
-    }
-
-    fn flush_line(
-        output: &mut Vec<Line<'static>>,
-        spans: &mut Vec<Span<'static>>,
-        line_width: &mut usize,
-    ) {
-        if !spans.is_empty() {
-            output.push(Line::from(std::mem::take(spans)));
-            *line_width = 0;
-        }
     }
 
     let mut output = Vec::new();
@@ -292,76 +477,65 @@ pub(crate) fn word_wrap_line_grapheme_safe(line: &Line<'_>, width: usize) -> Vec
     let mut line_width = 0usize;
     let mut index = 0;
     while index < graphemes.len() {
-        if graphemes[index].3 {
-            let whitespace_start = index;
-            while index < graphemes.len() && graphemes[index].3 {
-                index += 1;
-            }
-            if spans.is_empty() || index == graphemes.len() {
-                continue;
-            }
-            let whitespace_width = graphemes[whitespace_start..index]
+        let whitespace_start = index;
+        while index < graphemes.len() && graphemes[index].breakable_whitespace {
+            index += 1;
+        }
+        let whitespace_end = index;
+        let word_start = index;
+        while index < graphemes.len() && !graphemes[index].breakable_whitespace {
+            index += 1;
+        }
+        if word_start == index {
+            break;
+        }
+
+        let word = &graphemes[word_start..index];
+        let units = build_wrap_units(word);
+        let word_width = units.iter().fold(0usize, |width, unit| {
+            width.saturating_add(unit.rendered_width)
+        });
+        if whitespace_start < whitespace_end && !spans.is_empty() {
+            let whitespace_width = graphemes[whitespace_start..whitespace_end]
                 .iter()
-                .map(|(_, _, width, _)| *width)
-                .sum::<usize>();
-            let mut word_end = index;
-            while word_end < graphemes.len() && !graphemes[word_end].3 {
-                word_end += 1;
-            }
-            let word_width = graphemes[index..word_end]
-                .iter()
-                .map(|(_, _, width, _)| *width)
-                .sum::<usize>();
+                .fold(0usize, |width, grapheme| {
+                    width.saturating_add(grapheme.width)
+                });
             if line_width
                 .saturating_add(whitespace_width)
                 .saturating_add(word_width)
                 <= width
             {
-                for (symbol, style, grapheme_width, _) in &graphemes[whitespace_start..index] {
-                    push_grapheme(&mut spans, symbol, *style);
-                    line_width = line_width.saturating_add(*grapheme_width);
-                }
+                push_grapheme_range(&mut spans, &graphemes[whitespace_start..whitespace_end]);
+                line_width = line_width.saturating_add(whitespace_width);
             } else {
-                flush_line(&mut output, &mut spans, &mut line_width);
+                flush_grapheme_line(&mut output, &mut spans, &mut line_width, line.alignment);
             }
-            continue;
         }
 
-        let word_start = index;
-        while index < graphemes.len() && !graphemes[index].3 {
-            index += 1;
-        }
-        let word = &graphemes[word_start..index];
-        let word_width = word
-            .iter()
-            .map(|(_, _, grapheme_width, _)| *grapheme_width)
-            .sum::<usize>();
         if !spans.is_empty() && line_width.saturating_add(word_width) > width {
-            flush_line(&mut output, &mut spans, &mut line_width);
+            flush_grapheme_line(&mut output, &mut spans, &mut line_width, line.alignment);
         }
 
         if word_width <= width {
-            for (symbol, style, grapheme_width, _) in word {
-                push_grapheme(&mut spans, symbol, *style);
-                line_width = line_width.saturating_add(*grapheme_width);
-            }
+            push_grapheme_range(&mut spans, word);
+            line_width = line_width.saturating_add(word_width);
             continue;
         }
 
-        for (symbol, style, grapheme_width, _) in word {
-            if !spans.is_empty() && line_width.saturating_add(*grapheme_width) > width {
-                flush_line(&mut output, &mut spans, &mut line_width);
+        for unit in units {
+            if !spans.is_empty() && line_width.saturating_add(unit.rendered_width) > width {
+                flush_grapheme_line(&mut output, &mut spans, &mut line_width, line.alignment);
             }
-            push_grapheme(&mut spans, symbol, *style);
-            line_width = line_width.saturating_add(*grapheme_width);
-            if line_width >= width {
-                flush_line(&mut output, &mut spans, &mut line_width);
-            }
+            push_grapheme_range(&mut spans, &word[unit.range]);
+            line_width = line_width.saturating_add(unit.rendered_width);
         }
     }
-    flush_line(&mut output, &mut spans, &mut line_width);
+    flush_grapheme_line(&mut output, &mut spans, &mut line_width, line.alignment);
     if output.is_empty() {
-        output.push(Line::default().style(line.style));
+        let mut empty = Line::default().style(line.style);
+        empty.alignment = line.alignment;
+        output.push(empty);
     }
     output
 }
@@ -841,12 +1015,60 @@ mod tests {
     }
 
     #[test]
+    fn grapheme_safe_wrap_handles_long_zwj_runs_without_splitting_or_losing_style() {
+        let family = "👨‍👩‍👧‍👦";
+        let input = family.repeat(512);
+        let line = Line::from(input.clone().red());
+        let wrapped = word_wrap_line_grapheme_safe(&line, 2);
+
+        assert_eq!(wrapped, vec![Line::from(family.to_string().red()); 512]);
+        assert_eq!(wrapped.iter().map(concat_line).collect::<String>(), input);
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_preserves_non_breaking_spaces() {
+        for space in ['\u{00A0}', '\u{2007}', '\u{202F}'] {
+            let suffix = format!("{space}team");
+            let line = Line::from(vec!["👨‍👩‍👧‍👦".red(), suffix.cyan()]);
+            let first_suffix = format!("{space}t");
+            let expected = vec![
+                Line::from(vec!["👨‍👩‍👧‍👦".red(), first_suffix.cyan()]),
+                Line::from("eam".cyan()),
+            ];
+
+            assert_eq!(word_wrap_line_grapheme_safe(&line, 4), expected);
+        }
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_does_not_break_around_scalar_non_breaking_spaces() {
+        for space in ['\u{00A0}', '\u{2007}', '\u{202F}'] {
+            let line = Line::from(format!("a{space}b").cyan());
+
+            assert_eq!(
+                word_wrap_line_grapheme_safe(&line, 1),
+                vec![line_to_static(&line)]
+            );
+        }
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_keeps_overwide_zwj_emoji_intact() {
+        let line = Line::from("👨‍👩‍👧‍👦".red());
+
+        assert_eq!(
+            word_wrap_line_grapheme_safe(&line, 1),
+            vec![line_to_static(&line)]
+        );
+    }
+
+    #[test]
     fn grapheme_safe_wrap_preserves_fitting_line_with_leading_space() {
         let line = Line::from(" 👨‍👩‍👧‍👦".cyan()).style(Style::new().bold());
 
         assert_eq!(
             word_wrap_line_grapheme_safe(&line, line.width()),
-            vec![line_to_static(&line)]
+            vec![Line::from(" 👨‍👩‍👧‍👦".cyan().bold())]
         );
     }
 
@@ -854,9 +1076,232 @@ mod tests {
     fn grapheme_safe_wrap_keeps_lam_alef_on_one_line() {
         let line = Line::from("لا");
         assert_eq!(line.width(), 1);
+        assert_eq!(line_width_grapheme_safe(&line), 2);
         assert_eq!(
             word_wrap_line_grapheme_safe(&line, 1),
             vec![line_to_static(&line)]
+        );
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_keeps_repeated_lam_alef_pairs_together() {
+        let line = Line::from("لالاx".red());
+
+        assert_eq!(
+            word_wrap_line_grapheme_safe(&line, 1),
+            vec![
+                Line::from("لا".red()),
+                Line::from("لا".red()),
+                Line::from("x".red())
+            ]
+        );
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_budgets_lam_alef_pairs_by_rendered_width() {
+        let line = Line::from("لالالا".red());
+
+        assert_eq!(
+            word_wrap_line_grapheme_safe(&line, 3),
+            vec![
+                Line::from("لا".red()),
+                Line::from("لا".red()),
+                Line::from("لا".red())
+            ]
+        );
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_uses_contextual_span_widths() {
+        let line = Line::from(vec!["لا".red(), "x".cyan()]);
+
+        assert_eq!(line.width(), 2);
+        assert_eq!(
+            word_wrap_line_grapheme_safe(&line, 1),
+            vec![Line::from("لا".red()), Line::from("x".cyan())]
+        );
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_merges_same_style_spans_for_contextual_width() {
+        let line = Line::from(vec!["ل".red(), "ا".red(), "x".red()]);
+
+        assert_eq!(
+            word_wrap_line_grapheme_safe(&line, 1),
+            vec![Line::from("لا".red()), Line::from("x".red())]
+        );
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_merges_same_style_spans_before_grapheme_segmentation() {
+        let line = Line::from(vec!["क".red(), "\u{094D}".red(), "ष".red(), "x".red()]);
+
+        assert_eq!(
+            word_wrap_line_grapheme_safe(&line, 1),
+            vec![Line::from("क्ष".red()), Line::from("x".red())]
+        );
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_uses_coalesced_width_for_fitting_lines() {
+        let line = Line::from(vec!["#".red(), "\u{FE0F}".red()]);
+        let wrapped = word_wrap_line_grapheme_safe(&line, 1);
+
+        assert_eq!(line.width(), 1);
+        assert_eq!(line_width_grapheme_safe(&line), 2);
+        assert_eq!(wrapped, vec![Line::from("#\u{FE0F}".red())]);
+        assert_eq!(wrapped[0].width(), 2);
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_fast_path_preserves_span_style_over_line_style() {
+        let line = Line::from("abc".blue()).style(Style::new().red());
+
+        assert_eq!(
+            word_wrap_line_grapheme_safe(&line, 1),
+            vec![
+                Line::from("a".blue()),
+                Line::from("b".blue()),
+                Line::from("c".blue())
+            ]
+        );
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_preserves_alignment_on_all_paths() {
+        let scalar = Line::from("abc").centered();
+        assert_eq!(
+            word_wrap_line_grapheme_safe(&scalar, 1),
+            vec![
+                Line::from("a").centered(),
+                Line::from("b").centered(),
+                Line::from("c").centered()
+            ]
+        );
+
+        let family = "👨‍👩‍👧‍👦";
+        let custom = Line::from(family.repeat(2)).right_aligned();
+        assert_eq!(
+            word_wrap_line_grapheme_safe(&custom, 2),
+            vec![
+                Line::from(family.to_string()).right_aligned(),
+                Line::from(family.to_string()).right_aligned()
+            ]
+        );
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_keeps_separately_styled_arabic_scalars_separate() {
+        let line = Line::from(vec!["ل".red(), "ا".cyan()]);
+
+        assert_eq!(line.width(), 2);
+        assert_eq!(
+            word_wrap_line_grapheme_safe(&line, 1),
+            vec![Line::from("ل".red()), Line::from("ا".cyan())]
+        );
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_units_split_repeated_zwj_emoji_linearly() {
+        let family = "👨‍👩‍👧‍👦";
+        let line = Line::from(family.repeat(3).red());
+        let graphemes = collect_wrap_graphemes(&line);
+
+        assert_eq!(
+            build_wrap_units(&graphemes),
+            vec![
+                WrapUnit {
+                    range: 0..1,
+                    contextual_width: 2,
+                    rendered_width: 2,
+                },
+                WrapUnit {
+                    range: 1..2,
+                    contextual_width: 2,
+                    rendered_width: 2,
+                },
+                WrapUnit {
+                    range: 2..3,
+                    contextual_width: 2,
+                    rendered_width: 2,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_units_keep_lam_alef_pairs_together() {
+        let line = Line::from("لالا");
+        let graphemes = collect_wrap_graphemes(&line);
+
+        assert_eq!(
+            build_wrap_units(&graphemes),
+            vec![
+                WrapUnit {
+                    range: 0..2,
+                    contextual_width: 1,
+                    rendered_width: 2,
+                },
+                WrapUnit {
+                    range: 2..4,
+                    contextual_width: 1,
+                    rendered_width: 2,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_units_keep_non_breaking_spaces_with_neighbors() {
+        for space in ['\u{00A0}', '\u{2007}', '\u{202F}'] {
+            let line = Line::from(format!("👨‍👩‍👧‍👦{space}t"));
+            let graphemes = collect_wrap_graphemes(&line);
+
+            assert_eq!(
+                build_wrap_units(&graphemes),
+                vec![WrapUnit {
+                    range: 0..3,
+                    contextual_width: 4,
+                    rendered_width: 4,
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_units_respect_style_boundaries() {
+        let line = Line::from(vec!["ل".red(), "ا".cyan()]);
+        let graphemes = collect_wrap_graphemes(&line);
+
+        assert_eq!(
+            build_wrap_units(&graphemes),
+            vec![
+                WrapUnit {
+                    range: 0..1,
+                    contextual_width: 1,
+                    rendered_width: 1,
+                },
+                WrapUnit {
+                    range: 1..2,
+                    contextual_width: 1,
+                    rendered_width: 1,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_units_fall_back_for_longer_contextual_widths() {
+        let line = Line::from("abc");
+        let graphemes = collect_wrap_graphemes(&line);
+
+        assert_eq!(
+            build_wrap_units_with_word_width(&graphemes, 2),
+            vec![WrapUnit {
+                range: 0..3,
+                contextual_width: 2,
+                rendered_width: 3,
+            }]
         );
     }
 

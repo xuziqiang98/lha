@@ -1400,6 +1400,74 @@ fn markdown_table_prefers_cell_local_code_over_cross_cell_backticks() {
 }
 
 #[test]
+fn markdown_table_rejects_code_pipe_masks_that_escape_code_events() {
+    let md = r#"| H1 | H2 | H3 |
+| --- | --- | --- |
+| prefix `x ``p|` longword|value`` suffix | tail |
+"#;
+    let text = render_markdown_text(md);
+    let lines = plain_lines(&text);
+    let rendered = lines.join("\n");
+    let code = text
+        .lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .filter(|span| span.style.fg == Some(Color::Cyan))
+        .map(|span| span.content.as_ref())
+        .collect::<Vec<_>>();
+    let body = lines
+        .iter()
+        .find(|line| line.contains("prefix"))
+        .expect("table body");
+    let first_boundary = &body[body.find("longword").expect("longword") + "longword".len()
+        ..body.find("value").expect("value")];
+    let second_boundary = &body[body.find("suffix").expect("suffix") + "suffix".len()
+        ..body.find("tail").expect("tail")];
+
+    assert_eq!(code, vec!["x ``p|"]);
+    assert!(
+        !first_boundary.is_empty() && first_boundary.chars().all(char::is_whitespace),
+        "{body:?}"
+    );
+    assert!(
+        !second_boundary.is_empty() && second_boundary.chars().all(char::is_whitespace),
+        "{body:?}"
+    );
+    assert!(!rendered.contains('\u{e000}'), "{rendered:?}");
+}
+
+#[test]
+fn markdown_table_preserves_code_opener_after_escaped_backtick() {
+    let md = r#"| A | B |
+| --- | --- |
+| \``foo|bar` | tail |
+"#;
+    let text = render_markdown_text(md);
+    let lines = plain_lines(&text);
+    let rendered = lines.join("\n");
+    let code = text
+        .lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .filter(|span| span.style.fg == Some(Color::Cyan))
+        .map(|span| span.content.as_ref())
+        .collect::<Vec<_>>();
+    let body = lines
+        .iter()
+        .find(|line| line.contains("foo|bar"))
+        .expect("table body");
+    let boundary = &body[body.find("foo|bar").expect("code") + "foo|bar".len()
+        ..body.find("tail").expect("tail")];
+
+    assert_eq!(code, vec!["foo|bar"]);
+    assert_eq!(rendered.matches('`').count(), 1);
+    assert!(
+        !boundary.is_empty() && boundary.chars().all(char::is_whitespace),
+        "{body:?}"
+    );
+}
+
+#[test]
 fn markdown_table_masks_code_pipes_before_normalizing_long_and_sparse_rows() {
     let md = r#"| A | B | C |
 | --- | --- | --- |
@@ -1459,6 +1527,51 @@ fn markdown_table_recovers_blockquoted_explicit_header_with_raw_code_pipe() {
             .flat_map(|line| line.spans.iter())
             .any(|span| span.content == "A|B" && span.style.fg == Some(Color::Cyan))
     );
+}
+
+#[test]
+fn markdown_table_recovers_list_headers_with_raw_code_pipe() {
+    let cases = [
+        (
+            "- ",
+            r#"- | `A|B` | C |
+  | --- | --- |
+  | value | tail |
+"#,
+        ),
+        (
+            "1. ",
+            r#"1. | `A|B` | C |
+   | --- | --- |
+   | value | tail |
+"#,
+        ),
+    ];
+
+    for (marker, md) in cases {
+        let text = render_markdown_text(md);
+        let lines = plain_lines(&text);
+        let rendered = lines.join("\n");
+
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.starts_with(marker))
+                .count(),
+            1,
+            "{marker:?}: {rendered:?}"
+        );
+        assert!(rendered.contains('━'), "{marker:?}: {rendered:?}");
+        assert!(rendered.contains("value"), "{marker:?}: {rendered:?}");
+        assert!(rendered.contains("tail"), "{marker:?}: {rendered:?}");
+        assert!(
+            text.lines
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .any(|span| span.content == "A|B" && span.style.fg == Some(Color::Cyan)),
+            "{marker:?}: {text:?}"
+        );
+    }
 }
 
 #[test]
@@ -1616,6 +1729,156 @@ one | two | three
 }
 
 #[test]
+fn markdown_table_spillover_reparses_contiguous_rows_as_one_fragment() {
+    let md = r#"| A | B |
+| --- | --- |
+| x | y |
+This is *one
+emphasized phrase*.
+"#;
+    let text = render_markdown_text(md);
+    let lines = plain_lines(&text);
+    let italic = text
+        .lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .filter(|span| span.style.add_modifier.contains(Modifier::ITALIC))
+        .map(|span| span.content.as_ref())
+        .collect::<Vec<_>>();
+
+    assert!(lines.iter().any(|line| line == "This is one"));
+    assert!(lines.iter().any(|line| line == "emphasized phrase."));
+    assert_eq!(italic, vec!["one", "emphasized phrase"]);
+}
+
+#[test]
+fn markdown_table_spillover_never_leaks_sentinel_after_backticks_repair_across_rows() {
+    let cases = [
+        (
+            "first sentinel",
+            r#"| A | B |
+| --- | --- |
+| x | y |
+Plain `
+`a|b`
+"#
+            .to_string(),
+            '\u{e000}',
+            None,
+        ),
+        (
+            "later sentinel",
+            "| A | B |\n| --- | --- |\n| x | y |\nPlain \u{e000} `\n`a|b`\n".to_string(),
+            '\u{e001}',
+            Some('\u{e000}'),
+        ),
+    ];
+
+    for (name, md, sentinel, preserved) in cases {
+        let text = render_markdown_text(&md);
+        let rendered = plain_lines(&text).join("\n");
+
+        assert!(!rendered.contains(sentinel), "{name}: {rendered:?}");
+        assert!(rendered.contains("a|b"), "{name}: {rendered:?}");
+        assert!(
+            text.lines
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .any(|span| span.content == " " && span.style.fg == Some(Color::Cyan)),
+            "{name}: {text:?}"
+        );
+        assert!(rendered.ends_with("a|b`"), "{name}: {rendered:?}");
+        if let Some(preserved) = preserved {
+            assert!(rendered.contains(preserved), "{name}: {rendered:?}");
+        }
+    }
+}
+
+#[test]
+fn markdown_table_spillover_resolves_cross_row_reference_link() {
+    let md = r#"| A | B |
+| --- | --- |
+| x | y |
+Read [the
+docs][ref].
+
+[ref]: https://example.com
+"#;
+    let text = render_markdown_text(md);
+    let rendered = plain_lines(&text).join("\n");
+    let urls = text
+        .lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .filter(|span| {
+            span.content == "https://example.com"
+                && span
+                    .style
+                    .add_modifier
+                    .contains(Modifier::UNDERLINED)
+        })
+        .count();
+
+    assert!(rendered.contains("Read the"), "{rendered:?}");
+    assert!(rendered.contains("docs (https://example.com)."), "{rendered:?}");
+    assert_eq!(urls, 1);
+}
+
+#[test]
+fn markdown_table_spillover_keeps_blockquote_prefix_once() {
+    let md = r#"> | A | B |
+> | --- | --- |
+> | x | y |
+> This is *one
+> emphasized phrase*.
+"#;
+    let text = render_markdown_text(md);
+    let lines = plain_lines(&text);
+    let spillover = lines
+        .iter()
+        .filter(|line| line.contains("This is") || line.contains("emphasized phrase"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(spillover.len(), 2);
+    assert!(
+        spillover
+            .iter()
+            .all(|line| line.starts_with("> ") && !line.starts_with("> > "))
+    );
+    assert!(
+        text.lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .filter(|span| span.style.add_modifier.contains(Modifier::ITALIC))
+            .count()
+            >= 2
+    );
+}
+
+#[test]
+fn markdown_table_spillover_keeps_list_continuation_indent() {
+    let md = r#"- | A | B |
+  | --- | --- |
+  | x | y |
+  This is *one
+  emphasized phrase*.
+"#;
+    let text = render_markdown_text(md);
+    let lines = plain_lines(&text);
+    let spillover = lines
+        .iter()
+        .filter(|line| line.contains("This is") || line.contains("emphasized phrase"))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        spillover,
+        vec!["  This is one", "  emphasized phrase."]
+    );
+    assert_eq!(lines.iter().filter(|line| line.starts_with("- ")).count(), 1);
+}
+
+#[test]
 fn markdown_table_spillover_resolves_reference_definitions_before_and_after_table() {
     let cases = [
         (
@@ -1710,6 +1973,21 @@ fn markdown_table_pipe_fallback_does_not_reescape_rendered_code() {
 
     assert_eq!(code, "a|b");
     assert!(!rendered.contains(r"\|"), "{rendered:?}");
+}
+
+#[test]
+fn markdown_table_pipe_fallback_keeps_zwj_header_whole_and_styled() {
+    let family = "👨‍👩‍👧‍👦";
+    let md = format!("| {family} | C |\n| --- | --- |\n");
+    let text = render_markdown_text_with_width(&md, Some(1));
+    let header = text
+        .lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .find(|span| span.content == family)
+        .expect("whole family emoji header span");
+
+    assert!(header.style.add_modifier.contains(Modifier::BOLD));
 }
 
 #[test]

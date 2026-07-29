@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::ops::Range;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct BacktickRun {
     range: Range<usize>,
     len: usize,
@@ -73,10 +73,28 @@ struct MaskOffset {
     line: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct TableHeaderLocation {
+    line: usize,
+    content_offset_in_line: usize,
+}
+
 #[derive(Clone, Debug)]
 struct TableSource {
-    header_line: usize,
+    header: TableHeaderLocation,
     lines: BTreeSet<usize>,
+}
+
+#[derive(Debug)]
+struct MaskedMarkdown {
+    source: String,
+    sentinel_offsets: Vec<usize>,
+}
+
+#[derive(Debug, Default)]
+struct MarkdownAnalysis {
+    tables: Vec<TableSource>,
+    code_ranges: Vec<Range<usize>>,
 }
 
 pub(super) fn prepare_markdown<'a>(
@@ -115,15 +133,14 @@ pub(super) fn prepare_markdown<'a>(
     let provisional = mask_offsets(input, &masks, sentinel);
     let original_headers = table_sources(input, options)
         .into_iter()
-        .map(|table| table.header_line)
+        .map(|table| table.header)
         .collect::<HashSet<_>>();
-    let accepted_lines = table_sources(&provisional, options)
+    let accepted_lines = table_sources(&provisional.source, options)
         .into_iter()
         .filter(|table| {
-            original_headers.contains(&table.header_line)
-                || line_ranges
-                    .get(table.header_line)
-                    .is_some_and(|range| has_explicit_row_boundaries(&input[range.clone()]))
+            original_headers.contains(&table.header)
+                || table_header_source(input, &line_ranges, table.header)
+                    .is_some_and(has_explicit_row_boundaries)
         })
         .flat_map(|table| table.lines)
         .collect::<HashSet<_>>();
@@ -134,14 +151,27 @@ pub(super) fn prepare_markdown<'a>(
             return (Cow::Borrowed(input), None);
         }
         let masked = mask_offsets(input, &masks, sentinel);
-        let final_lines = table_sources(&masked, options)
+        let analysis = analyze_markdown(&masked.source, options);
+        let final_lines = analysis
+            .tables
             .into_iter()
             .flat_map(|table| table.lines)
             .collect::<HashSet<_>>();
         let previous_len = masks.len();
-        masks.retain(|mask| final_lines.contains(&mask.line));
+        masks = masks
+            .into_iter()
+            .zip(masked.sentinel_offsets.iter().copied())
+            .filter_map(|(mask, sentinel_offset)| {
+                (final_lines.contains(&mask.line)
+                    && analysis
+                        .code_ranges
+                        .iter()
+                        .any(|range| range.contains(&sentinel_offset)))
+                .then_some(mask)
+            })
+            .collect();
         if masks.len() == previous_len {
-            return (Cow::Owned(masked), Some(sentinel));
+            return (Cow::Owned(masked.source), Some(sentinel));
         }
     }
 }
@@ -258,10 +288,11 @@ fn backtick_runs(source: &str) -> Vec<BacktickRun> {
         while offset < bytes.len() && bytes[offset] == b'`' {
             offset += 1;
         }
-        if !is_backslash_escaped(source, start) {
+        let effective_start = start + usize::from(is_backslash_escaped(source, start));
+        if effective_start < offset {
             runs.push(BacktickRun {
-                range: start..offset,
-                len: offset - start,
+                range: effective_start..offset,
+                len: offset - effective_start,
             });
         }
     }
@@ -340,32 +371,55 @@ fn line_starts(input: &str) -> Vec<usize> {
     starts
 }
 
+fn table_header_source<'a>(
+    input: &'a str,
+    line_ranges: &[Range<usize>],
+    header: TableHeaderLocation,
+) -> Option<&'a str> {
+    let line_range = line_ranges.get(header.line)?;
+    let start = line_range
+        .start
+        .checked_add(header.content_offset_in_line)?;
+    input.get(start..line_range.end)
+}
+
 fn table_sources(input: &str, options: Options) -> Vec<TableSource> {
+    analyze_markdown(input, options).tables
+}
+
+fn analyze_markdown(input: &str, options: Options) -> MarkdownAnalysis {
     if input.is_empty() {
-        return Vec::new();
+        return MarkdownAnalysis::default();
     }
     let starts = line_starts(input);
     let mut table_options = options;
     table_options.insert(Options::ENABLE_TABLES);
     let mut active = None;
-    let mut tables = Vec::new();
+    let mut analysis = MarkdownAnalysis::default();
     for (event, range) in Parser::new_ext(input, table_options).into_offset_iter() {
-        if matches!(event, Event::Start(Tag::Table(_))) {
+        if matches!(&event, Event::Start(Tag::Table(_))) {
+            let header_line = line_number_at(&starts, range.start);
             active = Some(TableSource {
-                header_line: line_number_at(&starts, range.start),
+                header: TableHeaderLocation {
+                    line: header_line,
+                    content_offset_in_line: range.start.saturating_sub(starts[header_line]),
+                },
                 lines: BTreeSet::new(),
             });
+        }
+        if matches!(&event, Event::Code(_)) {
+            analysis.code_ranges.push(range.clone());
         }
         if let Some(table) = active.as_mut() {
             add_range_lines(table, &starts, input.len(), &range);
         }
-        if matches!(event, Event::End(TagEnd::Table))
+        if matches!(&event, Event::End(TagEnd::Table))
             && let Some(table) = active.take()
         {
-            tables.push(table);
+            analysis.tables.push(table);
         }
     }
-    tables
+    analysis
 }
 
 fn add_range_lines(
@@ -404,16 +458,21 @@ fn has_explicit_row_boundaries(source: &str) -> bool {
         && !is_backslash_escaped(source, trailing_offset)
 }
 
-fn mask_offsets(input: &str, masks: &[MaskOffset], sentinel: char) -> String {
+fn mask_offsets(input: &str, masks: &[MaskOffset], sentinel: char) -> MaskedMarkdown {
     let mut output = String::with_capacity(input.len() + masks.len() * (sentinel.len_utf8() - 1));
+    let mut sentinel_offsets = Vec::with_capacity(masks.len());
     let mut cursor = 0;
     for mask in masks {
         output.push_str(&input[cursor..mask.offset]);
+        sentinel_offsets.push(output.len());
         output.push(sentinel);
         cursor = mask.offset + 1;
     }
     output.push_str(&input[cursor..]);
-    output
+    MaskedMarkdown {
+        source: output,
+        sentinel_offsets,
+    }
 }
 
 #[cfg(test)]
@@ -450,5 +509,49 @@ mod tests {
         ];
 
         assert_eq!(select_candidate_pipe_offsets(candidates), vec![3]);
+    }
+
+    #[test]
+    fn escaped_backtick_run_preserves_the_unescaped_suffix() {
+        let source = r"\``foo|bar`";
+        let closer_start = source.len() - 1;
+
+        assert_eq!(
+            backtick_runs(source),
+            vec![
+                BacktickRun {
+                    range: 2..3,
+                    len: 1,
+                },
+                BacktickRun {
+                    range: closer_start..source.len(),
+                    len: 1,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn final_masks_only_remain_inside_document_code_events() {
+        let source = r#"| H1 | H2 | H3 |
+| --- | --- | --- |
+| prefix `x ``p|` longword|value`` suffix | tail |"#;
+        let (prepared, sentinel) = prepare_markdown(source, Options::empty());
+        let sentinel = sentinel.expect("code pipe should be masked");
+        let prepared = prepared.into_owned();
+        let analysis = analyze_markdown(&prepared, Options::empty());
+        let sentinel_offsets = prepared
+            .char_indices()
+            .filter_map(|(offset, character)| (character == sentinel).then_some(offset))
+            .collect::<Vec<_>>();
+
+        assert_eq!(sentinel_offsets.len(), 1);
+        assert!(sentinel_offsets.iter().all(|offset| {
+            analysis
+                .code_ranges
+                .iter()
+                .any(|range| range.contains(offset))
+        }));
+        assert!(prepared.contains("longword|value"));
     }
 }

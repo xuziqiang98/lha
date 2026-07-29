@@ -2,6 +2,8 @@ use super::TABLE_BODY_SEPARATOR_CHAR;
 use super::TableCell;
 use super::TableColumnKind;
 use super::TableColumnMetrics;
+use crate::product::tui_app::wrapping::coalesce_line_graphemes;
+use crate::product::tui_app::wrapping::line_width_grapheme_safe;
 use crate::product::tui_app::wrapping::word_wrap_line_grapheme_safe;
 use ratatui::style::Style;
 use ratatui::text::Line;
@@ -92,7 +94,7 @@ pub(super) fn render_records(
 ) -> Vec<Line<'static>> {
     let label_width = headers
         .iter()
-        .map(|header| header_label_line(header, label_style).width())
+        .map(|header| line_width_grapheme_safe(&header_label_line(header, label_style)))
         .max()
         .unwrap_or(0);
     let minimum_value_width = if metrics
@@ -152,7 +154,7 @@ fn render_aligned_field(
         let mut spans = Vec::new();
         if line_index == 0 {
             let mut label = header_label_line(header, label_style);
-            let rendered_label_width = label.width();
+            let rendered_label_width = line_width_grapheme_safe(&label);
             spans.push(Span::raw(" ".repeat(FIELD_LEADING_PADDING)));
             spans.append(&mut label.spans);
             spans.push(Span::raw(" ".repeat(
@@ -177,7 +179,7 @@ fn render_stacked_field(
     let (leading_padding, wrapped_label) = wrap_with_soft_indent(
         available_width,
         FIELD_LEADING_PADDING,
-        label.width().max(1),
+        line_width_grapheme_safe(&label).max(1),
         |width| word_wrap_line_grapheme_safe(&label, width),
     );
     for label_line in wrapped_label {
@@ -233,7 +235,7 @@ fn header_label_line(header: &TableCell, label_style: Style) -> Line<'static> {
             span
         }));
     }
-    Line::from(spans)
+    coalesce_line_graphemes(&Line::from(spans))
 }
 
 fn wrap_cell(cell: &TableCell, width: usize) -> Vec<Line<'static>> {
@@ -257,9 +259,17 @@ fn wrap_cell(cell: &TableCell, width: usize) -> Vec<Line<'static>> {
 }
 
 fn cell_width(cell: &TableCell) -> usize {
-    cell.lines.iter().map(Line::width).max().unwrap_or(0)
+    cell.lines
+        .iter()
+        .map(line_width_grapheme_safe)
+        .max()
+        .unwrap_or(0)
 }
 
 fn widest_line_width(lines: &[Line<'static>]) -> usize {
-    lines.iter().map(Line::width).max().unwrap_or(0)
+    lines
+        .iter()
+        .map(line_width_grapheme_safe)
+        .max()
+        .unwrap_or(0)
 }

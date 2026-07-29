@@ -1,5 +1,7 @@
 use crate::product::tui_app::render::line_utils::line_to_static;
 use crate::product::tui_app::wrapping::RtOptions;
+use crate::product::tui_app::wrapping::coalesce_line_graphemes;
+use crate::product::tui_app::wrapping::line_width_grapheme_safe;
 use crate::product::tui_app::wrapping::word_wrap_line;
 use crate::product::tui_app::wrapping::word_wrap_line_grapheme_safe;
 use pulldown_cmark::Alignment;
@@ -19,6 +21,7 @@ use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ops::Range;
@@ -852,18 +855,22 @@ where
             };
         }
 
-        let mut spillover_lines = Vec::new();
-        let mut rows = Vec::with_capacity(table_state.rows.len());
-        let mut in_spillover = false;
-        for (row_index, row) in table_state.rows.iter().enumerate() {
-            let next_row = table_state.rows.get(row_index + 1);
-            if in_spillover || column_count > 1 && Self::is_spillover_row(row, next_row) {
-                in_spillover = true;
-                spillover_lines.extend(self.render_spillover_row_source(row));
-            } else {
-                rows.push(row.cells.clone());
-            }
-        }
+        let spillover_index = table_state
+            .rows
+            .iter()
+            .enumerate()
+            .find_map(|(row_index, row)| {
+                (column_count > 1
+                    && Self::is_spillover_row(row, table_state.rows.get(row_index + 1)))
+                .then_some(row_index)
+            })
+            .unwrap_or(table_state.rows.len());
+        let (table_rows, spillover_rows) = table_state.rows.split_at(spillover_index);
+        let mut rows = table_rows
+            .iter()
+            .map(|row| row.cells.clone())
+            .collect::<Vec<_>>();
+        let spillover_lines = self.render_spillover_rows_source(spillover_rows);
 
         let mut header = table_state
             .header
@@ -899,7 +906,7 @@ where
                     &rows,
                     &table_state.alignments,
                 ),
-                table_lines_prewrapped: false,
+                table_lines_prewrapped: true,
                 spillover_lines,
             };
         };
@@ -1197,7 +1204,22 @@ where
         let wrapped_cells: Vec<Vec<Line<'static>>> = row
             .iter()
             .zip(column_widths)
-            .map(|(cell, width)| self.wrap_cell(cell, *width))
+            .map(|(cell, width)| {
+                let styled_cell = TableCell {
+                    lines: cell
+                        .lines
+                        .iter()
+                        .map(|line| {
+                            let mut line = line.clone();
+                            for span in &mut line.spans {
+                                span.style = span.style.patch(row_style);
+                            }
+                            coalesce_line_graphemes(&line)
+                        })
+                        .collect(),
+                };
+                self.wrap_cell(&styled_cell, *width)
+            })
             .collect();
         let row_height = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1);
 
@@ -1223,9 +1245,6 @@ where
                     .get(row_line)
                     .cloned()
                     .unwrap_or_default();
-                for span in &mut line.spans {
-                    span.style = span.style.patch(row_style);
-                }
                 let line_width = Self::line_display_width(&line);
                 let remaining = width.saturating_sub(line_width);
                 let (left_padding, right_padding) = match alignments[column] {
@@ -1259,14 +1278,24 @@ where
         alignments: &[Alignment],
     ) -> Vec<Line<'static>> {
         let mut output = vec![
-            Self::render_pipe_fallback_row(header),
-            Line::from(Self::alignments_to_pipe_delimiter(alignments)),
+            Self::render_pipe_fallback_row(header, self.styles.table_header),
+            Line::from(Self::alignments_to_pipe_delimiter(alignments))
+                .style(self.styles.table_separator),
         ];
-        output.extend(rows.iter().map(|row| Self::render_pipe_fallback_row(row)));
+        output.extend(
+            rows.iter()
+                .map(|row| Self::render_pipe_fallback_row(row, Style::default())),
+        );
+        let Some(width) = self.available_record_width() else {
+            return output;
+        };
         output
+            .iter()
+            .flat_map(|line| word_wrap_line_grapheme_safe(line, width))
+            .collect()
     }
 
-    fn render_pipe_fallback_row(row: &[TableCell]) -> Line<'static> {
+    fn render_pipe_fallback_row(row: &[TableCell], row_style: Style) -> Line<'static> {
         let mut spans = vec!["|".into()];
         for cell in row {
             spans.push(" ".into());
@@ -1274,11 +1303,14 @@ where
                 if line_index > 0 {
                     spans.push(" ".into());
                 }
-                spans.extend(line.spans.iter().cloned());
+                spans.extend(line.spans.iter().cloned().map(|mut span| {
+                    span.style = line.style.patch(span.style).patch(row_style);
+                    span
+                }));
             }
             spans.push(" |".into());
         }
-        Line::from(spans)
+        coalesce_line_graphemes(&Line::from(spans))
     }
 
     fn alignments_to_pipe_delimiter(alignments: &[Alignment]) -> String {
@@ -1319,23 +1351,54 @@ where
         !row.has_table_pipe_syntax && Self::first_non_empty_only_text(&row.cells).is_some()
     }
 
+    fn render_spillover_rows_source(&self, rows: &[TableBodyRow]) -> Vec<Line<'static>> {
+        if rows.is_empty() {
+            return Vec::new();
+        }
+
+        let mut source = String::new();
+        for row in rows {
+            let Some(row_source) = self.input.get(row.source_range.clone()) else {
+                return rows
+                    .iter()
+                    .flat_map(|row| self.render_spillover_row_source(row))
+                    .collect();
+            };
+            if !source.is_empty() && !source.ends_with('\n') {
+                source.push('\n');
+            }
+            source.push_str(row_source);
+        }
+        self.render_spillover_source(&source)
+    }
+
     fn render_spillover_row_source(&self, row: &TableBodyRow) -> Vec<Line<'static>> {
-        let input = self.input;
-        if let Some(source) = input.get(row.source_range.clone()) {
-            let mut options = Options::empty();
-            options.insert(Options::ENABLE_STRIKETHROUGH);
-            let resolver = FragmentReferenceResolver::from_fragment(
-                source,
-                options,
-                self.iter.reference_definitions(),
-            );
-            let parser = Parser::new_with_broken_link_callback(source, options, Some(resolver))
-                .into_offset_iter();
-            let mut writer = Writer::new(source, parser, None, self.inline_code_pipe_sentinel);
-            writer.run();
-            return writer.text.lines;
+        if let Some(source) = self.input.get(row.source_range.clone()) {
+            return self.render_spillover_source(source);
         }
         Self::spillover_row_fallback(row)
+    }
+
+    fn render_spillover_source(&self, source: &str) -> Vec<Line<'static>> {
+        let source = match self.inline_code_pipe_sentinel {
+            Some(sentinel) if source.contains(sentinel) => {
+                Cow::Owned(source.replace(sentinel, "|"))
+            }
+            _ => Cow::Borrowed(source),
+        };
+        let source = source.as_ref();
+        let mut options = Options::empty();
+        options.insert(Options::ENABLE_STRIKETHROUGH);
+        let resolver = FragmentReferenceResolver::from_fragment(
+            source,
+            options,
+            self.iter.reference_definitions(),
+        );
+        let parser = Parser::new_with_broken_link_callback(source, options, Some(resolver))
+            .into_offset_iter();
+        let mut writer = Writer::new(source, parser, None, None);
+        writer.run();
+        writer.text.lines
     }
 
     fn spillover_row_fallback(row: &TableBodyRow) -> Vec<Line<'static>> {
@@ -1371,11 +1434,11 @@ where
     }
 
     fn spans_display_width(spans: &[Span<'_>]) -> usize {
-        spans.iter().map(|span| span.content.width()).sum()
+        line_width_grapheme_safe(&Line::from(spans.to_vec()))
     }
 
     fn line_display_width(line: &Line<'_>) -> usize {
-        Self::spans_display_width(&line.spans)
+        line_width_grapheme_safe(line)
     }
 
     fn cell_display_width(cell: &TableCell) -> usize {
@@ -1883,6 +1946,62 @@ mod tests {
                 case.name
             );
         }
+    }
+
+    #[test]
+    fn spillover_rows_fall_back_per_row_when_a_source_range_is_invalid() {
+        let source = "first";
+        let writer = TestWriter::new(source, Parser::new(source).into_offset_iter(), None, None);
+        let mut valid = make_body_row(vec![make_cell("first")], false);
+        valid.source_range = 0..source.len();
+        let mut invalid = make_body_row(vec![make_cell("fallback")], false);
+        invalid.source_range = source.len() + 1..source.len() + 2;
+        let rows = vec![valid, invalid];
+        let expected = rows
+            .iter()
+            .flat_map(|row| writer.render_spillover_row_source(row))
+            .collect::<Vec<_>>();
+
+        assert_eq!(writer.render_spillover_rows_source(&rows), expected);
+    }
+
+    #[test]
+    fn spillover_source_restores_sentinels_before_reparsing_combined_rows() {
+        let source = "";
+        let writer = TestWriter::new(
+            source,
+            Parser::new(source).into_offset_iter(),
+            None,
+            Some('\u{e000}'),
+        );
+        let masked = "Plain `\n`a\u{e000}b`";
+        let original = "Plain `\n`a|b`";
+
+        assert_eq!(
+            writer.render_spillover_source(masked),
+            writer.render_spillover_source(original)
+        );
+    }
+
+    #[test]
+    fn table_width_coalesces_same_style_span_graphemes() {
+        let line = Line::from(vec!["#".red(), "\u{FE0F}".red()]);
+
+        assert_eq!(line.width(), 1);
+        assert_eq!(TestWriter::line_display_width(&line), 2);
+    }
+
+    #[test]
+    fn table_header_style_is_applied_before_grapheme_wrapping() {
+        let mut cell = TableCell::default();
+        cell.lines
+            .push(Line::from(vec!["क".bold(), "\u{094D}".into(), "ष".bold()]));
+        let writer = TestWriter::new("", Parser::new("").into_offset_iter(), Some(1), None);
+
+        assert_eq!(
+            writer.render_table_row(&[cell], &[1], &[Alignment::Left], Style::new().bold()),
+            vec![Line::from(vec![" ".into(), "क्ष".bold()])]
+        );
     }
 
     #[test]
