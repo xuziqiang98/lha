@@ -14309,8 +14309,13 @@ async fn non_streamed_agent_message_turn_complete_separator_uses_ordinary_histor
 #[tokio::test]
 async fn review_exit_explanation_uses_ordinary_history_insertion() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let explanation = "Review comment:\nFormatting the potential body\n\
-        Preserve saved default mining workflows on resume.";
+    let explanation = r#"
+Review summary.
+
+| Name | Owner | Status | Description |
+| --- | --- | --- | --- |
+| renderer | tui | ready | The table switches layouts when the terminal width changes. |
+"#;
 
     chat.handle_codex_event(Event {
         id: "review-exit-repaint".into(),
@@ -14324,25 +14329,85 @@ async fn review_exit_explanation_uses_ordinary_history_insertion() {
         }),
     });
 
-    let mut saw_explanation = false;
-    let mut saw_finished_banner = false;
-    for event in drain_events(&mut rx) {
-        let Some(cell) = into_insert_history_cell(event) else {
+    let mut explanation_cell = None;
+    let mut explanation_index = None;
+    let mut finished_banner_index = None;
+    for (index, cell) in drain_events(&mut rx)
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .enumerate()
+    {
+        let rendered = lines_to_single_string(&cell.display_lines(96));
+        if cell.as_any().is::<AgentMessageCell>() && rendered.contains("Review summary.") {
+            assert!(
+                explanation_cell.is_none(),
+                "expected exactly one review explanation cell"
+            );
+            explanation_index = Some(index);
+            explanation_cell = Some(cell);
             continue;
-        };
-        let rendered = lines_to_single_string(&cell.display_lines(100));
-        if cell.as_any().is::<AgentMessageCell>() && rendered.contains("Review comment:") {
-            saw_explanation = true;
         }
         if rendered.contains("<< Code review finished >>") {
-            saw_finished_banner = true;
+            finished_banner_index = Some(index);
         }
     }
 
-    assert!(saw_explanation, "expected review explanation in history");
+    let explanation_cell = explanation_cell.expect("expected review explanation in history");
+    let first_wide = explanation_cell.display_lines(96);
+    let narrow = explanation_cell.display_lines(24);
+    let second_wide = explanation_cell.display_lines(96);
+
+    assert_eq!(second_wide, first_wide);
     assert!(
-        saw_finished_banner,
-        "expected ordinary review finished banner in history"
+        lines_to_strings(&first_wide)
+            .iter()
+            .any(|line| line.contains('━'))
+    );
+    assert!(
+        !lines_to_strings(&narrow)
+            .iter()
+            .any(|line| line.contains('━'))
+    );
+
+    for (width, lines) in [(96_u16, &first_wide), (24_u16, &narrow)] {
+        let rendered = lines_to_strings(lines);
+        assert_eq!(rendered.first().map(String::as_str), Some(""));
+        assert_eq!(
+            rendered.get(1).map(String::as_str),
+            Some("  Review summary.")
+        );
+        assert!(!rendered[1].starts_with("• "));
+        assert!(
+            lines.iter().all(|line| line.width() <= usize::from(width)),
+            "width {width} overflowed: {rendered:?}"
+        );
+        let compact = rendered
+            .join("")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+        for expected in [
+            "Name",
+            "Owner",
+            "Status",
+            "Description",
+            "renderer",
+            "tui",
+            "ready",
+            "Thetableswitcheslayoutswhentheterminalwidthchanges.",
+        ] {
+            assert!(
+                compact.contains(expected),
+                "width {width} lost {expected:?}: {compact:?}"
+            );
+        }
+    }
+
+    let explanation_index = explanation_index.expect("review explanation index");
+    let finished_banner_index = finished_banner_index.expect("review finished banner index");
+    assert!(
+        explanation_index < finished_banner_index,
+        "review finished banner should follow explanation"
     );
 }
 

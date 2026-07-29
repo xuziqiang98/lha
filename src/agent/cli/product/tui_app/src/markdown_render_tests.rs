@@ -1468,6 +1468,52 @@ fn markdown_table_preserves_code_opener_after_escaped_backtick() {
 }
 
 #[test]
+fn markdown_table_preserves_backslash_preceded_code_closers() {
+    let md = r#"| `A|B\` | C |
+| --- | --- |
+| `x|y\` | tail |
+"#;
+    let text = render_markdown_text(md);
+    let rendered = plain_lines(&text).join("\n");
+    let code = text
+        .lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .filter(|span| span.style.fg == Some(Color::Cyan))
+        .map(|span| span.content.as_ref())
+        .collect::<Vec<_>>();
+
+    assert_eq!(code, vec![r"A|B\", r"x|y\"]);
+    assert!(rendered.contains('━'), "{rendered:?}");
+    assert!(rendered.contains("tail"), "{rendered:?}");
+    assert!(!rendered.contains('\u{e000}'), "{rendered:?}");
+}
+
+#[test]
+fn markdown_table_escaped_literal_backticks_do_not_steal_prior_code_closers() {
+    let md = r#"| `Header|Code` | Label\` |
+| --- | --- |
+| `x|` | longer\` |
+"#;
+    let text = render_markdown_text(md);
+    let rendered = plain_lines(&text).join("\n");
+    let code = text
+        .lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .filter(|span| span.style.fg == Some(Color::Cyan))
+        .map(|span| span.content.as_ref())
+        .collect::<Vec<_>>();
+
+    assert_eq!(code, vec!["Header|Code", "x|"]);
+    assert!(rendered.contains("Label`"), "{rendered:?}");
+    assert!(rendered.contains("longer`"), "{rendered:?}");
+    assert_eq!(rendered.matches('`').count(), 2, "{rendered:?}");
+    assert!(rendered.contains('━'), "{rendered:?}");
+    assert!(!rendered.contains('\u{e000}'), "{rendered:?}");
+}
+
+#[test]
 fn markdown_table_masks_code_pipes_before_normalizing_long_and_sparse_rows() {
     let md = r#"| A | B | C |
 | --- | --- | --- |

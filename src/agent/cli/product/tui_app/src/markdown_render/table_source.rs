@@ -15,6 +15,17 @@ struct BacktickRun {
     len: usize,
 }
 
+impl BacktickRun {
+    fn as_opener(&self, source: &str) -> Option<Self> {
+        let effective_start =
+            self.range.start + usize::from(is_backslash_escaped(source, self.range.start));
+        (effective_start < self.range.end).then(|| Self {
+            range: effective_start..self.range.end,
+            len: self.range.end - effective_start,
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 struct CodePipeCandidate {
     range: Range<usize>,
@@ -238,8 +249,12 @@ fn select_candidate_pipe_offsets(mut candidates: Vec<CodePipeCandidate>) -> Vec<
 
 fn code_pipe_candidates(source: &str, options: Options) -> Vec<CodePipeCandidate> {
     let runs = backtick_runs(source);
+    let full_source_code_ranges = full_source_code_ranges(source, options);
     let mut candidates = Vec::new();
-    for (run_index, opener) in runs.iter().enumerate() {
+    for (run_index, raw_opener) in runs.iter().enumerate() {
+        let Some(opener) = raw_opener.as_opener(source) else {
+            continue;
+        };
         let Some(closer) = runs[run_index + 1..]
             .iter()
             .find(|closer| closer.len == opener.len)
@@ -247,6 +262,11 @@ fn code_pipe_candidates(source: &str, options: Options) -> Vec<CodePipeCandidate
             continue;
         };
         let range = opener.range.start..closer.range.end;
+        if is_backslash_escaped(source, closer.range.start)
+            && !full_source_code_ranges.contains(&range)
+        {
+            continue;
+        }
         let Some(code) = parsed_code_content(&source[range.clone()], options) else {
             continue;
         };
@@ -288,15 +308,21 @@ fn backtick_runs(source: &str) -> Vec<BacktickRun> {
         while offset < bytes.len() && bytes[offset] == b'`' {
             offset += 1;
         }
-        let effective_start = start + usize::from(is_backslash_escaped(source, start));
-        if effective_start < offset {
-            runs.push(BacktickRun {
-                range: effective_start..offset,
-                len: offset - effective_start,
-            });
-        }
+        runs.push(BacktickRun {
+            range: start..offset,
+            len: offset - start,
+        });
     }
     runs
+}
+
+fn full_source_code_ranges(source: &str, options: Options) -> Vec<Range<usize>> {
+    let mut inline_options = options;
+    inline_options.remove(Options::ENABLE_TABLES);
+    Parser::new_ext(source, inline_options)
+        .into_offset_iter()
+        .filter_map(|(event, range)| matches!(event, Event::Code(_)).then_some(range))
+        .collect()
 }
 
 fn parsed_code_content(source: &str, options: Options) -> Option<String> {
@@ -512,22 +538,91 @@ mod tests {
     }
 
     #[test]
-    fn escaped_backtick_run_preserves_the_unescaped_suffix() {
+    fn escaped_backtick_run_preserves_raw_run_and_opener_suffix() {
         let source = r"\``foo|bar`";
         let closer_start = source.len() - 1;
+        let runs = backtick_runs(source);
 
         assert_eq!(
-            backtick_runs(source),
+            runs,
             vec![
                 BacktickRun {
-                    range: 2..3,
-                    len: 1,
+                    range: 1..3,
+                    len: 2,
                 },
                 BacktickRun {
                     range: closer_start..source.len(),
                     len: 1,
                 },
             ]
+        );
+        assert_eq!(
+            runs[0].as_opener(source),
+            Some(BacktickRun {
+                range: 2..3,
+                len: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn escaped_single_backtick_cannot_open_code_span() {
+        assert_eq!(
+            selected_code_pipe_offsets(r"\`a|b`", Options::empty()),
+            Vec::<usize>::new()
+        );
+    }
+
+    #[test]
+    fn backslash_preceded_runs_keep_their_full_closer_length() {
+        for delimiter_len in 1..=3 {
+            for backslash_count in 1..=3 {
+                let delimiter = "`".repeat(delimiter_len);
+                let source = format!("{delimiter}a|b{}{delimiter}", "\\".repeat(backslash_count));
+                let pipe_offset = source.find('|').expect("code pipe");
+
+                assert_eq!(
+                    selected_code_pipe_offsets(&source, Options::empty()),
+                    vec![pipe_offset],
+                    "delimiter_len={delimiter_len}, backslash_count={backslash_count}, source={source:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mismatched_backslash_preceded_run_is_not_shortened_into_a_closer() {
+        let source = r"`a|b\``c`";
+        let pipe_offset = source.find('|').expect("code pipe");
+
+        assert_eq!(
+            selected_code_pipe_offsets(source, Options::empty()),
+            vec![pipe_offset]
+        );
+    }
+
+    #[test]
+    fn escaped_literal_backtick_cannot_close_reopened_candidate() {
+        for suffix in ["y", "longer"] {
+            let source = format!(r"| `x|` | {suffix}\` |");
+            let pipe_offset = source.find("x|").expect("code text") + 1;
+
+            assert_eq!(
+                selected_code_pipe_offsets(&source, Options::empty()),
+                vec![pipe_offset],
+                "suffix={suffix:?}, source={source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn escaped_literal_backtick_does_not_outscore_embedded_native_code() {
+        let source = r"| prefix `x|` suffix | longer\` |";
+        let pipe_offset = source.find("x|").expect("code text") + 1;
+
+        assert_eq!(
+            selected_code_pipe_offsets(source, Options::empty()),
+            vec![pipe_offset]
         );
     }
 

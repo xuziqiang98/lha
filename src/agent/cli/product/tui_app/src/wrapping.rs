@@ -249,6 +249,12 @@ struct WrapGrapheme {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct StyleRun {
+    range: Range<usize>,
+    style: Style,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct WrapUnit {
     range: Range<usize>,
     contextual_width: usize,
@@ -264,39 +270,52 @@ fn is_breakable_whitespace(symbol: &str) -> bool {
 }
 
 fn collect_wrap_graphemes(line: &Line<'_>) -> Vec<WrapGrapheme> {
-    fn push_style_run(output: &mut Vec<WrapGrapheme>, text: &str, style: Style) {
-        output.extend(
-            text.graphemes(true)
-                .filter(|symbol| *symbol != "\n")
-                .map(|symbol| WrapGrapheme {
-                    symbol: symbol.to_string(),
-                    style,
-                    width: UnicodeWidthStr::width(symbol),
-                    breakable_whitespace: is_breakable_whitespace(symbol),
-                    non_breaking_whitespace: symbol.chars().any(is_non_breaking_space),
-                }),
-        );
-    }
-
-    let mut graphemes = Vec::new();
-    let mut run = String::new();
-    let mut run_style = None;
+    let mut text = String::new();
+    let mut style_runs: Vec<StyleRun> = Vec::new();
     for span in &line.spans {
-        if span.content.is_empty() {
+        let start = text.len();
+        text.push_str(span.content.as_ref());
+        let end = text.len();
+        if start == end {
             continue;
         }
         let style = line.style.patch(span.style);
-        if run_style != Some(style) {
-            if let Some(style) = run_style {
-                push_style_run(&mut graphemes, &run, style);
-                run.clear();
-            }
-            run_style = Some(style);
+        if let Some(last) = style_runs.last_mut()
+            && last.style == style
+        {
+            last.range.end = end;
+            continue;
         }
-        run.push_str(span.content.as_ref());
+        style_runs.push(StyleRun {
+            range: start..end,
+            style,
+        });
     }
-    if let Some(style) = run_style {
-        push_style_run(&mut graphemes, &run, style);
+
+    // Ratatui renders spans independently, so each terminal grapheme must stay in one span.
+    let mut graphemes = Vec::new();
+    let mut style_run_index = 0;
+    for (offset, symbol) in text.grapheme_indices(true) {
+        if symbol == "\n" {
+            continue;
+        }
+        while style_runs
+            .get(style_run_index)
+            .is_some_and(|run| run.range.end <= offset)
+        {
+            style_run_index += 1;
+        }
+        debug_assert!(style_runs.get(style_run_index).is_some());
+        let style = style_runs
+            .get(style_run_index)
+            .map_or(line.style, |run| run.style);
+        graphemes.push(WrapGrapheme {
+            symbol: symbol.to_string(),
+            style,
+            width: UnicodeWidthStr::width(symbol),
+            breakable_whitespace: is_breakable_whitespace(symbol),
+            non_breaking_whitespace: symbol.chars().any(is_non_breaking_space),
+        });
     }
     graphemes
 }
@@ -439,6 +458,24 @@ fn flush_grapheme_line(
     }
 }
 
+fn push_wrap_units(
+    output: &mut Vec<Line<'static>>,
+    spans: &mut Vec<Span<'static>>,
+    line_width: &mut usize,
+    graphemes: &[WrapGrapheme],
+    units: &[WrapUnit],
+    width: usize,
+    alignment: Option<Alignment>,
+) {
+    for unit in units {
+        if !spans.is_empty() && line_width.saturating_add(unit.rendered_width) > width {
+            flush_grapheme_line(output, spans, line_width, alignment);
+        }
+        push_grapheme_range(spans, &graphemes[unit.range.clone()]);
+        *line_width = line_width.saturating_add(unit.rendered_width);
+    }
+}
+
 pub(crate) fn word_wrap_line_grapheme_safe(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
     let width = width.max(1);
     let graphemes = collect_wrap_graphemes(line);
@@ -486,7 +523,25 @@ pub(crate) fn word_wrap_line_grapheme_safe(line: &Line<'_>, width: usize) -> Vec
         while index < graphemes.len() && !graphemes[index].breakable_whitespace {
             index += 1;
         }
+        let has_source_leading_whitespace = whitespace_start == 0
+            && whitespace_start < whitespace_end
+            && output.is_empty()
+            && spans.is_empty();
         if word_start == index {
+            if has_source_leading_whitespace {
+                for grapheme in &graphemes[whitespace_start..whitespace_end] {
+                    if !spans.is_empty() && line_width.saturating_add(grapheme.width) > width {
+                        flush_grapheme_line(
+                            &mut output,
+                            &mut spans,
+                            &mut line_width,
+                            line.alignment,
+                        );
+                    }
+                    push_grapheme(&mut spans, grapheme);
+                    line_width = line_width.saturating_add(grapheme.width);
+                }
+            }
             break;
         }
 
@@ -495,6 +550,25 @@ pub(crate) fn word_wrap_line_grapheme_safe(line: &Line<'_>, width: usize) -> Vec
         let word_width = units.iter().fold(0usize, |width, unit| {
             width.saturating_add(unit.rendered_width)
         });
+        if has_source_leading_whitespace {
+            for grapheme in &graphemes[whitespace_start..whitespace_end] {
+                if !spans.is_empty() && line_width.saturating_add(grapheme.width) > width {
+                    flush_grapheme_line(&mut output, &mut spans, &mut line_width, line.alignment);
+                }
+                push_grapheme(&mut spans, grapheme);
+                line_width = line_width.saturating_add(grapheme.width);
+            }
+            push_wrap_units(
+                &mut output,
+                &mut spans,
+                &mut line_width,
+                word,
+                &units,
+                width,
+                line.alignment,
+            );
+            continue;
+        }
         if whitespace_start < whitespace_end && !spans.is_empty() {
             let whitespace_width = graphemes[whitespace_start..whitespace_end]
                 .iter()
@@ -523,13 +597,15 @@ pub(crate) fn word_wrap_line_grapheme_safe(line: &Line<'_>, width: usize) -> Vec
             continue;
         }
 
-        for unit in units {
-            if !spans.is_empty() && line_width.saturating_add(unit.rendered_width) > width {
-                flush_grapheme_line(&mut output, &mut spans, &mut line_width, line.alignment);
-            }
-            push_grapheme_range(&mut spans, &word[unit.range]);
-            line_width = line_width.saturating_add(unit.rendered_width);
-        }
+        push_wrap_units(
+            &mut output,
+            &mut spans,
+            &mut line_width,
+            word,
+            &units,
+            width,
+            line.alignment,
+        );
     }
     flush_grapheme_line(&mut output, &mut spans, &mut line_width, line.alignment);
     if output.is_empty() {
@@ -723,6 +799,8 @@ mod tests {
     use super::*;
     use itertools::Itertools as _;
     use pretty_assertions::assert_eq;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
     use ratatui::style::Color;
     use ratatui::style::Stylize;
     use std::string::ToString;
@@ -1015,6 +1093,54 @@ mod tests {
     }
 
     #[test]
+    fn grapheme_safe_wrap_segments_across_style_boundaries() {
+        let line = Line::from(vec!["e".red(), "\u{301}x".cyan()]);
+
+        assert_eq!(
+            word_wrap_line_grapheme_safe(&line, 1),
+            vec![Line::from("e\u{301}".red()), Line::from("x".cyan())]
+        );
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_keeps_cross_style_zwj_emoji_in_one_terminal_cell() {
+        let line = Line::from(vec!["👩".red(), "\u{200D}💻".cyan(), "x".green()]);
+        let wrapped = word_wrap_line_grapheme_safe(&line, 2);
+
+        assert_eq!(
+            wrapped,
+            vec![Line::from("👩‍💻".red()), Line::from("x".green())]
+        );
+
+        let area = Rect::new(0, 0, 2, 1);
+        let mut actual = Buffer::empty(area);
+        actual.set_line(0, 0, &wrapped[0], area.width);
+        let mut expected = Buffer::empty(area);
+        expected.set_string(0, 0, "👩‍💻", Color::Red);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_measures_complete_cross_style_sequences() {
+        let sequences = [
+            (
+                Line::from(vec!["#".red(), "\u{FE0F}".cyan()]),
+                Line::from("#\u{FE0F}".red()),
+            ),
+            (
+                Line::from(vec!["🇺".red(), "🇸".cyan()]),
+                Line::from("🇺🇸".red()),
+            ),
+        ];
+
+        for (line, expected) in sequences {
+            assert_eq!(line_width_grapheme_safe(&line), 2);
+            assert_eq!(coalesce_line_graphemes(&line), expected);
+        }
+    }
+
+    #[test]
     fn grapheme_safe_wrap_handles_long_zwj_runs_without_splitting_or_losing_style() {
         let family = "👨‍👩‍👧‍👦";
         let input = family.repeat(512);
@@ -1069,6 +1195,49 @@ mod tests {
         assert_eq!(
             word_wrap_line_grapheme_safe(&line, line.width()),
             vec![Line::from(" 👨‍👩‍👧‍👦".cyan().bold())]
+        );
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_preserves_leading_spaces_while_filling_first_line() {
+        let line = Line::from(vec!["  ".red(), "abc".cyan(), " ".into(), "👩‍💻".green()]);
+
+        assert_eq!(
+            word_wrap_line_grapheme_safe(&line, 4),
+            vec![
+                Line::from(vec!["  ".red(), "ab".cyan()]),
+                Line::from(vec!["c".cyan(), " ".into(), "👩‍💻".green()])
+            ]
+        );
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_preserves_overlong_leading_spaces() {
+        let line = Line::from("     👩‍💻".cyan());
+        let wrapped = word_wrap_line_grapheme_safe(&line, 2);
+
+        assert_eq!(
+            wrapped,
+            vec![
+                Line::from("  ".cyan()),
+                Line::from("  ".cyan()),
+                Line::from(" ".cyan()),
+                Line::from("👩‍💻".cyan())
+            ]
+        );
+        assert_eq!(
+            wrapped.iter().map(concat_line).collect::<String>(),
+            "     👩‍💻"
+        );
+    }
+
+    #[test]
+    fn grapheme_safe_wrap_drops_only_interword_spaces_after_wrap() {
+        let line = Line::from(vec!["👩‍💻".red(), "   ".cyan(), "team".green()]);
+
+        assert_eq!(
+            word_wrap_line_grapheme_safe(&line, 4),
+            vec![Line::from("👩‍💻".red()), Line::from("team".green())]
         );
     }
 

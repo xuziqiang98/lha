@@ -496,6 +496,7 @@ impl HistoryCell for ReasoningSummaryCell {
 pub(crate) struct AgentMessageCell {
     content: AgentMessageContent,
     is_first_line: bool,
+    leading_blank_line: bool,
     revision: u64,
     lines_cache: Mutex<Option<AgentMessageLinesCache>>,
 }
@@ -519,6 +520,7 @@ impl AgentMessageCell {
         Self {
             content: AgentMessageContent::RenderedLines(lines),
             is_first_line,
+            leading_blank_line: false,
             revision: 0,
             lines_cache: Mutex::new(None),
         }
@@ -528,6 +530,20 @@ impl AgentMessageCell {
         Self {
             content: AgentMessageContent::Markdown(source),
             is_first_line,
+            leading_blank_line: false,
+            revision: 0,
+            lines_cache: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn new_markdown_with_leading_blank_line(
+        source: String,
+        is_first_line: bool,
+    ) -> Self {
+        Self {
+            content: AgentMessageContent::Markdown(source),
+            is_first_line,
+            leading_blank_line: true,
             revision: 0,
             lines_cache: Mutex::new(None),
         }
@@ -537,6 +553,7 @@ impl AgentMessageCell {
         Self {
             content: AgentMessageContent::StreamingMarkdown(String::new()),
             is_first_line,
+            leading_blank_line: false,
             revision: 0,
             lines_cache: Mutex::new(None),
         }
@@ -598,6 +615,9 @@ impl AgentMessageCell {
         }
 
         let mut lines: Vec<Line<'static>> = Vec::new();
+        if self.leading_blank_line {
+            lines.push(Line::default());
+        }
         append_markdown(
             &source,
             Some((width as usize).saturating_sub(2).max(1)),

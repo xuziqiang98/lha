@@ -195,7 +195,6 @@ use crate::product::tui_app::history_cell::WebSearchCell;
 use crate::product::tui_app::identities;
 use crate::product::tui_app::key_hint;
 use crate::product::tui_app::key_hint::KeyBinding;
-use crate::product::tui_app::markdown::append_markdown;
 use crate::product::tui_app::mouse::MouseScrollState;
 use crate::product::tui_app::render::renderable::ColumnRenderable;
 use crate::product::tui_app::render::renderable::Renderable;
@@ -5727,9 +5726,8 @@ impl ChatWidget {
                     ));
                 } else {
                     // Show explanation when there are no structured findings.
-                    let mut rendered: Vec<ratatui::text::Line<'static>> = vec!["".into()];
-                    append_markdown(&explanation, None, &mut rendered);
-                    let body_cell = AgentMessageCell::new(rendered, false);
+                    let body_cell =
+                        AgentMessageCell::new_markdown_with_leading_blank_line(explanation, false);
                     self.app_event_tx.send_history_cell(Box::new(body_cell));
                 }
             }
