@@ -604,6 +604,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
             EventMsg::ThreadNameUpdated(_)
             | EventMsg::BuddyReaction(_)
+            | EventMsg::TurnFinalizing
             | EventMsg::ExecApprovalRequest(_)
             | EventMsg::ApplyPatchApprovalRequest(_)
             | EventMsg::InputSlimming(_)

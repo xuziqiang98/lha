@@ -337,6 +337,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::AgentReasoningRawContentDelta(_)
                     | EventMsg::BuddyReaction(_)
                     | EventMsg::TurnStarted(_)
+                    | EventMsg::TurnFinalizing
                     | EventMsg::TokenCount(_)
                     | EventMsg::InputSlimming(_)
                     | EventMsg::AgentReasoning(_)

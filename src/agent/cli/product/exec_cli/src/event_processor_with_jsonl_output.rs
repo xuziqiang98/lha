@@ -133,6 +133,7 @@ impl EventProcessorWithJsonOutput {
                 Vec::new()
             }
             protocol::EventMsg::TurnStarted(ev) => self.handle_task_started(ev),
+            protocol::EventMsg::TurnFinalizing => Vec::new(),
             protocol::EventMsg::TurnComplete(_) => self.handle_task_complete(),
             protocol::EventMsg::Error(ev) => {
                 let error = ThreadErrorEvent {

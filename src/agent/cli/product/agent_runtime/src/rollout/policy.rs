@@ -62,6 +62,7 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         EventMsg::Error(_)
         | EventMsg::Warning(_)
         | EventMsg::TurnStarted(_)
+        | EventMsg::TurnFinalizing
         | EventMsg::TurnComplete(_)
         | EventMsg::InputSlimming(_)
         | EventMsg::BuddyReaction(_)
@@ -177,6 +178,13 @@ mod tests {
         });
 
         assert_eq!(should_persist_event_msg(&event), true);
+    }
+
+    #[test]
+    fn does_not_persist_turn_finalizing_events() {
+        let event = EventMsg::TurnFinalizing;
+
+        assert_eq!(should_persist_event_msg(&event), false);
     }
 
     #[test]

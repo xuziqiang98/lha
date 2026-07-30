@@ -752,7 +752,7 @@ fn record_forked_thread_goal(
 
 fn session_status_from_event(msg: &EventMsg) -> Option<SessionStatus> {
     match msg {
-        EventMsg::TurnStarted(_) => Some(SessionStatus::Running),
+        EventMsg::TurnStarted(_) | EventMsg::TurnFinalizing => Some(SessionStatus::Running),
         EventMsg::TurnComplete(_)
         | EventMsg::TurnAborted(_)
         | EventMsg::Error(_)
@@ -8652,16 +8652,6 @@ mod tests {
     use crate::product::agent::shell::default_user_shell;
     use crate::product::agent::tools::format_exec_output_str;
 
-    use crate::product::protocol::ThreadId;
-    use lha_llm::ModelPricing;
-    use lha_llm::ModelPricingBand;
-    use lha_llm::ModelPricingBilling;
-    use lha_llm::ModelPricingCurrency;
-    use lha_llm::ModelPricingUnit;
-    use lha_llm::ToolCallPayload;
-    use lha_llm::ToolResultPayload;
-    use lha_llm::UsdPerMillionTokensMicros;
-
     use crate::product::agent::protocol::CompactedItem;
     use crate::product::agent::protocol::InitialHistory;
     use crate::product::agent::protocol::ResumedHistory;
@@ -8682,9 +8672,18 @@ mod tests {
     use crate::product::agent::turn_diff_tracker::TurnDiffTracker;
     use crate::product::app_server_protocol::AppInfo;
     use crate::product::app_server_protocol::AuthMode;
+    use crate::product::protocol::ThreadId;
     use crate::product::protocol::models::ContentItem;
     use crate::product::protocol::models::TranscriptItem;
     use crate::product::protocol::models::tool_result_payload_from_call_tool_result;
+    use lha_llm::ModelPricing;
+    use lha_llm::ModelPricingBand;
+    use lha_llm::ModelPricingBilling;
+    use lha_llm::ModelPricingCurrency;
+    use lha_llm::ModelPricingUnit;
+    use lha_llm::ToolCallPayload;
+    use lha_llm::ToolResultPayload;
+    use lha_llm::UsdPerMillionTokensMicros;
     use std::path::Path;
     use std::time::Duration;
     use tokio::time::sleep;
@@ -8697,6 +8696,14 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
+
+    #[test]
+    fn turn_finalizing_keeps_session_status_running() {
+        assert_eq!(
+            session_status_from_event(&EventMsg::TurnFinalizing),
+            Some(SessionStatus::Running)
+        );
+    }
 
     fn request_pressure(request_input_tokens: i64) -> PreflightCompactPressure {
         PreflightCompactPressure {

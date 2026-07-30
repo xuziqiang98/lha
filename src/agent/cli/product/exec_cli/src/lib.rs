@@ -107,7 +107,10 @@ fn should_skip_attached_thread_event(
     thread_id != primary_thread_id
         && matches!(
             msg,
-            EventMsg::TurnStarted(_) | EventMsg::TurnComplete(_) | EventMsg::InputSlimming(_)
+            EventMsg::TurnStarted(_)
+                | EventMsg::TurnFinalizing
+                | EventMsg::TurnComplete(_)
+                | EventMsg::InputSlimming(_)
         )
 }
 
@@ -1078,6 +1081,11 @@ mod tests {
         let cases = [
             ("child turn started", child_thread_id, turn_started_msg()),
             (
+                "child turn finalizing",
+                child_thread_id,
+                EventMsg::TurnFinalizing,
+            ),
+            (
                 "child turn complete",
                 child_thread_id,
                 EventMsg::TurnComplete(TurnCompleteEvent {
@@ -1114,6 +1122,11 @@ mod tests {
                     last_agent_message: None,
                 }),
             ),
+            (
+                "primary turn finalizing",
+                primary_thread_id,
+                EventMsg::TurnFinalizing,
+            ),
         ];
 
         let actual = cases
@@ -1127,12 +1140,14 @@ mod tests {
             .collect::<Vec<_>>();
         let expected = vec![
             ("child turn started", true),
+            ("child turn finalizing", true),
             ("child turn complete", true),
             ("child input slimming", true),
             ("child ordinary message", false),
             ("primary input slimming", false),
             ("primary turn started", false),
             ("primary turn complete", false),
+            ("primary turn finalizing", false),
         ];
 
         assert_eq!(actual, expected);

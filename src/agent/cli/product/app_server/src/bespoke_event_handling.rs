@@ -119,6 +119,7 @@ pub(crate) async fn apply_bespoke_event_handling(
     } = event;
     match msg {
         EventMsg::TurnStarted(_) => {}
+        EventMsg::TurnFinalizing => {}
         EventMsg::TurnComplete(_ev) => {
             handle_turn_complete(
                 conversation_id,

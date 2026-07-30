@@ -130,6 +130,23 @@
       "title": "TaskStartedEventMsg"
     },
     {
+      "description": "Agent has produced its final assistant output and is finishing turn bookkeeping. v1 wire format uses `task_finalizing`; accept `turn_finalizing` for v2 interop.",
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "task_finalizing"
+          ],
+          "title": "TaskFinalizingEventMsgType"
+        }
+      },
+      "title": "TaskFinalizingEventMsg"
+    },
+    {
       "description": "Agent has completed all actions. v1 wire format uses `task_complete`; accept `turn_complete` for v2 interop.",
       "type": "object",
       "required": [
@@ -2863,6 +2880,23 @@
             }
           },
           "title": "TaskStartedEventMsg"
+        },
+        {
+          "description": "Agent has produced its final assistant output and is finishing turn bookkeeping. v1 wire format uses `task_finalizing`; accept `turn_finalizing` for v2 interop.",
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "task_finalizing"
+              ],
+              "title": "TaskFinalizingEventMsgType"
+            }
+          },
+          "title": "TaskFinalizingEventMsg"
         },
         {
           "description": "Agent has completed all actions. v1 wire format uses `task_complete`; accept `turn_complete` for v2 interop.",

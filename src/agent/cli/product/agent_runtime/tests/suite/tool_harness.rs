@@ -5,9 +5,14 @@ use std::fs;
 use crate::product::agent::features::Feature;
 use crate::product::agent::protocol::AskForApproval;
 use crate::product::agent::protocol::EventMsg;
+use crate::product::agent::protocol::ItemCompletedEvent;
 use crate::product::agent::protocol::Op;
 use crate::product::agent::protocol::SandboxPolicy;
+use crate::product::protocol::config_types::Identity;
+use crate::product::protocol::config_types::IdentityKind;
 use crate::product::protocol::config_types::ReasoningSummary;
+use crate::product::protocol::config_types::Settings;
+use crate::product::protocol::items::TurnItem;
 use crate::product::protocol::plan_tool::StepStatus;
 use crate::product::protocol::user_input::UserInput;
 use crate::test_support::core::assert_regex_match;
@@ -28,6 +33,17 @@ use crate::test_support::core::wait_for_event;
 use assert_matches::assert_matches;
 use serde_json::Value;
 use serde_json::json;
+
+#[derive(Debug, PartialEq, Eq)]
+enum RelevantTurnEvent {
+    AgentMessage(String),
+    PlanItem(String),
+    PlanUpdate,
+    Error,
+    TurnFinalizing,
+    TurnComplete,
+}
+
 fn call_output(req: &ResponsesRequest, call_id: &str) -> (String, Option<bool>) {
     let raw = req.function_call_output(call_id);
     assert_eq!(
@@ -44,6 +60,58 @@ fn call_output(req: &ResponsesRequest, call_id: &str) -> (String, Option<bool>) 
         None => panic!("function_call_output content present"),
     };
     (content, success)
+}
+
+async fn submit_test_turn(
+    test: &TestCodex,
+    text: &str,
+    identity: Option<Identity>,
+) -> anyhow::Result<()> {
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: text.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            identity,
+            personality: None,
+            tui_buddy: None,
+        })
+        .await?;
+    Ok(())
+}
+
+async fn collect_relevant_events_until_complete(
+    codex: &crate::product::agent::CodexThread,
+) -> Vec<RelevantTurnEvent> {
+    let mut events = Vec::new();
+    loop {
+        match wait_for_event(codex, |_| true).await {
+            EventMsg::AgentMessage(event) => {
+                events.push(RelevantTurnEvent::AgentMessage(event.message));
+            }
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::Plan(item),
+                ..
+            }) => events.push(RelevantTurnEvent::PlanItem(item.text)),
+            EventMsg::PlanUpdate(_) => events.push(RelevantTurnEvent::PlanUpdate),
+            EventMsg::Error(_) => events.push(RelevantTurnEvent::Error),
+            EventMsg::TurnFinalizing => events.push(RelevantTurnEvent::TurnFinalizing),
+            EventMsg::TurnComplete(_) => {
+                events.push(RelevantTurnEvent::TurnComplete);
+                break;
+            }
+            _ => {}
+        }
+    }
+    events
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -188,6 +256,207 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
     let req = second_mock.single_request();
     let (output_text, _success_flag) = call_output(&req, call_id);
     assert_eq!(output_text, "Plan updated");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_finalizing_follows_final_message_after_intermediate_message_and_plan_update()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let test = builder.build(&server).await?;
+
+    let call_id = "plan-after-progress";
+    let plan_args = json!({
+        "explanation": "Continue after progress",
+        "plan": [
+            {"step": "Inspect", "status": "completed"},
+            {"step": "Report", "status": "in_progress"},
+        ],
+    })
+    .to_string();
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-progress"),
+            ev_assistant_message("msg-progress", "Progress update"),
+            ev_function_call(call_id, "update_plan", &plan_args),
+            ev_completed("resp-progress"),
+        ]),
+    )
+    .await;
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-final", "Final answer"),
+            ev_completed("resp-final"),
+        ]),
+    )
+    .await;
+
+    submit_test_turn(&test, "work through the plan", None).await?;
+
+    assert_eq!(
+        collect_relevant_events_until_complete(&test.codex).await,
+        vec![
+            RelevantTurnEvent::AgentMessage("Progress update".to_string()),
+            RelevantTurnEvent::PlanUpdate,
+            RelevantTurnEvent::AgentMessage("Final answer".to_string()),
+            RelevantTurnEvent::TurnFinalizing,
+            RelevantTurnEvent::TurnComplete,
+        ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pure_final_answer_emits_one_turn_finalizing_before_completion() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let test = builder.build(&server).await?;
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-final"),
+            ev_assistant_message("msg-final", "Only answer"),
+            ev_completed("resp-final"),
+        ]),
+    )
+    .await;
+
+    submit_test_turn(&test, "answer directly", None).await?;
+
+    assert_eq!(
+        collect_relevant_events_until_complete(&test.codex).await,
+        vec![
+            RelevantTurnEvent::AgentMessage("Only answer".to_string()),
+            RelevantTurnEvent::TurnFinalizing,
+            RelevantTurnEvent::TurnComplete,
+        ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_turn_does_not_emit_turn_finalizing() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let test = builder.build(&server).await?;
+    responses::mount_sse_once(
+        &server,
+        responses::sse_failed(
+            "resp-failed",
+            "insufficient_quota",
+            "quota unavailable for test",
+        ),
+    )
+    .await;
+
+    submit_test_turn(&test, "trigger an error", None).await?;
+
+    assert_eq!(
+        collect_relevant_events_until_complete(&test.codex).await,
+        vec![RelevantTurnEvent::Error, RelevantTurnEvent::TurnComplete]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plan_only_turn_does_not_emit_turn_finalizing() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let test = builder.build(&server).await?;
+    let plan = "<proposed_plan>\n- Inspect\n- Report\n</proposed_plan>\n";
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-plan"),
+            ev_assistant_message("msg-plan", plan),
+            ev_completed("resp-plan"),
+        ]),
+    )
+    .await;
+
+    let identity = Identity {
+        kind: IdentityKind::Planner,
+        settings: Settings {
+            model: test.session_configured.model.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+    submit_test_turn(&test, "produce only a plan", Some(identity)).await?;
+
+    assert_eq!(
+        collect_relevant_events_until_complete(&test.codex).await,
+        vec![
+            RelevantTurnEvent::PlanItem("- Inspect\n- Report\n".to_string()),
+            RelevantTurnEvent::TurnComplete,
+        ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupted_turn_does_not_emit_turn_finalizing() -> anyhow::Result<()> {
+    crate::test_support::core::skip_if_sandbox!(Ok(()));
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_model("gpt-5.1");
+    let test = builder.build(&server).await?;
+    let args = json!({
+        "command": "sleep 60",
+        "timeout_ms": 60_000,
+    })
+    .to_string();
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-interrupt"),
+            ev_function_call("call-sleep", "shell_command", &args),
+            ev_completed("resp-interrupt"),
+        ]),
+    )
+    .await;
+
+    submit_test_turn(&test, "start a long command", None).await?;
+
+    let mut saw_turn_finalizing = false;
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::TurnFinalizing => saw_turn_finalizing = true,
+            EventMsg::ExecCommandBegin(_) => break,
+            _ => {}
+        }
+    }
+
+    test.codex.submit(Op::Interrupt).await?;
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::TurnFinalizing => saw_turn_finalizing = true,
+            EventMsg::TurnAborted(_) => break,
+            _ => {}
+        }
+    }
+
+    assert!(
+        !saw_turn_finalizing,
+        "interrupted turns must not enter the final-answer lifecycle"
+    );
 
     Ok(())
 }

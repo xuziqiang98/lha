@@ -1143,7 +1143,7 @@ async fn streaming_table_right_edge_preserves_vt100_grid() {
 }
 
 #[tokio::test]
-async fn finalizing_stream_does_not_repaint_stable_rows() {
+async fn completing_stream_restores_status_without_repainting_stable_rows() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let width = 80;
     let height = 14;
@@ -1173,9 +1173,8 @@ async fn finalizing_stream_does_not_repaint_stable_rows() {
     render_chat_to_audited_terminal(&chat, &mut terminal);
     let after = terminal.last_frame_buffer().clone();
 
-    assert_sparse_frame("stream finalization", &before, &after, &terminal);
-    let frame = terminal.backend().last_frame().expect("finalize frame");
-    assert_eq!(frame.stats.printed_columns, 0, "{}", frame.escaped_ansi());
+    assert_sparse_frame("stream completion", &before, &after, &terminal);
+    let frame = terminal.backend().last_frame().expect("completion frame");
     assert!(
         frame.stats.erase_line_rows.is_empty(),
         "{}",
@@ -1187,6 +1186,10 @@ async fn finalizing_stream_does_not_repaint_stable_rows() {
         "{}",
         frame.escaped_ansi()
     );
+    let rendered = buffer_to_string(&after);
+    let screen = terminal.backend().vt100().screen().contents();
+    assert!(rendered.contains("Working"), "{rendered}");
+    assert!(screen.contains("Working"), "{screen}");
 }
 
 #[tokio::test]
@@ -6816,6 +6819,7 @@ async fn replayed_lifecycle_events_do_not_create_live_status_or_side_effects() {
             message: "historical answer".to_string(),
             memory_citation: None,
         }),
+        EventMsg::TurnFinalizing,
         EventMsg::EnteredReviewMode(ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
             user_facing_hint: None,
@@ -6967,6 +6971,12 @@ async fn live_and_replay_lifecycle_sequences_only_change_live_status() {
             memory_citation: None,
         }),
     });
+    assert_eq!(live.status_machine.finalizing, None);
+    assert!(live.bottom_pane.status_indicator_visible());
+    live.handle_codex_event_replay(turn_finalizing_event("replayed-into-live-turn"));
+    assert_eq!(live.status_machine.finalizing, None);
+    assert!(live.bottom_pane.status_indicator_visible());
+    live.handle_codex_event(turn_finalizing_event("live-finalizing"));
 
     let (mut replay, _replay_rx, _replay_op_rx) = make_chatwidget_manual(None).await;
     replay.handle_codex_event_replay(Event {
@@ -6983,6 +6993,7 @@ async fn live_and_replay_lifecycle_sequences_only_change_live_status() {
             memory_citation: None,
         }),
     });
+    replay.handle_codex_event_replay(turn_finalizing_event("replay-finalizing"));
 
     assert_eq!(
         live.status_machine.finalizing,
@@ -7510,9 +7521,96 @@ async fn chat_with_suspended_answer() -> ChatWidget {
     chat
 }
 
+fn turn_finalizing_event(id: &str) -> Event {
+    Event {
+        id: id.to_string(),
+        msg: EventMsg::TurnFinalizing,
+    }
+}
+
+fn assert_working_status_visible_in_render(chat: &ChatWidget, stage: &str) {
+    assert_eq!(chat.status_machine.finalizing, None);
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_indicator_visible());
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("working status should be visible");
+    assert_eq!(status.header(), "Working");
+    assert!(!status.timer_is_paused());
+    assert!(status.interrupt_hint_visible());
+
+    let width = 80;
+    let height = 20;
+    let backend = AuditedVT100Backend::new(width, height);
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(backend)
+        .expect("audited terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    render_chat_to_audited_terminal(chat, &mut terminal);
+
+    let buffer = terminal.last_frame_buffer();
+    let rendered = buffer_to_string(buffer);
+    let screen = terminal.backend().vt100().screen().contents();
+    assert!(
+        rendered.contains("Working"),
+        "{stage}: Ratatui buffer should contain Working:\n{rendered}"
+    );
+    assert!(
+        screen.contains("Working"),
+        "{stage}: VT100 screen should contain Working:\n{screen}"
+    );
+    assert_vt100_grid_matches_buffer(stage, buffer, terminal.backend().vt100(), &rendered);
+}
+
+fn assert_final_answer_status_suspended(chat: &ChatWidget) {
+    assert_eq!(
+        chat.status_machine.finalizing,
+        Some(TurnFinalizing::FinalAnswer)
+    );
+    assert_eq!(
+        chat.bottom_pane.status_suspension_reason(),
+        Some(StatusSuspensionReason::TurnFinalizing)
+    );
+    assert!(!chat.bottom_pane.status_indicator_visible());
+    let status = chat
+        .bottom_pane
+        .status_widget_any()
+        .expect("finalizing should retain the status widget");
+    assert!(status.timer_is_paused());
+    assert!(!status.interrupt_hint_visible());
+}
+
+async fn chat_with_finalizing_answer() -> ChatWidget {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    chat.on_agent_message("answer".to_string(), DispatchMode::Live);
+    chat.handle_codex_event(turn_finalizing_event("turn-finalizing"));
+    assert_final_answer_status_suspended(&chat);
+    chat
+}
+
 #[tokio::test]
-async fn streamed_answer_restores_status_for_exec_and_reasoning_work() {
+async fn streamed_intermediate_message_immediately_restores_working_status() {
     let mut chat = chat_with_suspended_answer().await;
+
+    chat.on_agent_message("partial answer".to_string(), DispatchMode::Live);
+
+    assert_working_status_visible_in_render(&chat, "streamed intermediate message");
+}
+
+#[tokio::test]
+async fn non_streaming_intermediate_message_keeps_working_status_visible() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    chat.on_agent_message("progress update".to_string(), DispatchMode::Live);
+
+    assert_working_status_visible_in_render(&chat, "non-streaming intermediate message");
+}
+
+#[tokio::test]
+async fn finalizing_answer_resumes_for_exec_and_reasoning_work() {
+    let mut chat = chat_with_finalizing_answer().await;
 
     let begin = begin_exec(&mut chat, "call-status", "printf hello");
 
@@ -7534,8 +7632,8 @@ async fn streamed_answer_restores_status_for_exec_and_reasoning_work() {
 }
 
 #[tokio::test]
-async fn streamed_answer_restores_status_for_non_exec_tools() {
-    let mut mcp_chat = chat_with_suspended_answer().await;
+async fn finalizing_answer_resumes_for_non_exec_tools() {
+    let mut mcp_chat = chat_with_finalizing_answer().await;
     mcp_chat.handle_codex_event(Event {
         id: "mcp-call".into(),
         msg: EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
@@ -7549,7 +7647,7 @@ async fn streamed_answer_restores_status_for_non_exec_tools() {
     });
     assert!(mcp_chat.bottom_pane.status_indicator_visible());
 
-    let mut web_chat = chat_with_suspended_answer().await;
+    let mut web_chat = chat_with_finalizing_answer().await;
     web_chat.handle_codex_event(Event {
         id: "web-call".into(),
         msg: EventMsg::WebSearchBegin(WebSearchBeginEvent {
@@ -7558,7 +7656,7 @@ async fn streamed_answer_restores_status_for_non_exec_tools() {
     });
     assert!(web_chat.bottom_pane.status_indicator_visible());
 
-    let mut patch_chat = chat_with_suspended_answer().await;
+    let mut patch_chat = chat_with_finalizing_answer().await;
     patch_chat.handle_codex_event(Event {
         id: "patch-call".into(),
         msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
@@ -7570,7 +7668,7 @@ async fn streamed_answer_restores_status_for_non_exec_tools() {
     });
     assert!(patch_chat.bottom_pane.status_indicator_visible());
 
-    let mut image_chat = chat_with_suspended_answer().await;
+    let mut image_chat = chat_with_finalizing_answer().await;
     image_chat.handle_codex_event(Event {
         id: "image-call".into(),
         msg: EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
@@ -7580,7 +7678,7 @@ async fn streamed_answer_restores_status_for_non_exec_tools() {
     });
     assert!(image_chat.bottom_pane.status_indicator_visible());
 
-    let mut terminal_chat = chat_with_suspended_answer().await;
+    let mut terminal_chat = chat_with_finalizing_answer().await;
     terminal_chat.handle_codex_event(Event {
         id: "terminal-call".into(),
         msg: EventMsg::TerminalInteraction(TerminalInteractionEvent {
@@ -7628,20 +7726,14 @@ async fn completed_plan_stream_restores_status_when_reasoning_resumes() {
 }
 
 #[tokio::test]
-async fn final_agent_message_stays_hidden_until_turn_complete() {
+async fn turn_finalizing_stays_hidden_until_turn_complete() {
     let mut chat = chat_with_suspended_answer().await;
 
     chat.on_agent_message("partial answer".to_string(), DispatchMode::Live);
+    assert_working_status_visible_in_render(&chat, "completed streamed message");
 
-    assert_eq!(
-        chat.status_machine.finalizing,
-        Some(TurnFinalizing::FinalAnswer)
-    );
-    assert_eq!(
-        chat.bottom_pane.status_suspension_reason(),
-        Some(StatusSuspensionReason::TurnFinalizing)
-    );
-    assert!(chat.bottom_pane.status_widget_any().is_some());
+    chat.handle_codex_event(turn_finalizing_event("final-answer"));
+    assert_final_answer_status_suspended(&chat);
 
     chat.on_task_complete(None, DispatchMode::Live);
 
@@ -7650,16 +7742,13 @@ async fn final_agent_message_stays_hidden_until_turn_complete() {
 }
 
 #[tokio::test]
-async fn non_streaming_final_message_stays_hidden_and_follow_up_work_can_resume() {
+async fn explicit_finalizing_allows_defensive_follow_up_work_recovery() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
 
     chat.on_agent_message("answer".to_string(), DispatchMode::Live);
-
-    assert_eq!(
-        chat.bottom_pane.status_suspension_reason(),
-        Some(StatusSuspensionReason::TurnFinalizing)
-    );
+    chat.handle_codex_event(turn_finalizing_event("first-finalizing"));
+    assert_final_answer_status_suspended(&chat);
 
     chat.handle_codex_event(Event {
         id: "late-reasoning".into(),
@@ -7672,10 +7761,9 @@ async fn non_streaming_final_message_stays_hidden_and_follow_up_work_can_resume(
     assert!(chat.bottom_pane.status_indicator_visible());
 
     chat.on_agent_message("second answer".to_string(), DispatchMode::Live);
-    assert_eq!(
-        chat.status_machine.finalizing,
-        Some(TurnFinalizing::FinalAnswer)
-    );
+    assert_eq!(chat.status_machine.finalizing, None);
+    chat.handle_codex_event(turn_finalizing_event("second-finalizing"));
+    assert_final_answer_status_suspended(&chat);
     let begin = begin_exec(&mut chat, "late-tool", "printf more");
     assert_eq!(chat.status_machine.finalizing, None);
     assert!(chat.bottom_pane.status_indicator_visible());
@@ -7706,14 +7794,8 @@ async fn delegated_wait_running_status_restores_work_indicator() {
     for (index, message) in ["first answer", "second answer"].into_iter().enumerate() {
         while frame_rx.try_recv().is_ok() {}
         chat.on_agent_message(message.to_string(), DispatchMode::Live);
-        assert_eq!(
-            chat.status_machine.finalizing,
-            Some(TurnFinalizing::FinalAnswer)
-        );
-        assert_eq!(
-            chat.bottom_pane.status_suspension_reason(),
-            Some(StatusSuspensionReason::TurnFinalizing)
-        );
+        chat.handle_codex_event(turn_finalizing_event(&format!("finalizing-{index}")));
+        assert_final_answer_status_suspended(&chat);
 
         while frame_rx.try_recv().is_ok() {}
         chat.handle_codex_event(running_job_event(&format!("wait-{index}-running")));
@@ -7778,6 +7860,7 @@ async fn hidden_raw_reasoning_resumes_finalizing_status() {
     let (mut structured, mut structured_rx, _op_rx) = make_chatwidget_manual(None).await;
     structured.on_task_started();
     structured.on_agent_message("answer".to_string(), DispatchMode::Live);
+    structured.handle_codex_event(turn_finalizing_event("structured-finalizing"));
     let _ = drain_insert_history(&mut structured_rx);
     structured.handle_codex_event(Event {
         id: "structured-raw".into(),
@@ -7796,6 +7879,7 @@ async fn hidden_raw_reasoning_resumes_finalizing_status() {
     let (mut legacy_delta, mut legacy_delta_rx, _op_rx) = make_chatwidget_manual(None).await;
     legacy_delta.on_task_started();
     legacy_delta.on_agent_message("answer".to_string(), DispatchMode::Live);
+    legacy_delta.handle_codex_event(turn_finalizing_event("legacy-delta-finalizing"));
     let _ = drain_insert_history(&mut legacy_delta_rx);
     legacy_delta.handle_codex_event(Event {
         id: "legacy-raw-delta".into(),
@@ -7809,6 +7893,7 @@ async fn hidden_raw_reasoning_resumes_finalizing_status() {
     let (mut legacy_final, mut legacy_final_rx, _op_rx) = make_chatwidget_manual(None).await;
     legacy_final.on_task_started();
     legacy_final.on_agent_message("answer".to_string(), DispatchMode::Live);
+    legacy_final.handle_codex_event(turn_finalizing_event("legacy-final-finalizing"));
     let _ = drain_insert_history(&mut legacy_final_rx);
     legacy_final.handle_codex_event(Event {
         id: "legacy-raw-final".into(),
@@ -7825,6 +7910,7 @@ async fn late_answer_and_plan_deltas_do_not_revive_finalizing_status() {
     let (mut answer_chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     answer_chat.on_task_started();
     answer_chat.on_agent_message("answer".to_string(), DispatchMode::Live);
+    answer_chat.handle_codex_event(turn_finalizing_event("answer-finalizing"));
     answer_chat.handle_codex_event(Event {
         id: "late-answer-delta".into(),
         msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
@@ -7850,6 +7936,7 @@ async fn late_answer_and_plan_deltas_do_not_revive_finalizing_status() {
     plan_chat.current_identity.kind = IdentityKind::Planner;
     plan_chat.on_task_started();
     plan_chat.on_agent_message("answer".to_string(), DispatchMode::Live);
+    plan_chat.handle_codex_event(turn_finalizing_event("plan-finalizing"));
     plan_chat.handle_codex_event(Event {
         id: "late-plan-delta".into(),
         msg: EventMsg::PlanDelta(PlanDeltaEvent {
@@ -7887,6 +7974,7 @@ async fn review_and_undo_terminal_states_replace_final_answer() {
         }),
     });
     review_chat.on_agent_message("review answer".to_string(), DispatchMode::Live);
+    review_chat.handle_codex_event(turn_finalizing_event("review-finalizing"));
     assert_eq!(
         review_chat.status_machine.finalizing,
         Some(TurnFinalizing::FinalAnswer)
@@ -7898,6 +7986,7 @@ async fn review_and_undo_terminal_states_replace_final_answer() {
             review_output: None,
         }),
     });
+    review_chat.handle_codex_event(turn_finalizing_event("late-review-finalizing"));
     review_chat.handle_codex_event(Event {
         id: "late-review-reasoning".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
@@ -7920,6 +8009,7 @@ async fn review_and_undo_terminal_states_replace_final_answer() {
         msg: EventMsg::UndoStarted(UndoStartedEvent { message: None }),
     });
     undo_chat.on_agent_message("undo answer".to_string(), DispatchMode::Live);
+    undo_chat.handle_codex_event(turn_finalizing_event("undo-finalizing"));
     assert_eq!(
         undo_chat.status_machine.finalizing,
         Some(TurnFinalizing::FinalAnswer)
@@ -7932,6 +8022,7 @@ async fn review_and_undo_terminal_states_replace_final_answer() {
             message: None,
         }),
     });
+    undo_chat.handle_codex_event(turn_finalizing_event("late-undo-finalizing"));
     undo_chat.handle_codex_event(Event {
         id: "late-undo-reasoning".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
@@ -12447,6 +12538,7 @@ async fn mcp_update_cannot_revive_finalizing_turn_status() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
     chat.on_agent_message("answer".to_string(), DispatchMode::Live);
+    chat.handle_codex_event(turn_finalizing_event("turn-finalizing"));
 
     chat.handle_codex_event(Event {
         id: "mcp-start".into(),

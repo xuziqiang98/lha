@@ -820,6 +820,34 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
+    fn generated_ts_keeps_task_finalizing_representable() -> Result<()> {
+        let output_dir = tempfile::tempdir()?;
+        let options = GenerateTsOptions {
+            generate_indices: false,
+            ensure_headers: false,
+            run_prettier: false,
+        };
+        generate_ts_with_options(output_dir.path(), None, options)?;
+
+        let event_msg = fs::read_to_string(output_dir.path().join("EventMsg.ts"))?;
+        assert!(
+            event_msg.contains(r#"{ "type": "task_finalizing" }"#),
+            "generated EventMsg.ts does not contain a payload-less task_finalizing variant"
+        );
+        assert!(
+            !event_msg.contains(r#"{ "type": "task_finalizing" } &"#),
+            "generated task_finalizing variant still intersects with a payload type"
+        );
+        let payload_file = ["Turn", "Finalizing", "Event.ts"].concat();
+        assert!(
+            !output_dir.path().join(payload_file).exists(),
+            "generated a standalone payload type for task_finalizing"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn generated_ts_has_no_optional_nullable_fields() -> Result<()> {
         // Assert that there are no types of the form "?: T | null" in the generated TS files.
         let output_dir = std::env::temp_dir().join(format!("codex_ts_types_{}", Uuid::now_v7()));

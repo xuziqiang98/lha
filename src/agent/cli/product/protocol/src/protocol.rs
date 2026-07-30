@@ -784,6 +784,11 @@ pub enum EventMsg {
     #[serde(rename = "task_started", alias = "turn_started")]
     TurnStarted(TurnStartedEvent),
 
+    /// Agent has produced its final assistant output and is finishing turn bookkeeping.
+    /// v1 wire format uses `task_finalizing`; accept `turn_finalizing` for v2 interop.
+    #[serde(rename = "task_finalizing", alias = "turn_finalizing")]
+    TurnFinalizing,
+
     /// Agent has completed all actions.
     /// v1 wire format uses `task_complete`; accept `turn_complete` for v2 interop.
     #[serde(rename = "task_complete", alias = "turn_complete")]
@@ -2871,6 +2876,29 @@ mod tests {
         assert_eq!(value["msg"]["failed"][0]["server"], "b");
         assert_eq!(value["msg"]["failed"][0]["error"], "bad");
         assert_eq!(value["msg"]["cancelled"][0], "c");
+        Ok(())
+    }
+
+    #[test]
+    fn turn_finalizing_uses_task_finalizing_wire_name() -> Result<()> {
+        let event = EventMsg::TurnFinalizing;
+
+        assert_eq!(
+            serde_json::to_value(event)?,
+            json!({
+                "type": "task_finalizing",
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn turn_finalizing_accepts_turn_finalizing_alias() -> Result<()> {
+        let event: EventMsg = serde_json::from_value(json!({
+            "type": "turn_finalizing",
+        }))?;
+
+        assert!(matches!(event, EventMsg::TurnFinalizing));
         Ok(())
     }
 

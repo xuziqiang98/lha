@@ -1921,13 +1921,16 @@ impl ChatWidget {
             self.render_agent_message_transcript_only(message);
             return;
         }
-        if self.status_machine.turn.is_busy() {
+        self.render_agent_message(message);
+    }
+
+    fn on_turn_finalizing(&mut self, mode: DispatchMode) {
+        if mode.is_live() && self.status_machine.turn.is_busy() {
             self.status_machine
                 .finalizing
                 .get_or_insert(TurnFinalizing::FinalAnswer);
             self.reconcile_status_ui();
         }
-        self.render_agent_message(message);
     }
 
     fn render_agent_message_transcript_only(&mut self, message: String) {
@@ -5441,6 +5444,7 @@ impl ChatWidget {
                     self.on_task_started();
                 }
             }
+            EventMsg::TurnFinalizing => self.on_turn_finalizing(mode),
             EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
                 self.on_task_complete(last_agent_message, mode)
             }

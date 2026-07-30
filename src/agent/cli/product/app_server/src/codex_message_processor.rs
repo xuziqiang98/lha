@@ -3960,6 +3960,7 @@ impl CodexMessageProcessor {
                             // instead.
                             let event_formatted = match &event.msg {
                                 EventMsg::TurnStarted(_) => "task_started",
+                                EventMsg::TurnFinalizing => "task_finalizing",
                                 EventMsg::TurnComplete(_) => "task_complete",
                                 _ => &event.msg.to_string(),
                             };
