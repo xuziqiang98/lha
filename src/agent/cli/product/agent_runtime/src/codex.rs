@@ -8621,6 +8621,8 @@ pub(super) fn get_last_assistant_message_from_turn(
 
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
+#[cfg(test)]
+pub(crate) use tests::make_session_and_context_with_rx;
 
 pub(crate) fn runtime_notice_to_event_msg(notice: RuntimeNotice) -> EventMsg {
     match notice.kind {

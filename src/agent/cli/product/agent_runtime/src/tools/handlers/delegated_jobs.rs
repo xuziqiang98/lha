@@ -15,6 +15,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -170,6 +171,16 @@ async fn wait(
         }
         ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
     };
+    let mut seen_ids = HashSet::new();
+    for id in &args.ids {
+        if !seen_ids.insert(id.as_str()) {
+            continue;
+        }
+        let snapshot = session.services.agent_jobs.status(id).await;
+        if snapshot.status == AgentJobStatus::Running {
+            session.send_event(&turn, snapshot.status_event()).await;
+        }
+    }
     let snapshots = session
         .services
         .agent_jobs
@@ -236,6 +247,11 @@ async fn close_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::product::agent::codex::make_session_and_context_with_rx;
+    use crate::product::protocol::protocol::AgentJobDisplayStatus;
+    use crate::product::protocol::protocol::AgentJobKind;
+    use crate::product::protocol::protocol::AgentJobStatusEvent;
+    use crate::product::protocol::protocol::EventMsg;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
@@ -320,6 +336,145 @@ mod tests {
                             "status": "completed",
                             "result": "done",
                             "exit_code": 0
+                        }
+                    }
+                },
+                "timed_out": false
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_emits_running_status_before_blocking() {
+        let (session, turn, rx) = make_session_and_context_with_rx().await;
+        session
+            .services
+            .agent_jobs
+            .insert_job_for_test("agent-job-1", "Boyle", AgentJobStatus::Running)
+            .await;
+
+        let wait_task = tokio::spawn(wait(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            json!({
+                "ids": ["agent-job-1", "agent-job-1"],
+                "timeout_ms": MIN_WAIT_TIMEOUT_MS,
+            })
+            .to_string(),
+        ));
+
+        let event = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("running status event should arrive before wait blocks")
+            .expect("running status event");
+        let EventMsg::AgentJobStatus(status) = event.msg else {
+            panic!("expected agent job status event");
+        };
+        assert_eq!(
+            status,
+            AgentJobStatusEvent {
+                job_id: "agent-job-1".to_string(),
+                agent_type: AgentJobKind::Explorer,
+                name: Some("Boyle".to_string()),
+                status: AgentJobDisplayStatus::Running,
+                message: None,
+            }
+        );
+        assert!(
+            !wait_task.is_finished(),
+            "wait should still be blocked after the running status pulse"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "duplicate ids should not emit duplicate pre-wait pulses"
+        );
+
+        wait_task.abort();
+        let Err(error) = wait_task.await else {
+            panic!("wait task should be cancelled");
+        };
+        assert!(error.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn wait_skips_pre_wait_status_for_non_running_jobs() {
+        let (session, turn, rx) = make_session_and_context_with_rx().await;
+        session
+            .services
+            .agent_jobs
+            .insert_job_for_test(
+                "agent-job-complete",
+                "Boyle",
+                AgentJobStatus::Completed {
+                    result: "done".to_string(),
+                    exit_code: Some(0),
+                },
+            )
+            .await;
+
+        let output = wait(
+            session,
+            turn,
+            json!({
+                "ids": ["agent-job-complete", "agent-job-missing"],
+                "timeout_ms": MIN_WAIT_TIMEOUT_MS,
+            })
+            .to_string(),
+        )
+        .await
+        .expect("wait result");
+
+        let mut statuses = Vec::new();
+        for _ in 0..2 {
+            let event = rx.recv().await.expect("final status event");
+            let EventMsg::AgentJobStatus(status) = event.msg else {
+                panic!("expected agent job status event");
+            };
+            statuses.push(status);
+        }
+        assert_eq!(
+            statuses,
+            vec![
+                AgentJobStatusEvent {
+                    job_id: "agent-job-complete".to_string(),
+                    agent_type: AgentJobKind::Explorer,
+                    name: Some("Boyle".to_string()),
+                    status: AgentJobDisplayStatus::Completed,
+                    message: None,
+                },
+                AgentJobStatusEvent {
+                    job_id: "agent-job-missing".to_string(),
+                    agent_type: AgentJobKind::Explorer,
+                    name: None,
+                    status: AgentJobDisplayStatus::NotFound,
+                    message: None,
+                },
+            ]
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "non-running jobs should only emit their final wait statuses"
+        );
+
+        let ToolOutput::Function { content, .. } = output;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&content).expect("wait result json"),
+            json!({
+                "jobs": {
+                    "agent-job-complete": {
+                        "agent_type": "explorer",
+                        "name": "Boyle",
+                        "status": {
+                            "status": "completed",
+                            "result": "done",
+                            "exit_code": 0
+                        }
+                    },
+                    "agent-job-missing": {
+                        "agent_type": "explorer",
+                        "name": null,
+                        "status": {
+                            "status": "not_found"
                         }
                     }
                 },

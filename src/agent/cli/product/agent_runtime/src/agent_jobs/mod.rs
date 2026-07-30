@@ -276,6 +276,21 @@ impl AgentJobManager {
         self
     }
 
+    #[cfg(test)]
+    pub(crate) async fn insert_job_for_test(&self, id: &str, name: &str, status: AgentJobStatus) {
+        let (_completion_tx, completion) = watch::channel(status.is_final());
+        self.jobs.lock().await.insert(
+            id.to_string(),
+            ManagedAgentJob {
+                agent_type: AgentJobType::Explorer,
+                name: name.to_string(),
+                status: Arc::new(Mutex::new(status)),
+                cancellation_token: CancellationToken::new(),
+                completion,
+            },
+        );
+    }
+
     pub(crate) async fn spawn(
         &self,
         parent_thread_id: ThreadId,

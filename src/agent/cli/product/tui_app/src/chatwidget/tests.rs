@@ -7683,6 +7683,87 @@ async fn non_streaming_final_message_stays_hidden_and_follow_up_work_can_resume(
 }
 
 #[tokio::test]
+async fn delegated_wait_running_status_restores_work_indicator() {
+    fn running_job_event(id: &str) -> Event {
+        Event {
+            id: id.to_string(),
+            msg: EventMsg::AgentJobStatus(AgentJobStatusEvent {
+                job_id: "agent-job-1".to_string(),
+                agent_type: AgentJobKind::Explorer,
+                name: Some("Boyle".to_string()),
+                status: AgentJobDisplayStatus::Running,
+                message: None,
+            }),
+        }
+    }
+
+    let (frame_requester, mut frame_rx) = FrameRequester::test_with_receiver();
+    let (mut chat, _rx, _op_rx) =
+        make_chatwidget_manual_with_frame_requester(None, frame_requester).await;
+    chat.on_task_started();
+    chat.handle_codex_event(running_job_event("initial-running"));
+
+    for (index, message) in ["first answer", "second answer"].into_iter().enumerate() {
+        while frame_rx.try_recv().is_ok() {}
+        chat.on_agent_message(message.to_string(), DispatchMode::Live);
+        assert_eq!(
+            chat.status_machine.finalizing,
+            Some(TurnFinalizing::FinalAnswer)
+        );
+        assert_eq!(
+            chat.bottom_pane.status_suspension_reason(),
+            Some(StatusSuspensionReason::TurnFinalizing)
+        );
+
+        while frame_rx.try_recv().is_ok() {}
+        chat.handle_codex_event(running_job_event(&format!("wait-{index}-running")));
+
+        assert_eq!(chat.status_machine.finalizing, None);
+        assert!(chat.bottom_pane.is_task_running());
+        assert!(chat.bottom_pane.status_indicator_visible());
+        assert!(
+            frame_rx.try_recv().is_ok(),
+            "running status should request a redraw"
+        );
+    }
+
+    assert_eq!(
+        chat.sidebar_snapshot().agents,
+        vec![AgentPanelEntry {
+            job_id: "agent-job-1".to_string(),
+            label: "Boyle [explorer]".to_string(),
+            status: AgentJobDisplayStatus::Running,
+        }]
+    );
+
+    let width = 80;
+    let height = 20;
+    let backend = AuditedVT100Backend::new(width, height);
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(backend)
+        .expect("audited terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    render_chat_to_audited_terminal(&chat, &mut terminal);
+
+    let buffer = terminal.last_frame_buffer();
+    let rendered = buffer_to_string(buffer);
+    let screen = terminal.backend().vt100().screen().contents();
+    assert!(
+        rendered.contains("Working"),
+        "ratatui buffer should contain the restored status:\n{rendered}"
+    );
+    assert!(
+        screen.contains("Working"),
+        "VT100 screen should contain the restored status:\n{screen}"
+    );
+    assert_vt100_grid_matches_buffer(
+        "delegated wait restores work indicator",
+        buffer,
+        terminal.backend().vt100(),
+        &rendered,
+    );
+}
+
+#[tokio::test]
 async fn hidden_raw_reasoning_resumes_finalizing_status() {
     fn assert_status_resumed(chat: &ChatWidget) {
         assert_eq!(chat.status_machine.finalizing, None);
