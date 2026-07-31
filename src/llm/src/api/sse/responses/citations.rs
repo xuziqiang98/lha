@@ -408,6 +408,8 @@ fn escape_markdown_label(label: &str) -> String {
         .replace('\\', "\\\\")
         .replace('[', "\\[")
         .replace(']', "\\]")
+        .replace('<', "\\<")
+        .replace('>', "\\>")
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -568,6 +570,26 @@ mod tests {
             ),
             "Result[First \\[source\\]](<https://first.example/path>) [Second](<https://second.example/path>)"
         );
+    }
+
+    #[test]
+    fn citation_labels_escape_html_like_control_tags() {
+        let marker = "\u{e200}cite\u{e202}turn0search0\u{e201}";
+        let normalized = normalize(
+            &format!("Result{marker}"),
+            vec![citation(
+                0,
+                6,
+                26,
+                r"Path \ [source] <oai-mem-citation>hidden</oai-mem-citation>",
+                "https://example.com/source",
+            )],
+        );
+        let expected = r"Result[Path \\ \[source\] \<oai-mem-citation\>hidden\</oai-mem-citation\>](<https://example.com/source>)";
+
+        assert_eq!(normalized, expected);
+        assert!(!normalized.contains("<oai-mem-citation>"));
+        assert!(!normalized.contains("</oai-mem-citation>"));
     }
 
     #[test]

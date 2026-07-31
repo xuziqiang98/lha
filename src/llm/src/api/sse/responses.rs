@@ -216,6 +216,44 @@ impl ResponsesEventError {
     }
 }
 
+/// Processes one Responses API stream event without retaining cross-event state.
+///
+/// The SDK's SSE and WebSocket clients use an internal stateful processor to
+/// normalize hosted citations that span multiple events.
+pub fn process_responses_event(
+    event: ResponsesStreamEvent,
+) -> std::result::Result<Option<ResponseEvent>, ResponsesEventError> {
+    match event.kind.as_str() {
+        "response.output_item.done" => Ok(process_compat_output_item(
+            event.item,
+            "response.output_item.done",
+            ResponseEvent::OutputItemDone,
+        )),
+        "response.output_text.delta" => Ok(event.delta.map(ResponseEvent::OutputTextDelta)),
+        "response.output_item.added" => Ok(process_compat_output_item(
+            event.item,
+            "response.output_item.added",
+            ResponseEvent::OutputItemAdded,
+        )),
+        _ => process_simple_responses_event(event),
+    }
+}
+
+fn process_compat_output_item(
+    item: Option<Value>,
+    event_kind: &str,
+    make_event: fn(TranscriptItem) -> ResponseEvent,
+) -> Option<ResponseEvent> {
+    let item = item?;
+    match parse_response_item(item) {
+        Ok(item) => Some(make_event(item)),
+        Err(error) => {
+            debug!("failed to parse TranscriptItem from {event_kind}: {error}");
+            None
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct OutputTextKey {
     item_id: Option<String>,
@@ -1229,6 +1267,40 @@ mod tests {
         text
     }
 
+    #[test]
+    fn compat_parser_ignores_malformed_items_while_stateful_processor_errors() {
+        for event in [
+            json!({
+                "type": "response.output_item.added",
+                "item": {
+                    "type": "message"
+                }
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "function_call"
+                }
+            }),
+        ] {
+            let compat_event =
+                serde_json::from_value(event.clone()).expect("compat event should deserialize");
+            assert!(
+                process_responses_event(compat_event)
+                    .expect("compat parser should not fail")
+                    .is_none()
+            );
+
+            let stateful_event =
+                serde_json::from_value(event).expect("stateful event should deserialize");
+            assert!(
+                ResponsesEventProcessor::default()
+                    .process_event(stateful_event)
+                    .is_err()
+            );
+        }
+    }
+
     #[tokio::test]
     async fn normalizes_streamed_citations_and_completed_item_to_identical_text() {
         let marker = citation_marker(&["turn0search0"]);
@@ -1290,6 +1362,64 @@ mod tests {
         assert_eq!(streamed, expected);
         assert_eq!(completed, Some(expected.as_str()));
         assert!(!streamed.contains("turn0search0"));
+    }
+
+    #[tokio::test]
+    async fn neutralizes_control_tags_in_streamed_and_completed_citation_titles() {
+        let marker = citation_marker(&["turn0search0"]);
+        let raw = format!("Answer{marker}");
+        let title = "Source <oai-mem-citation>hidden</oai-mem-citation>";
+        let annotation = json!({
+            "type": "url_citation",
+            "start_index": 6,
+            "end_index": 28,
+            "title": title,
+            "url": "https://example.com/source",
+        });
+        let events = run_sse(vec![
+            json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": "msg-1",
+                    "role": "assistant",
+                    "content": []
+                }
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg-1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": raw,
+            }),
+            url_annotation(0, 6, 28, title, "https://example.com/source"),
+            annotated_message(&format!("Answer{marker}"), vec![annotation]),
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp-1" }
+            }),
+        ])
+        .await;
+
+        let streamed = events
+            .iter()
+            .filter_map(|event| match event {
+                ResponseEvent::OutputTextDelta(delta) => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        let completed = events.iter().find_map(|event| match event {
+            ResponseEvent::OutputItemDone(item) => Some(output_text_from_item(item)),
+            _ => None,
+        });
+        let expected = r"Answer[Source \<oai-mem-citation\>hidden\</oai-mem-citation\>](<https://example.com/source>)";
+
+        assert_eq!(streamed, expected);
+        assert_eq!(completed, Some(expected));
+        assert!(!streamed.contains("<oai-mem-citation>"));
+        assert!(!streamed.contains("</oai-mem-citation>"));
     }
 
     #[tokio::test]
@@ -2520,6 +2650,42 @@ mod tests {
             output_text_from_item(item),
             "结果[example.com](<https://example.com/source>)"
         );
+    }
+
+    #[test]
+    fn non_streaming_response_neutralizes_control_tags_in_citation_titles() {
+        let marker = citation_marker(&["turn0search0"]);
+        let completion = parse_completed_response(json!({
+            "id": "resp-1",
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "id": "msg-1",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": format!("Result{marker}"),
+                    "annotations": [{
+                        "type": "url_citation",
+                        "start_index": 6,
+                        "end_index": 28,
+                        "title": "Source <oai-mem-citation>hidden</oai-mem-citation>",
+                        "url": "https://example.com/source"
+                    }]
+                }]
+            }]
+        }))
+        .expect("completion should parse");
+
+        let [item] = completion.output.as_slice() else {
+            panic!("expected one output item");
+        };
+        let expected = r"Result[Source \<oai-mem-citation\>hidden\</oai-mem-citation\>](<https://example.com/source>)";
+        let text = output_text_from_item(item);
+
+        assert_eq!(text, expected);
+        assert!(!text.contains("<oai-mem-citation>"));
+        assert!(!text.contains("</oai-mem-citation>"));
     }
 
     #[test]

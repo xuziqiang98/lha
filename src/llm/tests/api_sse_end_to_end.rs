@@ -13,6 +13,8 @@ use lha_llm::api::ResponseEvent;
 use lha_llm::api::ResponsesClient;
 use lha_llm::api::WireApi;
 use lha_llm::api::requests::responses::Compression;
+use lha_llm::api::sse::responses::ResponsesStreamEvent;
+use lha_llm::api::sse::responses::process_responses_event;
 use lha_llm::client::HttpTransport;
 use lha_llm::client::Request;
 use lha_llm::client::Response;
@@ -93,6 +95,78 @@ fn build_responses_body(events: Vec<Value>) -> String {
         }
     }
     body
+}
+
+#[test]
+fn public_responses_event_parser_remains_available_and_stateless() {
+    let raw_delta = "before\u{e200}cite\u{e202}turn0search0\u{e201}after";
+    let events = vec![
+        serde_json::json!({
+            "type": "response.output_text.delta",
+            "delta": raw_delta,
+        }),
+        serde_json::json!({
+            "type": "response.output_item.added",
+            "item": {
+                "type": "message",
+                "id": "msg-added",
+                "role": "assistant",
+                "content": []
+            }
+        }),
+        serde_json::json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "message",
+                "id": "msg-done",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": "final"
+                }]
+            }
+        }),
+    ]
+    .into_iter()
+    .map(|event| {
+        let event: ResponsesStreamEvent =
+            serde_json::from_value(event).expect("public event should deserialize");
+        process_responses_event(event)
+            .expect("public parser should succeed")
+            .expect("fixture should produce an event")
+    })
+    .collect::<Vec<_>>();
+
+    let [
+        ResponseEvent::OutputTextDelta(delta),
+        ResponseEvent::OutputItemAdded(added),
+        ResponseEvent::OutputItemDone(done),
+    ] = events.as_slice()
+    else {
+        panic!("unexpected public parser events: {events:?}");
+    };
+
+    assert_eq!(delta, raw_delta);
+    assert_eq!(
+        added,
+        &TranscriptItem::Message {
+            id: Some("msg-added".to_string()),
+            role: "assistant".to_string(),
+            content: Vec::new(),
+            end_turn: None,
+        }
+    );
+    assert_eq!(
+        done,
+        &TranscriptItem::Message {
+            id: Some("msg-done".to_string()),
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "final".to_string(),
+            }],
+            end_turn: None,
+        }
+    );
 }
 
 #[tokio::test]
