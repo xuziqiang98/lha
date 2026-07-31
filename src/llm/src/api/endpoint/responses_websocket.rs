@@ -5,8 +5,9 @@ use crate::api::common::ResponsesWsRequest;
 use crate::api::endpoint::websocket_proxy;
 use crate::api::error::ApiError;
 use crate::api::provider::Provider;
+use crate::api::sse::responses::ResponsesEventProcessor;
 use crate::api::sse::responses::ResponsesStreamEvent;
-use crate::api::sse::responses::process_responses_event;
+use crate::api::sse::responses::send_response_events;
 use crate::api::telemetry::WebsocketTelemetry;
 use crate::client::TransportError;
 use futures::SinkExt;
@@ -255,6 +256,7 @@ async fn run_websocket_response_stream(
     }
 
     result?;
+    let mut processor = ResponsesEventProcessor::default();
 
     loop {
         let poll_start = Instant::now();
@@ -267,59 +269,199 @@ async fn run_websocket_response_stream(
         let message = match response {
             Ok(Some(Ok(msg))) => msg,
             Ok(Some(Err(err))) => {
-                return Err(ApiError::Stream(err.to_string()));
+                return finish_response_stream_error(
+                    &mut processor,
+                    &tx_event,
+                    ApiError::Stream(err.to_string()),
+                )
+                .await;
             }
             Ok(None) => {
-                return Err(ApiError::Stream(
-                    "stream closed before response.completed".into(),
-                ));
+                return finish_response_stream_error(
+                    &mut processor,
+                    &tx_event,
+                    ApiError::Stream("stream closed before response.completed".into()),
+                )
+                .await;
             }
             Err(err) => {
-                return Err(err);
+                return finish_response_stream_error(&mut processor, &tx_event, err).await;
             }
         };
 
         match message {
             Message::Text(text) => {
                 trace!("websocket event: {text}");
-                let event = match serde_json::from_str::<ResponsesStreamEvent>(&text) {
-                    Ok(event) => event,
-                    Err(err) => {
-                        debug!("failed to parse websocket event: {err}, data: {text}");
-                        continue;
-                    }
-                };
-                match process_responses_event(event) {
-                    Ok(Some(event)) => {
-                        let is_completed = matches!(event, ResponseEvent::Completed { .. });
-                        let _ = tx_event.send(Ok(event)).await;
+                match process_websocket_text_event(&mut processor, &text) {
+                    Ok(events) => {
+                        let is_completed = events
+                            .iter()
+                            .any(|event| matches!(event, ResponseEvent::Completed { .. }));
+                        let _ = send_response_events(&tx_event, events).await;
                         if is_completed {
                             break;
                         }
                     }
-                    Ok(None) => {}
                     Err(error) => {
-                        return Err(error.into_api_error());
+                        return finish_response_stream_error(&mut processor, &tx_event, error)
+                            .await;
                     }
                 }
             }
             Message::Binary(_) => {
-                return Err(ApiError::Stream("unexpected binary websocket event".into()));
+                return finish_response_stream_error(
+                    &mut processor,
+                    &tx_event,
+                    ApiError::Stream("unexpected binary websocket event".into()),
+                )
+                .await;
             }
             Message::Ping(payload) => {
                 if ws_stream.send(Message::Pong(payload)).await.is_err() {
-                    return Err(ApiError::Stream("websocket ping failed".into()));
+                    return finish_response_stream_error(
+                        &mut processor,
+                        &tx_event,
+                        ApiError::Stream("websocket ping failed".into()),
+                    )
+                    .await;
                 }
             }
             Message::Pong(_) => {}
             Message::Close(_) => {
-                return Err(ApiError::Stream(
-                    "websocket closed by server before response.completed".into(),
-                ));
+                return finish_response_stream_error(
+                    &mut processor,
+                    &tx_event,
+                    ApiError::Stream("websocket closed by server before response.completed".into()),
+                )
+                .await;
             }
             _ => {}
         }
     }
 
     Ok(())
+}
+
+fn process_websocket_text_event(
+    processor: &mut ResponsesEventProcessor,
+    text: &str,
+) -> Result<Vec<ResponseEvent>, ApiError> {
+    let event = match serde_json::from_str::<ResponsesStreamEvent>(text) {
+        Ok(event) => event,
+        Err(err) => {
+            debug!("failed to parse websocket event: {err}, data: {text}");
+            return Ok(Vec::new());
+        }
+    };
+    processor
+        .process_event(event)
+        .map_err(super::super::sse::responses::ResponsesEventError::into_api_error)
+}
+
+async fn finish_response_stream_error(
+    processor: &mut ResponsesEventProcessor,
+    tx_event: &mpsc::Sender<std::result::Result<ResponseEvent, ApiError>>,
+    error: ApiError,
+) -> Result<(), ApiError> {
+    let _ = send_response_events(tx_event, processor.finish_incomplete()).await;
+    Err(error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::ContentItem;
+    use crate::types::TranscriptItem;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    #[test]
+    fn websocket_text_events_share_citation_normalization() {
+        let marker = "\u{e200}cite\u{e202}turn0search0\u{e201}";
+        let raw = format!("WS {marker} result");
+        let events = [
+            json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": "msg-1",
+                    "role": "assistant",
+                    "content": []
+                }
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg-1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": raw,
+            }),
+            json!({
+                "type": "response.output_text.done",
+                "item_id": "msg-1",
+                "output_index": 0,
+                "content_index": 0,
+            }),
+            json!({
+                "type": "response.content_part.done",
+                "item_id": "msg-1",
+                "output_index": 0,
+                "content_index": 0,
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": "msg-1",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": format!("WS {marker} result"),
+                        "annotations": [{
+                            "type": "url_citation",
+                            "start_index": 3,
+                            "end_index": 25,
+                            "title": "WebSocket source",
+                            "url": "https://example.com/ws"
+                        }]
+                    }]
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {"id": "resp-1"}
+            }),
+        ];
+        let mut processor = ResponsesEventProcessor::default();
+        let mut output = Vec::new();
+        for event in events {
+            output.extend(
+                process_websocket_text_event(&mut processor, &event.to_string())
+                    .expect("event should process"),
+            );
+        }
+
+        let streamed = output
+            .iter()
+            .filter_map(|event| match event {
+                ResponseEvent::OutputTextDelta(delta) => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        let completed = output.iter().find_map(|event| match event {
+            ResponseEvent::OutputItemDone(TranscriptItem::Message { content, .. }) => {
+                let [ContentItem::OutputText { text }] = content.as_slice() else {
+                    return None;
+                };
+                Some(text.as_str())
+            }
+            _ => None,
+        });
+        let expected = "WS [WebSocket source](<https://example.com/ws>) result";
+
+        assert_eq!(streamed, expected);
+        assert_eq!(completed, Some(expected));
+    }
 }

@@ -674,6 +674,19 @@ fn link() {
 }
 
 #[test]
+fn normalized_hosted_citation_link_is_readable() {
+    let text = render_markdown_text("Result[Source](<https://example.com/source>)");
+    let expected = Text::from(Line::from_iter([
+        "Result".into(),
+        "Source".into(),
+        " (".into(),
+        "https://example.com/source".cyan().underlined(),
+        ")".into(),
+    ]));
+    assert_eq!(text, expected);
+}
+
+#[test]
 fn code_block_unhighlighted() {
     let text = render_markdown_text("```rust\nfn main() {}\n```\n");
     let expected = Text::from_iter([Line::from_iter(["", "fn main() {}"])]);

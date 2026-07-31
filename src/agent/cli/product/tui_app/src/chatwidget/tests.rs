@@ -648,6 +648,29 @@ async fn assistant_stream_commits_all_pending_source_on_display_tick() {
 }
 
 #[tokio::test]
+async fn normalized_citation_stream_matches_final_and_replay_without_duplication() {
+    let normalized = "Result[Source](<https://example.com/source>)".to_string();
+    let (mut live, mut live_rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    live.on_task_started();
+    live.on_agent_message_delta(normalized.clone());
+    live.on_commit_tick();
+    live.on_agent_message(normalized.clone(), DispatchMode::Live);
+
+    let live_cells = drain_insert_history(&mut live_rx);
+    assert_eq!(live_cells.len(), 1);
+    let live_rendered = lines_to_single_string(&live_cells[0]);
+    assert_eq!(live_rendered.matches("Source").count(), 1);
+    assert!(!live_rendered.contains("\u{e200}cite"));
+
+    let (mut replay, mut replay_rx, _op_rx) = make_chatwidget_manual(None).await;
+    replay.on_agent_message(normalized, DispatchMode::Replay);
+    let replay_cells = drain_insert_history(&mut replay_rx);
+    assert_eq!(replay_cells.len(), 1);
+    assert_eq!(lines_to_single_string(&replay_cells[0]), live_rendered);
+}
+
+#[tokio::test]
 async fn streaming_display_tick_coalesces_pending_deltas_without_idle_redraw() {
     let (frame_requester, mut frame_rx) = FrameRequester::test_with_receiver();
     let (mut chat, _rx, _op_rx) =

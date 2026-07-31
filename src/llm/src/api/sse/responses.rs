@@ -16,12 +16,18 @@ use crate::types::ToolResultItem;
 use crate::types::ToolResultPayload;
 use crate::types::TranscriptItem;
 use crate::types::UnknownItem;
+use citations::CitationTextState;
+use citations::annotation_span;
+use citations::normalize_text;
+use citations::parse_output_annotation_groups;
+use citations::parse_url_citation;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use futures::TryStreamExt;
 use http::HeaderMap;
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::io::BufRead;
 use std::path::Path;
 use std::sync::Arc;
@@ -33,6 +39,8 @@ use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
 use tracing::debug;
 use tracing::trace;
+
+mod citations;
 
 const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
 const RESPONSES_REFUSAL_MESSAGE: &str =
@@ -186,9 +194,13 @@ pub struct ResponsesStreamEvent {
     error: Option<Error>,
     response: Option<Value>,
     item: Option<Value>,
+    item_id: Option<String>,
     delta: Option<String>,
     summary_index: Option<i64>,
     content_index: Option<i64>,
+    output_index: Option<usize>,
+    annotation_index: Option<usize>,
+    annotation: Option<Value>,
 }
 
 #[derive(Debug)]
@@ -204,7 +216,339 @@ impl ResponsesEventError {
     }
 }
 
-pub fn process_responses_event(
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct OutputTextKey {
+    item_id: Option<String>,
+    output_index: Option<usize>,
+    content_index: usize,
+}
+
+#[derive(Debug)]
+struct ActiveOutputItem {
+    item_id: Option<String>,
+    output_index: Option<usize>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ResponsesEventProcessor {
+    citation_states: HashMap<OutputTextKey, CitationTextState>,
+    citation_state_order: Vec<OutputTextKey>,
+    active_item_id: Option<String>,
+    active_output_index: Option<usize>,
+    active_output_text_key: Option<OutputTextKey>,
+}
+
+impl ResponsesEventProcessor {
+    pub(crate) fn process_event(
+        &mut self,
+        event: ResponsesStreamEvent,
+    ) -> std::result::Result<Vec<ResponseEvent>, ResponsesEventError> {
+        match event.kind.as_str() {
+            "response.output_text.delta" => Ok(self.process_output_text_delta(event)),
+            "response.output_text.annotation.added" => {
+                Ok(self.process_output_text_annotation(event))
+            }
+            "response.output_item.done" => self.process_output_item_done(event),
+            "response.output_item.added" => {
+                let active_output_item = active_output_item(&event);
+                let event = process_simple_responses_event(event)?;
+                let mut events = self.flush_active_boundary();
+                self.capture_active_output_item(active_output_item);
+                if let Some(event) = event {
+                    events.push(event);
+                }
+                Ok(events)
+            }
+            "response.completed" | "response.done" => {
+                let event = process_simple_responses_event(event)?;
+                let mut events = self.finish_all_incomplete();
+                if let Some(event) = event {
+                    events.push(event);
+                }
+                Ok(events)
+            }
+            "error" | "response.failed" => {
+                process_simple_responses_event(event).map(|event| event.into_iter().collect())
+            }
+            _ => {
+                let mut events = self.flush_active_boundary();
+                if let Some(event) = process_simple_responses_event(event)? {
+                    events.push(event);
+                }
+                Ok(events)
+            }
+        }
+    }
+
+    pub(crate) fn finish_incomplete(&mut self) -> Vec<ResponseEvent> {
+        self.finish_all_incomplete()
+    }
+
+    fn process_output_text_delta(&mut self, event: ResponsesStreamEvent) -> Vec<ResponseEvent> {
+        let key = self.canonical_citation_state_key(self.output_text_key(&event));
+        let Some(delta) = event.delta else {
+            return Vec::new();
+        };
+        let mut events = self.flush_before_output_text_key(&key);
+        let state = self.citation_state_mut(key.clone());
+        let delta = state.push_delta(&delta);
+        self.active_output_text_key = Some(key);
+        events.extend(output_text_delta_event(delta));
+        events
+    }
+
+    fn process_output_text_annotation(
+        &mut self,
+        event: ResponsesStreamEvent,
+    ) -> Vec<ResponseEvent> {
+        let Some(annotation) = event.annotation.as_ref() else {
+            return self.flush_active_boundary();
+        };
+        let Some(span) = annotation_span(annotation) else {
+            return self.flush_active_boundary();
+        };
+        let key = self.canonical_citation_state_key(self.output_text_key(&event));
+        let citation = parse_url_citation(annotation, event.annotation_index.unwrap_or_default());
+        let mut events = self.flush_before_output_text_key(&key);
+        let state = self.citation_state_mut(key.clone());
+        let delta = state.push_annotation(span, citation);
+        self.active_output_text_key = Some(key);
+        events.extend(output_text_delta_event(delta));
+        events
+    }
+
+    fn process_output_item_done(
+        &mut self,
+        event: ResponsesStreamEvent,
+    ) -> std::result::Result<Vec<ResponseEvent>, ResponsesEventError> {
+        let Some(mut item) = event.item else {
+            return Ok(self.flush_active_boundary());
+        };
+        if item.get("type").and_then(Value::as_str) != Some("message") {
+            let item = parse_response_item(item).map_err(ResponsesEventError::Api)?;
+            let mut events = self.flush_active_boundary();
+            events.push(ResponseEvent::OutputItemDone(item));
+            return Ok(events);
+        }
+        parse_response_item(item.clone()).map_err(ResponsesEventError::Api)?;
+
+        let item_id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .or_else(|| event.item_id.clone())
+            .or_else(|| self.active_item_id.clone());
+        let output_index = event.output_index.or(self.active_output_index);
+        let mut events = Vec::new();
+        if let Some(content) = item.get_mut("content").and_then(Value::as_array_mut) {
+            for (content_index, block) in content.iter_mut().enumerate() {
+                if block.get("type").and_then(Value::as_str) != Some("output_text") {
+                    continue;
+                }
+                let text = block
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let annotation_groups = parse_output_annotation_groups(block.get("annotations"));
+                let key = OutputTextKey {
+                    item_id: item_id.clone(),
+                    output_index,
+                    content_index,
+                };
+                let normalized = if let Some(mut state) = self.take_citation_state(&key) {
+                    let delta = state.finish(Some(&text), annotation_groups);
+                    events.extend(output_text_delta_event(delta));
+                    state.text().to_string()
+                } else {
+                    normalize_text(&text, annotation_groups)
+                };
+
+                if let Some(block) = block.as_object_mut() {
+                    block.insert("text".to_string(), Value::String(normalized));
+                    block.remove("annotations");
+                }
+            }
+        }
+
+        let item = parse_response_item(item).map_err(ResponsesEventError::Api)?;
+        events.push(ResponseEvent::OutputItemDone(item));
+        self.clear_active_output_item(item_id.as_deref());
+        Ok(events)
+    }
+
+    fn output_text_key(&self, event: &ResponsesStreamEvent) -> OutputTextKey {
+        OutputTextKey {
+            item_id: event
+                .item_id
+                .clone()
+                .or_else(|| self.active_item_id.clone()),
+            output_index: event.output_index.or(self.active_output_index),
+            content_index: event
+                .content_index
+                .and_then(|index| usize::try_from(index).ok())
+                .unwrap_or_default(),
+        }
+    }
+
+    fn canonical_citation_state_key(&mut self, key: OutputTextKey) -> OutputTextKey {
+        if self.citation_states.contains_key(&key) {
+            return key;
+        }
+
+        let mut compatible = self
+            .citation_state_order
+            .iter()
+            .filter(|candidate| citation_state_keys_match(candidate, &key));
+        let Some(existing) = compatible.next().cloned() else {
+            return key;
+        };
+        if compatible.next().is_some() {
+            return key;
+        }
+
+        let canonical = OutputTextKey {
+            item_id: key.item_id.clone().or_else(|| existing.item_id.clone()),
+            output_index: key.output_index.or(existing.output_index),
+            content_index: key.content_index,
+        };
+        if canonical == existing {
+            return existing;
+        }
+
+        let Some(state) = self.citation_states.remove(&existing) else {
+            return key;
+        };
+        self.citation_states.insert(canonical.clone(), state);
+        for candidate in &mut self.citation_state_order {
+            if candidate == &existing {
+                *candidate = canonical.clone();
+            }
+        }
+        if self.active_output_text_key.as_ref() == Some(&existing) {
+            self.active_output_text_key = Some(canonical.clone());
+        }
+        canonical
+    }
+
+    fn citation_state_mut(&mut self, key: OutputTextKey) -> &mut CitationTextState {
+        if !self.citation_states.contains_key(&key) {
+            self.citation_state_order.push(key.clone());
+        }
+        self.citation_states.entry(key).or_default()
+    }
+
+    fn take_citation_state(&mut self, key: &OutputTextKey) -> Option<CitationTextState> {
+        let matching_key = if self.citation_states.contains_key(key) {
+            Some(key.clone())
+        } else {
+            let mut compatible = self
+                .citation_state_order
+                .iter()
+                .filter(|candidate| citation_state_keys_match(candidate, key));
+            let matching_key = compatible.next().cloned();
+            if compatible.next().is_some() {
+                return None;
+            }
+            matching_key
+        }?;
+
+        self.citation_state_order
+            .retain(|candidate| candidate != &matching_key);
+        if self.active_output_text_key.as_ref() == Some(&matching_key) {
+            self.active_output_text_key = None;
+        }
+        self.citation_states.remove(&matching_key)
+    }
+
+    fn flush_active_boundary(&mut self) -> Vec<ResponseEvent> {
+        let Some(key) = self.active_output_text_key.clone() else {
+            return Vec::new();
+        };
+        let Some(state) = self.citation_states.get_mut(&key) else {
+            self.active_output_text_key = None;
+            return Vec::new();
+        };
+        output_text_delta_event(state.boundary())
+    }
+
+    fn flush_before_output_text_key(&mut self, key: &OutputTextKey) -> Vec<ResponseEvent> {
+        if self
+            .active_output_text_key
+            .as_ref()
+            .is_some_and(|active| active != key)
+        {
+            self.flush_active_boundary()
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn finish_all_incomplete(&mut self) -> Vec<ResponseEvent> {
+        let mut events = Vec::new();
+        for key in std::mem::take(&mut self.citation_state_order) {
+            if let Some(mut state) = self.citation_states.remove(&key) {
+                events.extend(output_text_delta_event(state.finish_incomplete()));
+            }
+        }
+        self.active_output_text_key = None;
+        events
+    }
+
+    fn capture_active_output_item(&mut self, active_output_item: Option<ActiveOutputItem>) {
+        let Some(active_output_item) = active_output_item else {
+            self.active_item_id = None;
+            self.active_output_index = None;
+            return;
+        };
+
+        self.active_item_id = active_output_item.item_id;
+        self.active_output_index = active_output_item.output_index;
+    }
+
+    fn clear_active_output_item(&mut self, item_id: Option<&str>) {
+        if item_id.is_none() || self.active_item_id.as_deref() == item_id {
+            self.active_item_id = None;
+            self.active_output_index = None;
+            self.active_output_text_key = None;
+        }
+    }
+}
+
+fn active_output_item(event: &ResponsesStreamEvent) -> Option<ActiveOutputItem> {
+    let item = event.item.as_ref()?;
+    if item.get("type").and_then(Value::as_str) != Some("message") {
+        return None;
+    }
+
+    Some(ActiveOutputItem {
+        item_id: item
+            .get("id")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .or_else(|| event.item_id.clone()),
+        output_index: event.output_index,
+    })
+}
+
+fn citation_state_keys_match(left: &OutputTextKey, right: &OutputTextKey) -> bool {
+    left.content_index == right.content_index
+        && optional_key_matches(&left.item_id, &right.item_id)
+        && optional_key_matches(&left.output_index, &right.output_index)
+}
+
+fn optional_key_matches<T: PartialEq>(left: &Option<T>, right: &Option<T>) -> bool {
+    left.is_none() || right.is_none() || left == right
+}
+
+fn output_text_delta_event(delta: String) -> Vec<ResponseEvent> {
+    (!delta.is_empty())
+        .then_some(ResponseEvent::OutputTextDelta(delta))
+        .into_iter()
+        .collect()
+}
+
+fn process_simple_responses_event(
     event: ResponsesStreamEvent,
 ) -> std::result::Result<Option<ResponseEvent>, ResponsesEventError> {
     match event.kind.as_str() {
@@ -216,17 +560,6 @@ pub fn process_responses_event(
             };
 
             return Err(ResponsesEventError::Api(api_error_from_error_event(error)));
-        }
-        "response.output_item.done" => {
-            if let Some(item_val) = event.item {
-                let item = parse_response_item(item_val).map_err(ResponsesEventError::Api)?;
-                return Ok(Some(ResponseEvent::OutputItemDone(item)));
-            }
-        }
-        "response.output_text.delta" => {
-            if let Some(delta) = event.delta {
-                return Ok(Some(ResponseEvent::OutputTextDelta(delta)));
-            }
         }
         "response.reasoning_summary_text.delta" => {
             if let (Some(delta), Some(summary_index)) = (event.delta, event.summary_index) {
@@ -347,7 +680,11 @@ pub(crate) fn parse_completed_response(value: Value) -> Result<CompletedResponse
         output: response
             .output
             .into_iter()
-            .map(parse_response_item)
+            .map(|mut item| {
+                parse_response_item(item.clone())?;
+                normalize_response_item(&mut item);
+                parse_response_item(item)
+            })
             .collect::<Result<Vec<_>, _>>()?,
         token_usage: response.usage.map(Into::into),
     })
@@ -529,6 +866,30 @@ pub(crate) fn parse_response_item(item: Value) -> Result<TranscriptItem, ApiErro
     }
 }
 
+fn normalize_response_item(item: &mut Value) {
+    if item.get("type").and_then(Value::as_str) != Some("message") {
+        return;
+    }
+    let Some(content) = item.get_mut("content").and_then(Value::as_array_mut) else {
+        return;
+    };
+
+    for block in content {
+        if block.get("type").and_then(Value::as_str) != Some("output_text") {
+            continue;
+        }
+        let Some(text) = block.get("text").and_then(Value::as_str) else {
+            continue;
+        };
+        let annotation_groups = parse_output_annotation_groups(block.get("annotations"));
+        let normalized = normalize_text(text, annotation_groups);
+        if let Some(block) = block.as_object_mut() {
+            block.insert("text".to_string(), Value::String(normalized));
+            block.remove("annotations");
+        }
+    }
+}
+
 fn responses_refusal_error(item: &Value) -> Option<ApiError> {
     let content = item.get("content")?.as_array()?;
     let mut has_refusal = false;
@@ -615,6 +976,7 @@ pub async fn process_sse(
     telemetry: Option<Arc<dyn SseTelemetry>>,
 ) {
     let mut stream = stream.eventsource();
+    let mut processor = ResponsesEventProcessor::default();
 
     loop {
         let start = Instant::now();
@@ -626,10 +988,16 @@ pub async fn process_sse(
             Ok(Some(Ok(sse))) => sse,
             Ok(Some(Err(e))) => {
                 debug!("SSE Error: {e:#}");
+                if !send_response_events(&tx_event, processor.finish_incomplete()).await {
+                    return;
+                }
                 let _ = tx_event.send(Err(ApiError::Stream(e.to_string()))).await;
                 return;
             }
             Ok(None) => {
+                if !send_response_events(&tx_event, processor.finish_incomplete()).await {
+                    return;
+                }
                 let _ = tx_event
                     .send(Err(ApiError::Stream(
                         "stream closed before response.completed".into(),
@@ -638,6 +1006,9 @@ pub async fn process_sse(
                 return;
             }
             Err(_) => {
+                if !send_response_events(&tx_event, processor.finish_incomplete()).await {
+                    return;
+                }
                 let _ = tx_event
                     .send(Err(ApiError::Stream("idle timeout waiting for SSE".into())))
                     .await;
@@ -655,23 +1026,39 @@ pub async fn process_sse(
             }
         };
 
-        match process_responses_event(event) {
-            Ok(Some(event)) => {
-                let is_completed = matches!(event, ResponseEvent::Completed { .. });
-                if tx_event.send(Ok(event)).await.is_err() {
+        match processor.process_event(event) {
+            Ok(events) => {
+                let is_completed = events
+                    .iter()
+                    .any(|event| matches!(event, ResponseEvent::Completed { .. }));
+                if !send_response_events(&tx_event, events).await {
                     return;
                 }
                 if is_completed {
                     return;
                 }
             }
-            Ok(None) => {}
             Err(error) => {
+                if !send_response_events(&tx_event, processor.finish_incomplete()).await {
+                    return;
+                }
                 let _ = tx_event.send(Err(error.into_api_error())).await;
                 return;
             }
         };
     }
+}
+
+pub(crate) async fn send_response_events(
+    tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
+    events: Vec<ResponseEvent>,
+) -> bool {
+    for event in events {
+        if tx_event.send(Ok(event)).await.is_err() {
+            return false;
+        }
+    }
+    true
 }
 
 fn try_parse_retry_after(err: &Error) -> Option<Duration> {
@@ -783,6 +1170,609 @@ mod tests {
 
     fn idle_timeout() -> Duration {
         Duration::from_millis(1000)
+    }
+
+    fn citation_marker(references: &[&str]) -> String {
+        format!(
+            "\u{e200}cite\u{e202}{}\u{e201}",
+            references.join("\u{e202}")
+        )
+    }
+
+    fn url_annotation(
+        index: usize,
+        start_index: usize,
+        end_index: usize,
+        title: &str,
+        url: &str,
+    ) -> serde_json::Value {
+        json!({
+            "type": "response.output_text.annotation.added",
+            "item_id": "msg-1",
+            "output_index": 0,
+            "content_index": 0,
+            "annotation_index": index,
+            "annotation": {
+                "type": "url_citation",
+                "start_index": start_index,
+                "end_index": end_index,
+                "title": title,
+                "url": url,
+            }
+        })
+    }
+
+    fn annotated_message(text: &str, annotations: Vec<serde_json::Value>) -> serde_json::Value {
+        json!({
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "message",
+                "id": "msg-1",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": text,
+                    "annotations": annotations,
+                }]
+            }
+        })
+    }
+
+    fn output_text_from_item(item: &TranscriptItem) -> &str {
+        let TranscriptItem::Message { content, .. } = item else {
+            panic!("expected message item");
+        };
+        let [crate::types::ContentItem::OutputText { text }] = content.as_slice() else {
+            panic!("expected one output text block");
+        };
+        text
+    }
+
+    #[tokio::test]
+    async fn normalizes_streamed_citations_and_completed_item_to_identical_text() {
+        let marker = citation_marker(&["turn0search0"]);
+        let raw = format!("Hello {marker} world");
+        let annotation = json!({
+            "type": "url_citation",
+            "start_index": 6,
+            "end_index": 28,
+            "title": "Example source",
+            "url": "https://example.com/source",
+        });
+        let events = run_sse(vec![
+            json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": "msg-1",
+                    "role": "assistant",
+                    "content": []
+                }
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg-1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": format!("Hello \u{e200}ci"),
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg-1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": format!("te\u{e202}turn0search0\u{e201} world"),
+            }),
+            url_annotation(0, 6, 28, "Example source", "https://example.com/source"),
+            annotated_message(&raw, vec![annotation]),
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp-1" }
+            }),
+        ])
+        .await;
+
+        let streamed = events
+            .iter()
+            .filter_map(|event| match event {
+                ResponseEvent::OutputTextDelta(delta) => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        let completed = events.iter().find_map(|event| match event {
+            ResponseEvent::OutputItemDone(item) => Some(output_text_from_item(item)),
+            _ => None,
+        });
+        let expected = "Hello [Example source](<https://example.com/source>) world".to_string();
+
+        assert_eq!(streamed, expected);
+        assert_eq!(completed, Some(expected.as_str()));
+        assert!(!streamed.contains("turn0search0"));
+    }
+
+    #[tokio::test]
+    async fn later_output_index_reuses_existing_citation_state() {
+        let marker = citation_marker(&["turn0search0"]);
+        let raw = format!("Hello {marker} world");
+        let annotation = json!({
+            "type": "url_citation",
+            "start_index": 6,
+            "end_index": 28,
+            "title": "Example source",
+            "url": "https://example.com/source",
+        });
+        let events = run_sse(vec![
+            json!({
+                "type": "response.output_item.added",
+                "item": {
+                    "type": "message",
+                    "id": "msg-1",
+                    "role": "assistant",
+                    "content": []
+                }
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg-1",
+                "content_index": 0,
+                "delta": raw,
+            }),
+            url_annotation(0, 6, 28, "Example source", "https://example.com/source"),
+            annotated_message(&format!("Hello {marker} world"), vec![annotation]),
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp-1" }
+            }),
+        ])
+        .await;
+
+        let streamed = events
+            .iter()
+            .filter_map(|event| match event {
+                ResponseEvent::OutputTextDelta(delta) => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        let completed = events.iter().find_map(|event| match event {
+            ResponseEvent::OutputItemDone(item) => Some(output_text_from_item(item)),
+            _ => None,
+        });
+        let expected = "Hello [Example source](<https://example.com/source>) world";
+
+        assert_eq!(streamed, expected);
+        assert_eq!(completed, Some(expected));
+    }
+
+    #[tokio::test]
+    async fn ambiguous_final_item_key_uses_stateless_citation_normalization() {
+        let marker = citation_marker(&["turn0search0"]);
+        let events = run_sse(vec![
+            json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg-a",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": format!("A{marker}"),
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg-b",
+                "output_index": 1,
+                "content_index": 0,
+                "delta": format!("B{marker}"),
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": format!("Final{marker}"),
+                        "annotations": [{
+                            "type": "url_citation",
+                            "start_index": 5,
+                            "end_index": 27,
+                            "title": "Final source",
+                            "url": "https://example.com/final"
+                        }]
+                    }]
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp-1" }
+            }),
+        ])
+        .await;
+
+        let streamed = events
+            .iter()
+            .filter_map(|event| match event {
+                ResponseEvent::OutputTextDelta(delta) => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        let completed = events.iter().find_map(|event| match event {
+            ResponseEvent::OutputItemDone(item) => Some(output_text_from_item(item)),
+            _ => None,
+        });
+
+        assert_eq!(streamed, "AB");
+        assert_eq!(
+            completed,
+            Some("Final[Final source](<https://example.com/final>)")
+        );
+    }
+
+    #[tokio::test]
+    async fn final_item_annotations_recover_after_output_text_done_events() {
+        let marker = citation_marker(&["turn0search0"]);
+        let raw = format!("Hello {marker} world");
+        let annotation = json!({
+            "type": "url_citation",
+            "start_index": 6,
+            "end_index": 28,
+            "title": "Final source",
+            "url": "https://example.com/final",
+        });
+        let events = run_sse(vec![
+            json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": "msg-1",
+                    "role": "assistant",
+                    "content": []
+                }
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg-1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": raw,
+            }),
+            json!({
+                "type": "response.output_text.done",
+                "item_id": "msg-1",
+                "output_index": 0,
+                "content_index": 0,
+            }),
+            json!({
+                "type": "response.content_part.done",
+                "item_id": "msg-1",
+                "output_index": 0,
+                "content_index": 0,
+            }),
+            annotated_message(&format!("Hello {marker} world"), vec![annotation]),
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp-1" }
+            }),
+        ])
+        .await;
+
+        let streamed = events
+            .iter()
+            .filter_map(|event| match event {
+                ResponseEvent::OutputTextDelta(delta) => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        let completed = events.iter().find_map(|event| match event {
+            ResponseEvent::OutputItemDone(item) => Some(output_text_from_item(item)),
+            _ => None,
+        });
+        let expected = "Hello [Final source](<https://example.com/final>) world";
+
+        assert_eq!(streamed, expected);
+        assert_eq!(completed, Some(expected));
+    }
+
+    #[tokio::test]
+    async fn groups_multiple_annotations_and_adjacent_citation_envelopes() {
+        let first_marker = citation_marker(&["turn0search0", "turn0search1"]);
+        let second_marker = citation_marker(&["turn1view0"]);
+        let raw = format!("A{first_marker} B{second_marker} C");
+        let first_annotations = vec![
+            json!({
+                "type": "url_citation",
+                "start_index": 1,
+                "end_index": 40,
+                "title": "One",
+                "url": "https://one.example/a",
+            }),
+            json!({
+                "type": "url_citation",
+                "start_index": 1,
+                "end_index": 40,
+                "title": "Two",
+                "url": "https://two.example/b",
+            }),
+        ];
+        let second_annotation = json!({
+            "type": "url_citation",
+            "start_index": 42,
+            "end_index": 63,
+            "title": "",
+            "url": "https://three.example/c",
+        });
+        let events = run_sse(vec![
+            json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": "msg-1",
+                    "role": "assistant",
+                    "content": []
+                }
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg-1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": raw,
+            }),
+            url_annotation(0, 1, 40, "One", "https://one.example/a"),
+            url_annotation(1, 1, 40, "Two", "https://two.example/b"),
+            url_annotation(2, 42, 63, "", "https://three.example/c"),
+            annotated_message(
+                &format!("A{first_marker} B{second_marker} C"),
+                first_annotations
+                    .into_iter()
+                    .chain(std::iter::once(second_annotation))
+                    .collect(),
+            ),
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp-1" }
+            }),
+        ])
+        .await;
+
+        let streamed = events
+            .iter()
+            .filter_map(|event| match event {
+                ResponseEvent::OutputTextDelta(delta) => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        let expected = concat!(
+            "A[One](<https://one.example/a>) [Two](<https://two.example/b>)",
+            " B[three.example](<https://three.example/c>) C"
+        );
+        let completed = events.iter().find_map(|event| match event {
+            ResponseEvent::OutputItemDone(item) => Some(output_text_from_item(item)),
+            _ => None,
+        });
+
+        assert_eq!(streamed, expected);
+        assert_eq!(completed, Some(expected));
+    }
+
+    #[tokio::test]
+    async fn drops_unknown_or_unusable_citations_without_exposing_private_markers() {
+        let marker = citation_marker(&["turn0search0"]);
+        let raw = format!("before{marker}after");
+        let events = run_sse(vec![
+            json!({
+                "type": "response.output_item.added",
+                "item": {
+                    "type": "message",
+                    "id": "msg-1",
+                    "role": "assistant",
+                    "content": []
+                }
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg-1",
+                "content_index": 0,
+                "delta": raw,
+            }),
+            json!({
+                "type": "response.output_text.annotation.added",
+                "item_id": "msg-1",
+                "content_index": 0,
+                "annotation_index": 0,
+                "annotation": {
+                    "type": "file_citation",
+                    "start_index": 6,
+                    "end_index": 28,
+                }
+            }),
+            annotated_message(
+                &format!("before{marker}after"),
+                vec![json!({
+                    "type": "url_citation",
+                    "start_index": 6,
+                    "end_index": 28,
+                    "title": "unsafe",
+                    "url": "file:///tmp/source",
+                })],
+            ),
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp-1" }
+            }),
+        ])
+        .await;
+
+        let streamed = events
+            .iter()
+            .filter_map(|event| match event {
+                ResponseEvent::OutputTextDelta(delta) => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert_eq!(streamed, "beforeafter");
+        assert!(!streamed.contains("\u{e200}cite"));
+    }
+
+    #[tokio::test]
+    async fn flushes_safe_partial_text_before_stream_error() {
+        let marker = citation_marker(&["turn0search0"]);
+        let body = [
+            json!({
+                "type": "response.output_item.added",
+                "item": {
+                    "type": "message",
+                    "id": "msg-1",
+                    "role": "assistant",
+                    "content": []
+                }
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg-1",
+                "content_index": 0,
+                "delta": format!("before{marker}after"),
+            }),
+            json!({
+                "type": "response.failed",
+                "response": {
+                    "error": {
+                        "code": "server_error",
+                        "message": "failed"
+                    }
+                }
+            }),
+        ]
+        .into_iter()
+        .map(|event| {
+            let kind = event["type"].as_str().expect("event type");
+            format!("event: {kind}\ndata: {event}\n\n")
+        })
+        .collect::<String>();
+
+        let events = collect_events(&[body.as_bytes()]).await;
+        let streamed = events
+            .iter()
+            .filter_map(|event| match event {
+                Ok(ResponseEvent::OutputTextDelta(delta)) => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+
+        assert_eq!(streamed, "beforeafter");
+        assert_matches!(
+            events.last(),
+            Some(Err(ApiError::Retryable { message, .. })) if message == "failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn flushes_safe_partial_text_before_malformed_completion_error() {
+        let marker = citation_marker(&["turn0search0"]);
+        let body = [
+            json!({
+                "type": "response.output_item.added",
+                "item": {
+                    "type": "message",
+                    "id": "msg-1",
+                    "role": "assistant",
+                    "content": []
+                }
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg-1",
+                "content_index": 0,
+                "delta": format!("before{marker}after"),
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {}
+            }),
+        ]
+        .into_iter()
+        .map(|event| {
+            let kind = event["type"].as_str().expect("event type");
+            format!("event: {kind}\ndata: {event}\n\n")
+        })
+        .collect::<String>();
+
+        let events = collect_events(&[body.as_bytes()]).await;
+        let streamed = events
+            .iter()
+            .filter_map(|event| match event {
+                Ok(ResponseEvent::OutputTextDelta(delta)) => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+
+        assert_eq!(streamed, "beforeafter");
+        assert_matches!(
+            events.last(),
+            Some(Err(ApiError::Stream(message)))
+                if message.starts_with("failed to parse ResponseCompleted:")
+        );
+    }
+
+    #[tokio::test]
+    async fn flushes_resolved_partial_text_before_malformed_output_item_error() {
+        let marker = citation_marker(&["turn0search0"]);
+        let expected = "before[Source](<https://example.com/source>)after";
+        for malformed_event in [
+            json!({
+                "type": "response.output_item.added",
+                "item": {
+                    "type": "message"
+                }
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "function_call"
+                }
+            }),
+        ] {
+            let body = [
+                json!({
+                    "type": "response.output_item.added",
+                    "output_index": 0,
+                    "item": {
+                        "type": "message",
+                        "id": "msg-1",
+                        "role": "assistant",
+                        "content": []
+                    }
+                }),
+                json!({
+                    "type": "response.output_text.delta",
+                    "item_id": "msg-1",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": format!("before{marker}after"),
+                }),
+                url_annotation(0, 6, 28, "Source", "https://example.com/source"),
+                malformed_event,
+            ]
+            .into_iter()
+            .map(|event| {
+                let kind = event["type"].as_str().expect("event type");
+                format!("event: {kind}\ndata: {event}\n\n")
+            })
+            .collect::<String>();
+
+            let events = collect_events(&[body.as_bytes()]).await;
+            let streamed = events
+                .iter()
+                .filter_map(|event| match event {
+                    Ok(ResponseEvent::OutputTextDelta(delta)) => Some(delta.as_str()),
+                    _ => None,
+                })
+                .collect::<String>();
+
+            assert_eq!(streamed, expected);
+            assert_matches!(events.last(), Some(Err(ApiError::Stream(_))));
+        }
     }
 
     #[tokio::test]
@@ -1393,6 +2383,31 @@ mod tests {
     }
 
     #[test]
+    fn non_streaming_invalid_output_text_is_not_silently_rewritten() {
+        for block in [
+            json!({"type": "output_text"}),
+            json!({"type": "output_text", "text": 42}),
+        ] {
+            let err = parse_completed_response(json!({
+                "id": "resp-1",
+                "status": "completed",
+                "output": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [block]
+                }]
+            }))
+            .expect_err("invalid output text should fail");
+
+            assert_matches!(
+                err,
+                ApiError::Stream(message)
+                    if message.starts_with("failed to parse responses message output item:")
+            );
+        }
+    }
+
+    #[test]
     fn unknown_response_item_is_preserved() {
         let item = json!({
             "type": "future_output_item",
@@ -1470,6 +2485,40 @@ mod tests {
         assert_matches!(
             &completion.output[2],
             TranscriptItem::Message { id: Some(id), role, .. } if id == "msg-1" && role == "assistant"
+        );
+    }
+
+    #[test]
+    fn non_streaming_response_normalizes_url_citations() {
+        let marker = citation_marker(&["turn0search0"]);
+        let completion = parse_completed_response(json!({
+            "id": "resp-1",
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "id": "msg-1",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": format!("结果{marker}"),
+                    "annotations": [{
+                        "type": "url_citation",
+                        "start_index": 2,
+                        "end_index": 24,
+                        "title": "",
+                        "url": "https://example.com/source"
+                    }]
+                }]
+            }]
+        }))
+        .expect("completion should parse");
+
+        let [item] = completion.output.as_slice() else {
+            panic!("expected one output item");
+        };
+        assert_eq!(
+            output_text_from_item(item),
+            "结果[example.com](<https://example.com/source>)"
         );
     }
 

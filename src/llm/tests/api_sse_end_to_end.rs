@@ -232,3 +232,102 @@ async fn responses_stream_aggregates_output_text_deltas() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn responses_stream_normalizes_hosted_web_citations_end_to_end() -> Result<()> {
+    let marker = "\u{e200}cite\u{e202}turn0search0\u{e201}";
+    let raw = format!("Answer{marker}");
+    let body = build_responses_body(vec![
+        serde_json::json!({
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "message",
+                "id": "msg-1",
+                "role": "assistant",
+                "content": []
+            }
+        }),
+        serde_json::json!({
+            "type": "response.output_text.delta",
+            "item_id": "msg-1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": raw,
+        }),
+        serde_json::json!({
+            "type": "response.output_text.annotation.added",
+            "item_id": "msg-1",
+            "output_index": 0,
+            "content_index": 0,
+            "annotation_index": 0,
+            "annotation": {
+                "type": "url_citation",
+                "start_index": 6,
+                "end_index": 28,
+                "title": "Source",
+                "url": "https://example.com/end-to-end"
+            }
+        }),
+        serde_json::json!({
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "message",
+                "id": "msg-1",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": format!("Answer{marker}"),
+                    "annotations": [{
+                        "type": "url_citation",
+                        "start_index": 6,
+                        "end_index": 28,
+                        "title": "Source",
+                        "url": "https://example.com/end-to-end"
+                    }]
+                }]
+            }
+        }),
+        serde_json::json!({
+            "type": "response.completed",
+            "response": {"id": "resp-citation"}
+        }),
+    ]);
+    let transport = FixtureSseTransport::new(body);
+    let client = ResponsesClient::new(transport, provider("openai", WireApi::Responses), NoAuth);
+    let mut stream = client
+        .stream(
+            serde_json::json!({"echo": true}),
+            HeaderMap::new(),
+            Compression::None,
+            None,
+        )
+        .await?;
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event?);
+    }
+
+    let streamed = events
+        .iter()
+        .filter_map(|event| match event {
+            ResponseEvent::OutputTextDelta(delta) => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
+    let completed = events.iter().find_map(|event| match event {
+        ResponseEvent::OutputItemDone(TranscriptItem::Message { content, .. }) => {
+            let [ContentItem::OutputText { text }] = content.as_slice() else {
+                return None;
+            };
+            Some(text.as_str())
+        }
+        _ => None,
+    });
+    let expected = "Answer[Source](<https://example.com/end-to-end>)";
+
+    assert_eq!(streamed, expected);
+    assert_eq!(completed, Some(expected));
+    Ok(())
+}

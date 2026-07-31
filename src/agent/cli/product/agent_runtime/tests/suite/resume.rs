@@ -8,9 +8,12 @@ use crate::product::protocol::user_input::ByteRange;
 use crate::product::protocol::user_input::TextElement;
 use crate::product::protocol::user_input::UserInput;
 use crate::test_support::core::responses::ev_assistant_message;
+use crate::test_support::core::responses::ev_assistant_message_with_annotations;
 use crate::test_support::core::responses::ev_completed;
 use crate::test_support::core::responses::ev_message_item_added;
 use crate::test_support::core::responses::ev_output_text_delta;
+use crate::test_support::core::responses::ev_output_text_delta_for_item;
+use crate::test_support::core::responses::ev_output_text_url_annotation;
 use crate::test_support::core::responses::ev_reasoning_item;
 use crate::test_support::core::responses::ev_response_created;
 use crate::test_support::core::responses::mount_sse_once;
@@ -80,6 +83,102 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
         }
         other => panic!("unexpected initial messages after resume: {other:#?}"),
     }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_replays_and_resends_normalized_hosted_web_citations() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let initial = builder.build(&server).await?;
+    let codex = Arc::clone(&initial.codex);
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+    let marker = "\u{e200}cite\u{e202}turn0search0\u{e201}";
+    let raw = format!("Saved{marker}");
+    let expected = "Saved[Source](<https://example.com/resume>)";
+    let initial_sse = sse(vec![
+        ev_response_created("resp-initial"),
+        ev_message_item_added("msg-1", ""),
+        ev_output_text_delta_for_item("msg-1", &raw),
+        ev_output_text_url_annotation("msg-1", 0, 5, 27, "Source", "https://example.com/resume"),
+        ev_assistant_message_with_annotations(
+            "msg-1",
+            &raw,
+            vec![serde_json::json!({
+                "type": "url_citation",
+                "start_index": 5,
+                "end_index": 27,
+                "title": "Source",
+                "url": "https://example.com/resume",
+            })],
+        ),
+        ev_completed("resp-initial"),
+    ]);
+    mount_sse_once(&server, initial_sse).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "save this cited answer".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let resumed = builder.resume(&server, home, rollout_path).await?;
+    let resumed_messages = resumed
+        .session_configured
+        .initial_messages
+        .as_ref()
+        .expect("resumed messages");
+    let replayed_agent_messages = resumed_messages
+        .iter()
+        .filter_map(|event| match event {
+            EventMsg::AgentMessage(message) => Some(message.message.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(replayed_agent_messages, vec![expected]);
+
+    let resumed_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-resumed"),
+            ev_assistant_message("msg-2", "done"),
+            ev_completed("resp-resumed"),
+        ]),
+    )
+    .await;
+    resumed
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "continue".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&resumed.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let input = resumed_mock.single_request().input();
+    let serialized_input = serde_json::to_string(&input)?;
+    assert!(serialized_input.contains(expected));
+    assert!(!serialized_input.contains("turn0search0"));
+    assert!(!serialized_input.contains("\u{e200}cite"));
 
     Ok(())
 }

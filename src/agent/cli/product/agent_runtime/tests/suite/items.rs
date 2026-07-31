@@ -12,6 +12,8 @@ use crate::product::protocol::items::AgentMessageContent;
 use crate::product::protocol::items::TurnItem;
 use crate::product::protocol::memory_citation::MemoryCitation;
 use crate::product::protocol::memory_citation::MemoryCitationEntry;
+use crate::product::protocol::models::ContentItem;
+use crate::product::protocol::models::TranscriptItem;
 use crate::product::protocol::models::WebSearchAction;
 use crate::product::protocol::protocol::RolloutItem;
 use crate::product::protocol::protocol::RolloutLine;
@@ -19,9 +21,12 @@ use crate::product::protocol::user_input::ByteRange;
 use crate::product::protocol::user_input::TextElement;
 use crate::product::protocol::user_input::UserInput;
 use crate::test_support::core::responses::ev_assistant_message;
+use crate::test_support::core::responses::ev_assistant_message_with_annotations;
 use crate::test_support::core::responses::ev_completed;
 use crate::test_support::core::responses::ev_message_item_added;
 use crate::test_support::core::responses::ev_output_text_delta;
+use crate::test_support::core::responses::ev_output_text_delta_for_item;
+use crate::test_support::core::responses::ev_output_text_url_annotation;
 use crate::test_support::core::responses::ev_reasoning_item;
 use crate::test_support::core::responses::ev_reasoning_item_added;
 use crate::test_support::core::responses::ev_reasoning_summary_text_delta;
@@ -390,6 +395,109 @@ async fn agent_message_content_delta_has_item_metadata() -> anyhow::Result<()> {
     assert_eq!(delta_event.delta, "streamed response");
     assert_eq!(legacy_delta.delta, "streamed response");
     assert_eq!(completed_item.id, started_item.id);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hosted_web_citations_are_normalized_in_runtime_and_rollout() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let TestCodex {
+        codex,
+        home: _home,
+        session_configured,
+        ..
+    } = test_codex().build(&server).await?;
+    let rollout_path = session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+    let marker = "\u{e200}cite\u{e202}turn0search0\u{e201}";
+    let raw = format!("Answer{marker}.");
+    let expected = "Answer[Example](<https://example.com/source>).";
+    let stream = sse(vec![
+        ev_response_created("resp-1"),
+        ev_message_item_added("msg-1", ""),
+        ev_output_text_delta_for_item("msg-1", "Answer\u{e200}ci"),
+        ev_output_text_delta_for_item("msg-1", "te\u{e202}turn0search0\u{e201}."),
+        ev_output_text_url_annotation("msg-1", 0, 6, 28, "Example", "https://example.com/source"),
+        ev_assistant_message_with_annotations(
+            "msg-1",
+            &raw,
+            vec![serde_json::json!({
+                "type": "url_citation",
+                "start_index": 6,
+                "end_index": 28,
+                "title": "Example",
+                "url": "https://example.com/source",
+            })],
+        ),
+        ev_completed("resp-1"),
+    ]);
+    mount_sse_once(&server, stream).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "please cite the source".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let mut deltas = Vec::new();
+    let mut completed_text = None;
+    let mut legacy_text = None;
+    loop {
+        match wait_for_event(&codex, |_| true).await {
+            EventMsg::AgentMessageContentDelta(event) => deltas.push(event.delta),
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::AgentMessage(item),
+                ..
+            }) => completed_text = Some(agent_message_text(&item)),
+            EventMsg::AgentMessage(event) => legacy_text = Some(event.message),
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert_eq!(deltas.concat(), expected);
+    assert_eq!(completed_text.as_deref(), Some(expected));
+    assert_eq!(legacy_text.as_deref(), Some(expected));
+
+    let rollout_items = read_rollout_items(&rollout_path).await?;
+    let transcript_texts = rollout_items
+        .iter()
+        .filter_map(|item| match item {
+            RolloutItem::TranscriptItem(TranscriptItem::Message { role, content, .. })
+                if role == "assistant" =>
+            {
+                content.iter().find_map(|content| match content {
+                    ContentItem::OutputText { text } => Some(text.as_str()),
+                    _ => None,
+                })
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let persisted_legacy = rollout_items
+        .iter()
+        .filter_map(|item| match item {
+            RolloutItem::EventMsg(EventMsg::AgentMessage(message)) => {
+                Some(message.message.as_str())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(transcript_texts, vec![expected]);
+    assert_eq!(persisted_legacy, vec![expected]);
+    let serialized_rollout = serde_json::to_string(&rollout_items)?;
+    assert!(!serialized_rollout.contains("turn0search0"));
+    assert!(!serialized_rollout.contains("\u{e200}cite"));
 
     Ok(())
 }

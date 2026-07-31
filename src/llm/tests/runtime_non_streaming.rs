@@ -177,6 +177,59 @@ async fn non_streaming_responses_uses_http_even_when_realtime_is_enabled() -> Re
 }
 
 #[tokio::test]
+async fn non_streaming_responses_normalizes_hosted_web_citations() -> Result<()> {
+    let server = MockServer::start().await;
+    let marker = "\u{e200}cite\u{e202}turn0search0\u{e201}";
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(serde_json::json!({
+                    "id": "resp-citation",
+                    "status": "completed",
+                    "output": [{
+                        "type": "message",
+                        "id": "msg-citation",
+                        "role": "assistant",
+                        "content": [{
+                            "type": "output_text",
+                            "text": format!("Result{marker}"),
+                            "annotations": [{
+                                "type": "url_citation",
+                                "start_index": 6,
+                                "end_index": 28,
+                                "title": "Source",
+                                "url": "https://example.com/non-streaming"
+                            }]
+                        }]
+                    }],
+                    "usage": {
+                        "input_tokens": 3,
+                        "output_tokens": 2,
+                        "total_tokens": 5
+                    }
+                })),
+        )
+        .mount(&server)
+        .await;
+
+    let endpoint = RuntimeEndpoint::openai_compatible_responses("responses", server.uri())
+        .with_bearer_token(Some("test-token".to_string()));
+    let client = runtime(endpoint);
+    let mut session = client.new_session();
+    let events = collect_events(&mut session, &turn_request()).await?;
+
+    assert_non_streaming_message_events(
+        &events,
+        "resp-citation",
+        "Result[Source](<https://example.com/non-streaming>)",
+    );
+    assert_stream_flags(&server, &[false]).await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn non_streaming_chat_uses_complete_response() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

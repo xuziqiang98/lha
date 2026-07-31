@@ -434,6 +434,27 @@ pub fn ev_assistant_message(id: &str, text: &str) -> Value {
     })
 }
 
+pub fn ev_assistant_message_with_annotations(
+    id: &str,
+    text: &str,
+    annotations: Vec<Value>,
+) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": {
+            "type": "message",
+            "role": "assistant",
+            "id": id,
+            "content": [{
+                "type": "output_text",
+                "text": text,
+                "annotations": annotations,
+            }]
+        }
+    })
+}
+
 pub fn ev_message_item_added(id: &str, text: &str) -> Value {
     serde_json::json!({
         "type": "response.output_item.added",
@@ -450,6 +471,40 @@ pub fn ev_output_text_delta(delta: &str) -> Value {
     serde_json::json!({
         "type": "response.output_text.delta",
         "delta": delta,
+    })
+}
+
+pub fn ev_output_text_delta_for_item(id: &str, delta: &str) -> Value {
+    serde_json::json!({
+        "type": "response.output_text.delta",
+        "item_id": id,
+        "output_index": 0,
+        "content_index": 0,
+        "delta": delta,
+    })
+}
+
+pub fn ev_output_text_url_annotation(
+    id: &str,
+    annotation_index: usize,
+    start_index: usize,
+    end_index: usize,
+    title: &str,
+    url: &str,
+) -> Value {
+    serde_json::json!({
+        "type": "response.output_text.annotation.added",
+        "item_id": id,
+        "output_index": 0,
+        "content_index": 0,
+        "annotation_index": annotation_index,
+        "annotation": {
+            "type": "url_citation",
+            "start_index": start_index,
+            "end_index": end_index,
+            "title": title,
+            "url": url,
+        }
     })
 }
 
