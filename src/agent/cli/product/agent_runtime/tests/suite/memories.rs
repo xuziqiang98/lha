@@ -99,6 +99,8 @@ async fn assistant_memory_citation_is_persisted_and_replayed() -> Result<()> {
         &server,
         responses::sse(vec![
             ev_response_created("resp-memory-citation"),
+            ev_message_item_added("msg-memory-citation", ""),
+            ev_output_text_delta(assistant_message),
             ev_assistant_message("msg-memory-citation", assistant_message),
             ev_completed("resp-memory-citation"),
         ]),
@@ -129,6 +131,11 @@ async fn assistant_memory_citation_is_persisted_and_replayed() -> Result<()> {
         })
         .await?;
 
+    let delta = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::AgentMessageContentDelta(event) => Some(event.delta.clone()),
+        _ => None,
+    })
+    .await;
     let completed = wait_for_event_match(&test.codex, |event| match event {
         EventMsg::ItemCompleted(ItemCompletedEvent {
             item: TurnItem::AgentMessage(item),
@@ -150,6 +157,7 @@ async fn assistant_memory_citation_is_persisted_and_replayed() -> Result<()> {
             crate::product::protocol::items::AgentMessageContent::Text { text } => text.as_str(),
         })
         .collect::<String>();
+    assert_eq!(delta, "answer");
     assert_eq!(text, "answer");
 
     test.codex.submit(Op::Shutdown).await?;
@@ -214,7 +222,7 @@ async fn assistant_memory_citation_is_persisted_and_replayed() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn assistant_memory_citation_text_is_preserved_without_memory_injection() -> Result<()> {
+async fn assistant_literal_memory_citation_text_is_preserved_with_memory_injection() -> Result<()> {
     let server = start_mock_server().await;
     let assistant_message = "answer\n<oai-mem-citation>\nhidden literal\n</oai-mem-citation>";
     mount_sse_once(
@@ -228,9 +236,19 @@ async fn assistant_memory_citation_text_is_preserved_without_memory_injection() 
         ]),
     )
     .await;
-    let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::MemoryTool);
-    });
+    let mut builder = test_codex()
+        .with_pre_build_hook(|lha_home| {
+            let memory_root = lha_home.join("memories");
+            fs::create_dir_all(&memory_root).expect("memory dir");
+            fs::write(
+                memory_root.join("memory_summary.md"),
+                "Memory citations are available.",
+            )
+            .expect("memory summary");
+        })
+        .with_config(|config| {
+            config.features.enable(Feature::MemoryTool);
+        });
     let test = builder.build(&server).await?;
 
     test.codex
@@ -271,6 +289,54 @@ async fn assistant_memory_citation_text_is_preserved_without_memory_injection() 
     assert_eq!(delta, assistant_message);
     assert_eq!(text, assistant_message);
     assert_eq!(completed.memory_citation, None);
+
+    test.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
+    let items = read_rollout_items(rollout_path.as_path()).await?;
+    let persisted_event_messages = items
+        .iter()
+        .filter_map(|item| match item {
+            RolloutItem::EventMsg(EventMsg::AgentMessage(payload)) => {
+                Some(payload.message.as_str())
+            }
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::TranscriptItem(_)
+            | RolloutItem::GhostSnapshot(_)
+            | RolloutItem::Compacted(_)
+            | RolloutItem::InputSlimmingStoredInput(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::Workflow(_)
+            | RolloutItem::EventMsg(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let persisted_transcript_messages = items
+        .iter()
+        .filter_map(|item| match item {
+            RolloutItem::TranscriptItem(TranscriptItem::Message { role, content, .. })
+                if role == "assistant" =>
+            {
+                content.iter().find_map(|content| match content {
+                    ContentItem::OutputText { text } => Some(text.as_str()),
+                    ContentItem::InputText { .. } | ContentItem::InputImage { .. } => None,
+                })
+            }
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::TranscriptItem(_)
+            | RolloutItem::GhostSnapshot(_)
+            | RolloutItem::Compacted(_)
+            | RolloutItem::InputSlimmingStoredInput(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::Workflow(_)
+            | RolloutItem::EventMsg(_) => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(persisted_event_messages, vec![assistant_message]);
+    assert_eq!(persisted_transcript_messages, vec![assistant_message]);
 
     Ok(())
 }

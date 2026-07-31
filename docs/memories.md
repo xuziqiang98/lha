@@ -51,7 +51,7 @@ LHA currently has no rate-limit status API, so the rate-limit guard is best-effo
 
 ## Read Path
 
-When `use_memories` is true, new sessions inject developer instructions built from `memory_summary.md` if the file exists and is non-empty. The model can inspect the memory workspace with normal filesystem access or the dedicated tools when enabled. If the model uses memory, it appends a hidden `<oai-mem-citation>` block; LHA suppresses that block from streaming and final UI text, parses it, and records usage for cited rollout IDs. Malformed citation blocks are stripped and ignored.
+When `use_memories` is true, new sessions inject developer instructions built from `memory_summary.md` if the file exists and is non-empty. The model can inspect the memory workspace with normal filesystem access or the dedicated tools when enabled. If the model uses memory, it appends a hidden `<oai-mem-citation>` envelope containing a `citation_entries`, `rollout_ids`, or legacy `thread_ids` block. LHA suppresses only these structurally recognized envelopes from streaming and final UI text, parses them, and records usage for cited rollout IDs. Ordinary text that mentions the same outer tag is preserved. Once an envelope has started with a recognized inner block, an unclosed tail is still hidden and ignored so malformed metadata does not leak into visible output.
 
 Parsed citations are available to app-server v2 clients as optional `memoryCitation` data on agent-message thread items. LHA persists this data in rollout history, so historical reads, resume, and reconnect flows preserve memory citations rather than limiting them to the live stream.
 

@@ -53,6 +53,7 @@ use crate::product::mcp_types::ListResourcesResult;
 use crate::product::mcp_types::ReadResourceRequestParams;
 use crate::product::mcp_types::ReadResourceResult;
 use crate::product::mcp_types::RequestId;
+use crate::product::memories_read::citations::MemoryCitationDeltaFilter;
 use crate::product::protocol::ThreadId;
 use crate::product::protocol::approvals::ExecPolicyAmendment;
 use crate::product::protocol::config_types::IdentityKind;
@@ -7994,114 +7995,6 @@ struct CodexTurnStreamProcessor {
     response_total_tokens: Option<i64>,
     tool_output_tokens: i64,
     should_emit_turn_diff: bool,
-}
-
-#[derive(Debug, Default)]
-struct MemoryCitationDeltaFilter {
-    pending: String,
-    suppressing: bool,
-}
-
-impl MemoryCitationDeltaFilter {
-    const OPEN_TAG: &'static str = "<oai-mem-citation>";
-    const CLOSE_TAG: &'static str = "</oai-mem-citation>";
-
-    fn reset(&mut self) {
-        self.pending.clear();
-        self.suppressing = false;
-    }
-
-    fn push(&mut self, delta: &str) -> String {
-        let mut input = String::with_capacity(self.pending.len() + delta.len());
-        input.push_str(&self.pending);
-        input.push_str(delta);
-        self.pending.clear();
-
-        let mut output = String::new();
-        let mut rest = input.as_str();
-
-        loop {
-            if self.suppressing {
-                if let Some(close_idx) = rest.find(Self::CLOSE_TAG) {
-                    rest = &rest[close_idx + Self::CLOSE_TAG.len()..];
-                    self.suppressing = false;
-                    continue;
-                }
-
-                let keep = longest_suffix_matching_prefix(rest, Self::CLOSE_TAG);
-                if keep > 0 {
-                    self.pending.push_str(&rest[rest.len() - keep..]);
-                }
-                return output;
-            }
-
-            if let Some(open_idx) = rest.find(Self::OPEN_TAG) {
-                output.push_str(&rest[..open_idx]);
-                rest = &rest[open_idx + Self::OPEN_TAG.len()..];
-                self.suppressing = true;
-                continue;
-            }
-
-            let keep = longest_suffix_matching_prefix(rest, Self::OPEN_TAG);
-            output.push_str(&rest[..rest.len() - keep]);
-            if keep > 0 {
-                self.pending.push_str(&rest[rest.len() - keep..]);
-            }
-            return output;
-        }
-    }
-
-    fn finish(&mut self) -> String {
-        if self.suppressing {
-            self.reset();
-            String::new()
-        } else {
-            std::mem::take(&mut self.pending)
-        }
-    }
-}
-
-fn longest_suffix_matching_prefix(input: &str, pattern: &str) -> usize {
-    let max_len = input.len().min(pattern.len().saturating_sub(1));
-    (1..=max_len)
-        .rev()
-        .find(|&len| input.ends_with(&pattern[..len]))
-        .unwrap_or(0)
-}
-
-#[cfg(test)]
-mod memory_citation_delta_filter_tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn suppresses_complete_citation_block() {
-        let mut filter = MemoryCitationDeltaFilter::default();
-
-        assert_eq!(
-            filter.push("answer<oai-mem-citation>hidden</oai-mem-citation>"),
-            "answer"
-        );
-        assert_eq!(filter.finish(), "");
-    }
-
-    #[test]
-    fn suppresses_citation_block_split_across_deltas() {
-        let mut filter = MemoryCitationDeltaFilter::default();
-
-        assert_eq!(filter.push("answer<oai"), "answer");
-        assert_eq!(filter.push("-mem-citation>hidden</oai"), "");
-        assert_eq!(filter.push("-mem-citation>tail"), "tail");
-        assert_eq!(filter.finish(), "");
-    }
-
-    #[test]
-    fn flushes_partial_tag_when_no_citation_arrives() {
-        let mut filter = MemoryCitationDeltaFilter::default();
-
-        assert_eq!(filter.push("literal <oai"), "literal ");
-        assert_eq!(filter.finish(), "<oai");
-    }
 }
 
 impl CodexTurnStreamProcessor {

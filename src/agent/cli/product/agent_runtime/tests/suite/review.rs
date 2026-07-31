@@ -3,6 +3,7 @@ use crate::product::agent::ContentItem;
 use crate::product::agent::REVIEW_PROMPT;
 use crate::product::agent::config::Config;
 use crate::product::agent::config::Constrained;
+use crate::product::agent::features::Feature;
 use crate::product::agent::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use crate::product::agent::protocol::EventMsg;
 use crate::product::agent::protocol::ExitedReviewModeEvent;
@@ -22,7 +23,14 @@ use crate::product::protocol::openai_models::ReasoningEffort;
 use crate::product::protocol::user_input::UserInput;
 use crate::test_support::core::load_sse_fixture_with_id_from_str;
 use crate::test_support::core::responses::ResponseMock;
+use crate::test_support::core::responses::ev_assistant_message;
+use crate::test_support::core::responses::ev_completed;
+use crate::test_support::core::responses::ev_message_item_added;
+use crate::test_support::core::responses::ev_output_text_delta;
+use crate::test_support::core::responses::ev_response_created;
+use crate::test_support::core::responses::mount_sse_once;
 use crate::test_support::core::responses::mount_sse_sequence;
+use crate::test_support::core::responses::sse;
 use crate::test_support::core::skip_if_no_network;
 use crate::test_support::core::test_codex::test_codex;
 use crate::test_support::core::wait_for_event;
@@ -279,6 +287,192 @@ async fn review_op_emits_lifecycle_and_review_output() {
     assert!(
         !saw_assistant_xml,
         "assistant review output contains user_action markup"
+    );
+
+    let _lha_home_guard = lha_home;
+    server.verify().await;
+}
+
+#[serial_test::serial(review_exec_env)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_preserves_literal_memory_citation_text_with_memory_enabled() {
+    skip_if_no_network!();
+
+    let expected = ReviewOutputEvent {
+        findings: vec![
+            ReviewFinding {
+                title: "Retain the public response-event parser".to_string(),
+                body: "Keep the compatibility wrapper for downstream consumers.".to_string(),
+                confidence_score: 0.99,
+                priority: 1,
+                code_location: ReviewCodeLocation {
+                    absolute_file_path: PathBuf::from("/tmp/responses.rs"),
+                    line_range: ReviewLineRange {
+                        start: 242,
+                        end: 245,
+                    },
+                },
+            },
+            ReviewFinding {
+                title: "Neutralize memory-control tags in citation labels".to_string(),
+                body: "A cited page may contain the literal tag `<oai-mem-citation>` in ordinary text; the remaining JSON fields and verdict must stay intact.".to_string(),
+                confidence_score: 0.95,
+                priority: 2,
+                code_location: ReviewCodeLocation {
+                    absolute_file_path: PathBuf::from("/tmp/citations.rs"),
+                    line_range: ReviewLineRange {
+                        start: 80,
+                        end: 96,
+                    },
+                },
+            },
+        ],
+        overall_correctness: "patch is incorrect".to_string(),
+        overall_explanation: "Both findings must survive structured parsing.".to_string(),
+        overall_confidence_score: 0.97,
+    };
+    let review_json =
+        serde_json::to_string(&expected).unwrap_or_else(|err| panic!("review json: {err}"));
+    let marker = "<oai-mem-citation>";
+    let marker_start = review_json
+        .find(marker)
+        .expect("literal marker in review json");
+    let marker_split = marker_start + "<oai".len();
+    let marker_end = marker_start + marker.len();
+
+    let server = MockServer::start().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-review-memory-literal"),
+            ev_message_item_added("msg-review-memory-literal", ""),
+            ev_output_text_delta(&review_json[..marker_split]),
+            ev_output_text_delta(&review_json[marker_split..marker_end]),
+            ev_output_text_delta(&review_json[marker_end..]),
+            ev_assistant_message("msg-review-memory-literal", &review_json),
+            ev_completed("resp-review-memory-literal"),
+        ]),
+    )
+    .await;
+
+    let lha_home = Arc::new(TempDir::new().expect("lha home"));
+    let memory_root = lha_home.path().join("memories");
+    std::fs::create_dir_all(&memory_root).expect("memory dir");
+    std::fs::write(
+        memory_root.join("memory_summary.md"),
+        "Reviewer memory is enabled for this regression test.",
+    )
+    .expect("memory summary");
+    std::fs::write(
+        lha_home.path().join("config.toml"),
+        "[features]\nmemories = true\n\n[memories]\nuse_memories = true\ngenerate_memories = false\n",
+    )
+    .expect("memory config");
+
+    let codex = new_conversation_for_server(&server, lha_home.clone(), |config| {
+        config.features.enable(Feature::MemoryTool);
+        config.memories.use_memories = true;
+        config.memories.generate_memories = false;
+    })
+    .await;
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "Review literal memory citation handling".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    let expected_assistant_text = render_review_output_text(&expected);
+    let mut review_output = None;
+    let mut agent_messages = Vec::new();
+    let mut completed_agent_messages = Vec::new();
+    loop {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(10), codex.next_event())
+            .await
+            .expect("timeout waiting for review event")
+            .expect("event stream should stay open");
+        match event.msg {
+            EventMsg::ExitedReviewMode(event) => review_output = event.review_output,
+            EventMsg::AgentMessage(event) => agent_messages.push(event.message),
+            EventMsg::ItemCompleted(crate::product::agent::protocol::ItemCompletedEvent {
+                item: crate::product::protocol::items::TurnItem::AgentMessage(item),
+                ..
+            }) => {
+                let text = item
+                    .content
+                    .iter()
+                    .map(|content| match content {
+                        crate::product::protocol::items::AgentMessageContent::Text { text } => {
+                            text.as_str()
+                        }
+                    })
+                    .collect::<String>();
+                completed_agent_messages.push(text);
+            }
+            EventMsg::AgentMessageContentDelta(_) | EventMsg::AgentMessageDelta(_) => {
+                panic!("review child assistant streaming must not surface on the parent turn")
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    let review_output = review_output.expect("structured review output");
+    assert_eq!(review_output, expected);
+    assert_eq!(review_output.findings.len(), 2);
+    assert_eq!(agent_messages, vec![expected_assistant_text.clone()]);
+    assert_eq!(
+        completed_agent_messages,
+        vec![expected_assistant_text.clone()]
+    );
+
+    let rollout_path = codex.rollout_path().expect("rollout path");
+    let rollout = std::fs::read_to_string(rollout_path).expect("read rollout");
+    let review_rollout_assistant = rollout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str::<RolloutLine>(line).ok())
+        .filter_map(|line| match line.item {
+            RolloutItem::TranscriptItem(TranscriptItem::Message {
+                id: Some(id),
+                role,
+                content,
+                ..
+            }) if id == "review_rollout_assistant" && role == "assistant" => {
+                content.into_iter().find_map(|content| match content {
+                    ContentItem::OutputText { text } => Some(text),
+                    ContentItem::InputText { .. } | ContentItem::InputImage { .. } => None,
+                })
+            }
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::TranscriptItem(_)
+            | RolloutItem::GhostSnapshot(_)
+            | RolloutItem::Compacted(_)
+            | RolloutItem::InputSlimmingStoredInput(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::Workflow(_)
+            | RolloutItem::EventMsg(_) => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        review_rollout_assistant,
+        vec![expected_assistant_text.clone()]
+    );
+    assert_ne!(review_rollout_assistant, vec![review_json]);
+
+    let request = response_mock.single_request();
+    assert!(
+        request
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text.contains("Reviewer memory is enabled for this regression test.")),
+        "reviewer request should include memory instructions"
     );
 
     let _lha_home_guard = lha_home;

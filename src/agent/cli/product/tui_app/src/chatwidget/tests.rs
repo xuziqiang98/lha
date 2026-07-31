@@ -3406,6 +3406,7 @@ async fn make_chatwidget_manual_inner_with_otel(
         stream_controller: None,
         answer_stream_display_started: false,
         pending_streamed_agent_message_echo: None,
+        pending_review_agent_message_echo: None,
         plan_stream_controller: None,
         plan_stream_display_started: false,
         plan_stream_revision: 0,
@@ -3591,6 +3592,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         stream_controller: None,
         answer_stream_display_started: false,
         pending_streamed_agent_message_echo: None,
+        pending_review_agent_message_echo: None,
         plan_stream_controller: None,
         plan_stream_display_started: false,
         plan_stream_revision: 0,
@@ -14605,6 +14607,149 @@ Review summary.
         explanation_index < finished_banner_index,
         "review finished banner should follow explanation"
     );
+}
+
+#[tokio::test]
+async fn review_exit_explanation_suppresses_matching_agent_message_echo() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let explanation = "No correctness issues were found.";
+
+    chat.handle_codex_event(Event {
+        id: "review-exit".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: Some(ReviewOutputEvent {
+                findings: Vec::new(),
+                overall_correctness: "patch is correct".to_string(),
+                overall_explanation: explanation.to_string(),
+                overall_confidence_score: 0.9,
+            }),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "review-agent-message".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: explanation.to_string(),
+            memory_citation: None,
+        }),
+    });
+
+    let visible_history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_eq!(visible_history.matches(explanation).count(), 1);
+    assert!(
+        visible_history.contains("<< Code review finished >>"),
+        "review finished banner should remain visible: {visible_history:?}"
+    );
+    assert!(chat.pending_review_agent_message_echo.is_none());
+}
+
+#[tokio::test]
+async fn review_exit_explanation_does_not_suppress_different_agent_message() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let explanation = "No correctness issues were found.";
+    let follow_up = "Additional review context.";
+
+    chat.handle_codex_event(Event {
+        id: "review-exit".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: Some(ReviewOutputEvent {
+                findings: Vec::new(),
+                overall_correctness: "patch is correct".to_string(),
+                overall_explanation: explanation.to_string(),
+                overall_confidence_score: 0.9,
+            }),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "review-agent-message".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: follow_up.to_string(),
+            memory_citation: None,
+        }),
+    });
+
+    let visible_history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_eq!(visible_history.matches(explanation).count(), 1);
+    assert_eq!(visible_history.matches(follow_up).count(), 1);
+    assert!(chat.pending_review_agent_message_echo.is_none());
+}
+
+#[tokio::test]
+async fn review_exit_replay_suppresses_matching_agent_message_echo() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let explanation = "No correctness issues were found.";
+
+    chat.replay_initial_messages(vec![
+        EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: Some("current changes".to_string()),
+        }),
+        EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: Some(ReviewOutputEvent {
+                findings: Vec::new(),
+                overall_correctness: "patch is correct".to_string(),
+                overall_explanation: explanation.to_string(),
+                overall_confidence_score: 0.9,
+            }),
+        }),
+        EventMsg::AgentMessage(AgentMessageEvent {
+            message: explanation.to_string(),
+            memory_citation: None,
+        }),
+    ]);
+
+    let visible_history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_eq!(visible_history.matches(explanation).count(), 1);
+    assert!(
+        visible_history.contains(">> Code review started: current changes <<"),
+        "review start banner should remain visible: {visible_history:?}"
+    );
+    assert!(
+        visible_history.contains("<< Code review finished >>"),
+        "review finished banner should remain visible: {visible_history:?}"
+    );
+    assert!(chat.pending_review_agent_message_echo.is_none());
+    assert!(!chat.replay_review_mode);
+    assert!(chat.reasoning_buffer.is_empty());
+}
+
+#[tokio::test]
+async fn review_exit_empty_explanation_suppresses_matching_fallback_echo() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let fallback = "Reviewer failed to output a response.";
+
+    chat.handle_codex_event(Event {
+        id: "review-exit".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: Some(ReviewOutputEvent::default()),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "review-agent-message".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: fallback.to_string(),
+            memory_citation: None,
+        }),
+    });
+
+    let visible_history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_eq!(visible_history.matches(fallback).count(), 1);
+    assert!(
+        visible_history.contains("<< Code review finished >>"),
+        "review finished banner should remain visible: {visible_history:?}"
+    );
+    assert!(chat.pending_review_agent_message_echo.is_none());
 }
 
 #[tokio::test]

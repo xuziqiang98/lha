@@ -434,7 +434,7 @@ mod tests {
 
     #[test]
     fn strip_memory_citation_from_assistant_item_hides_malformed_tail() {
-        let item = assistant_message("answer\n<oai-mem-citation>\nhidden");
+        let item = assistant_message("answer\n<oai-mem-citation>\n<citation_entries>\nhidden");
 
         let (item, citation) = strip_memory_citation_from_item(item);
 

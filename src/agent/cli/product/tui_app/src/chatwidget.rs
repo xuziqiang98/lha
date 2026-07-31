@@ -93,6 +93,7 @@ use crate::product::agent::protocol::ViewImageToolCallEvent;
 use crate::product::agent::protocol::WarningEvent;
 use crate::product::agent::protocol::WebSearchBeginEvent;
 use crate::product::agent::protocol::WebSearchEndEvent;
+use crate::product::agent::review_format::render_review_output_text;
 use crate::product::agent::skills::model::SkillMetadata;
 #[cfg(target_os = "windows")]
 use crate::product::agent::windows_sandbox::WindowsSandboxLevelExt;
@@ -711,6 +712,8 @@ pub(crate) struct ChatWidget {
     answer_stream_display_started: bool,
     // Final legacy AgentMessage echo expected after a blocking prompt forced an answer stream flush.
     pending_streamed_agent_message_echo: Option<String>,
+    // Final AgentMessage echo expected after review exit already rendered a fallback explanation.
+    pending_review_agent_message_echo: Option<String>,
     // Stream lifecycle controller for proposed plan output.
     plan_stream_controller: Option<PlanStreamController>,
     // Set only after the display clock has committed the first proposed-plan delta.
@@ -1917,6 +1920,13 @@ impl ChatWidget {
     }
 
     fn on_agent_message(&mut self, message: String, mode: DispatchMode) {
+        let repeats_review_output = self
+            .pending_review_agent_message_echo
+            .take()
+            .is_some_and(|pending| pending == message);
+        if repeats_review_output {
+            return;
+        }
         if mode.is_replay() {
             self.render_agent_message_transcript_only(message);
             return;
@@ -2392,6 +2402,7 @@ impl ChatWidget {
         self.answer_stream_display_started = false;
         self.plan_stream_display_started = false;
         self.pending_streamed_agent_message_echo = None;
+        self.pending_review_agent_message_echo = None;
         self.needs_final_message_separator = false;
         self.had_work_activity = false;
         self.last_separator_elapsed_secs = None;
@@ -2448,6 +2459,7 @@ impl ChatWidget {
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
         self.pending_streamed_agent_message_echo = None;
+        self.pending_review_agent_message_echo = None;
         self.clear_unified_exec_processes();
         self.clear_reasoning_buffers();
         if mode.is_live() {
@@ -2779,6 +2791,7 @@ impl ChatWidget {
             self.stop_commit_animation_if_no_stream_controllers();
         }
         self.pending_streamed_agent_message_echo = None;
+        self.pending_review_agent_message_echo = None;
         self.clear_unified_exec_processes();
         self.clear_reasoning_buffers();
         if let Some(separator) = final_separator {
@@ -2899,6 +2912,7 @@ impl ChatWidget {
             self.stop_commit_animation_if_no_stream_controllers();
         }
         self.pending_streamed_agent_message_echo = None;
+        self.pending_review_agent_message_echo = None;
         self.clear_unified_exec_processes();
         self.clear_reasoning_buffers();
         self.needs_final_message_separator = false;
@@ -3921,6 +3935,7 @@ impl ChatWidget {
             stream_controller: None,
             answer_stream_display_started: false,
             pending_streamed_agent_message_echo: None,
+            pending_review_agent_message_echo: None,
             plan_stream_controller: None,
             plan_stream_display_started: false,
             plan_stream_revision: 0,
@@ -4105,6 +4120,7 @@ impl ChatWidget {
             stream_controller: None,
             answer_stream_display_started: false,
             pending_streamed_agent_message_echo: None,
+            pending_review_agent_message_echo: None,
             plan_stream_controller: None,
             plan_stream_display_started: false,
             plan_stream_revision: 0,
@@ -5335,6 +5351,7 @@ impl ChatWidget {
         self.replay_review_mode = false;
         self.restore_replay_review_token_info();
         self.clear_reasoning_buffers();
+        self.pending_review_agent_message_echo = None;
     }
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
@@ -5682,6 +5699,7 @@ impl ChatWidget {
     }
 
     fn on_entered_review_mode(&mut self, review: ReviewRequest, mode: DispatchMode) {
+        self.pending_review_agent_message_echo = None;
         // Enter review mode and emit a concise banner
         if mode.is_live() {
             if self.pre_review_token_info.is_none() {
@@ -5711,6 +5729,7 @@ impl ChatWidget {
     }
 
     fn on_exited_review_mode(&mut self, review: ExitedReviewModeEvent, mode: DispatchMode) {
+        self.pending_review_agent_message_echo = None;
         if mode.is_live() && self.status_machine.turn.is_busy() {
             self.status_machine.finalizing = Some(TurnFinalizing::ReviewExit);
             self.reconcile_status_ui();
@@ -5722,11 +5741,12 @@ impl ChatWidget {
             self.flush_active_cell();
 
             if output.findings.is_empty() {
+                let expected_agent_message = render_review_output_text(&output);
                 let explanation = output.overall_explanation.trim().to_string();
                 if explanation.is_empty() {
                     tracing::error!("Reviewer failed to output a response.");
                     self.add_to_history(history_cell::new_error_event(
-                        "Reviewer failed to output a response.".to_owned(),
+                        expected_agent_message.clone(),
                     ));
                 } else {
                     // Show explanation when there are no structured findings.
@@ -5734,6 +5754,7 @@ impl ChatWidget {
                         AgentMessageCell::new_markdown_with_leading_blank_line(explanation, false);
                     self.app_event_tx.send_history_cell(Box::new(body_cell));
                 }
+                self.pending_review_agent_message_echo = Some(expected_agent_message);
             }
             // Final message is rendered as part of the AgentMessage.
         }
