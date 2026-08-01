@@ -21,16 +21,241 @@ enum MemoryCitationPrefix {
     Literal,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum JsonCitationDisposition {
+    Pending,
+    Literal { end: usize },
+    FailClosed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JsonTextTransition {
+    Continue,
+    Complete,
+    Invalid,
+}
+
+#[derive(Debug, Clone, Default)]
+enum MemoryCitationTextMode {
+    #[default]
+    Searching,
+    RootJsonString {
+        escaped: bool,
+    },
+    Json {
+        depth: usize,
+        in_string: bool,
+        escaped: bool,
+    },
+}
+
+#[derive(Debug)]
+struct MemoryCitationTextContext {
+    mode: MemoryCitationTextMode,
+    root_value_possible: bool,
+    active_json: String,
+}
+
+impl Default for MemoryCitationTextContext {
+    fn default() -> Self {
+        Self {
+            mode: MemoryCitationTextMode::Searching,
+            root_value_possible: true,
+            active_json: String::new(),
+        }
+    }
+}
+
+impl MemoryCitationTextContext {
+    fn reset(&mut self) {
+        self.mode = MemoryCitationTextMode::Searching;
+        self.root_value_possible = true;
+        self.active_json.clear();
+    }
+
+    fn inside_json_string(&self) -> bool {
+        matches!(
+            &self.mode,
+            MemoryCitationTextMode::RootJsonString { .. }
+                | MemoryCitationTextMode::Json {
+                    in_string: true,
+                    ..
+                }
+        )
+    }
+
+    fn classify_json_candidate(&self, candidate: &str, finish: bool) -> JsonCitationDisposition {
+        let root_json_string = matches!(&self.mode, MemoryCitationTextMode::RootJsonString { .. });
+        let mut mode = self.mode.clone();
+
+        for (idx, ch) in candidate.char_indices() {
+            match consume_active_json_char(&mut mode, ch) {
+                JsonTextTransition::Continue => {}
+                JsonTextTransition::Invalid => return JsonCitationDisposition::FailClosed,
+                JsonTextTransition::Complete => {
+                    let end = idx + ch.len_utf8();
+                    let mut json = String::with_capacity(self.active_json.len() + end);
+                    json.push_str(&self.active_json);
+                    json.push_str(&candidate[..end]);
+                    if serde_json::from_str::<serde_json::Value>(&json).is_err() {
+                        return JsonCitationDisposition::FailClosed;
+                    }
+
+                    if root_json_string {
+                        let rest = candidate[end..].trim_start();
+                        if rest.is_empty() {
+                            return if finish {
+                                JsonCitationDisposition::Literal { end }
+                            } else {
+                                JsonCitationDisposition::Pending
+                            };
+                        }
+                        if rest.starts_with(OPEN_TAG) {
+                            return JsonCitationDisposition::Literal { end };
+                        }
+                        if !finish && OPEN_TAG.starts_with(rest) {
+                            return JsonCitationDisposition::Pending;
+                        }
+                        return JsonCitationDisposition::FailClosed;
+                    }
+
+                    return JsonCitationDisposition::Literal { end };
+                }
+            }
+        }
+
+        if finish {
+            JsonCitationDisposition::FailClosed
+        } else {
+            JsonCitationDisposition::Pending
+        }
+    }
+
+    fn abandon_json(&mut self) {
+        self.mode = MemoryCitationTextMode::Searching;
+        self.root_value_possible = false;
+        self.active_json.clear();
+    }
+
+    fn consume_visible(&mut self, text: &str) {
+        for ch in text.chars() {
+            if matches!(&self.mode, MemoryCitationTextMode::Searching) {
+                if self.root_value_possible {
+                    if ch.is_whitespace() {
+                        continue;
+                    }
+                    self.root_value_possible = false;
+                    if ch == '"' {
+                        self.mode = MemoryCitationTextMode::RootJsonString { escaped: false };
+                        self.active_json.clear();
+                        self.active_json.push(ch);
+                        continue;
+                    }
+                }
+                if matches!(ch, '{' | '[') {
+                    self.mode = MemoryCitationTextMode::Json {
+                        depth: 1,
+                        in_string: false,
+                        escaped: false,
+                    };
+                    self.active_json.clear();
+                    self.active_json.push(ch);
+                }
+                continue;
+            }
+
+            self.active_json.push(ch);
+            if !matches!(
+                consume_active_json_char(&mut self.mode, ch),
+                JsonTextTransition::Continue
+            ) {
+                self.abandon_json();
+            }
+        }
+    }
+}
+
+fn consume_active_json_char(mode: &mut MemoryCitationTextMode, ch: char) -> JsonTextTransition {
+    match mode {
+        MemoryCitationTextMode::RootJsonString { escaped } => {
+            if matches!(ch, '\u{0000}'..='\u{001f}') {
+                JsonTextTransition::Invalid
+            } else if *escaped {
+                *escaped = false;
+                JsonTextTransition::Continue
+            } else {
+                match ch {
+                    '\\' => {
+                        *escaped = true;
+                        JsonTextTransition::Continue
+                    }
+                    '"' => JsonTextTransition::Complete,
+                    _ => JsonTextTransition::Continue,
+                }
+            }
+        }
+        MemoryCitationTextMode::Json {
+            depth,
+            in_string,
+            escaped,
+        } => {
+            if *in_string {
+                if matches!(ch, '\u{0000}'..='\u{001f}') {
+                    JsonTextTransition::Invalid
+                } else if *escaped {
+                    *escaped = false;
+                    JsonTextTransition::Continue
+                } else {
+                    match ch {
+                        '\\' => {
+                            *escaped = true;
+                            JsonTextTransition::Continue
+                        }
+                        '"' => {
+                            *in_string = false;
+                            JsonTextTransition::Continue
+                        }
+                        _ => JsonTextTransition::Continue,
+                    }
+                }
+            } else {
+                match ch {
+                    '"' => {
+                        *in_string = true;
+                        JsonTextTransition::Continue
+                    }
+                    '{' | '[' => {
+                        *depth += 1;
+                        JsonTextTransition::Continue
+                    }
+                    '}' | ']' => {
+                        *depth = depth.saturating_sub(1);
+                        if *depth == 0 {
+                            JsonTextTransition::Complete
+                        } else {
+                            JsonTextTransition::Continue
+                        }
+                    }
+                    _ => JsonTextTransition::Continue,
+                }
+            }
+        }
+        MemoryCitationTextMode::Searching => JsonTextTransition::Invalid,
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct MemoryCitationDeltaFilter {
     pending: String,
     trailing_whitespace: String,
+    text_context: MemoryCitationTextContext,
 }
 
 impl MemoryCitationDeltaFilter {
     pub(crate) fn reset(&mut self) {
         self.pending.clear();
         self.trailing_whitespace.clear();
+        self.text_context.reset();
     }
 
     pub(crate) fn push(&mut self, delta: &str) -> String {
@@ -62,6 +287,22 @@ impl MemoryCitationDeltaFilter {
 
             self.emit_pending_prefix(open_idx, &mut output);
 
+            if self.text_context.inside_json_string() {
+                match self
+                    .text_context
+                    .classify_json_candidate(&self.pending, finish)
+                {
+                    JsonCitationDisposition::Pending => return output,
+                    JsonCitationDisposition::Literal { end } => {
+                        self.emit_pending_prefix(end, &mut output);
+                        continue;
+                    }
+                    JsonCitationDisposition::FailClosed => {
+                        self.text_context.abandon_json();
+                    }
+                }
+            }
+
             match classify_memory_citation_prefix(&self.pending) {
                 MemoryCitationPrefix::Complete { end } => {
                     self.pending.drain(..end);
@@ -85,6 +326,7 @@ impl MemoryCitationDeltaFilter {
     }
 
     fn emit_pending_prefix(&mut self, end: usize, output: &mut String) {
+        self.text_context.consume_visible(&self.pending[..end]);
         let visible_end = self.pending[..end].trim_end().len();
         if visible_end == 0 {
             self.trailing_whitespace.push_str(&self.pending[..end]);
@@ -147,11 +389,28 @@ fn longest_suffix_matching_prefix(input: &str, pattern: &str) -> usize {
 pub fn strip_memory_citation_block(text: &str) -> (String, Vec<String>) {
     let mut stripped = String::with_capacity(text.len());
     let mut citations = Vec::new();
+    let mut text_context = MemoryCitationTextContext::default();
     let mut rest = text;
 
     while let Some(open_idx) = rest.find(OPEN_TAG) {
-        stripped.push_str(&rest[..open_idx]);
+        let visible_prefix = &rest[..open_idx];
+        text_context.consume_visible(visible_prefix);
+        stripped.push_str(visible_prefix);
         let candidate = &rest[open_idx..];
+        if text_context.inside_json_string() {
+            match text_context.classify_json_candidate(candidate, /* finish */ true) {
+                JsonCitationDisposition::Pending => unreachable!("finished candidate is resolved"),
+                JsonCitationDisposition::Literal { end } => {
+                    text_context.consume_visible(&candidate[..end]);
+                    stripped.push_str(&candidate[..end]);
+                    rest = &candidate[end..];
+                    continue;
+                }
+                JsonCitationDisposition::FailClosed => {
+                    text_context.abandon_json();
+                }
+            }
+        }
         match classify_memory_citation_prefix(candidate) {
             MemoryCitationPrefix::Complete { end } => {
                 citations.push(candidate[..end].to_string());
@@ -161,6 +420,7 @@ pub fn strip_memory_citation_block(text: &str) -> (String, Vec<String>) {
                 return (stripped.trim_end().to_string(), citations);
             }
             MemoryCitationPrefix::Incomplete | MemoryCitationPrefix::Literal => {
+                text_context.consume_visible(OPEN_TAG);
                 stripped.push_str(OPEN_TAG);
                 rest = &candidate[OPEN_TAG.len()..];
             }
@@ -254,6 +514,19 @@ mod memory_citation_tests {
     use pretty_assertions::assert_eq;
 
     const STRUCTURED_CITATION: &str = "<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[used preference]\n</citation_entries>\n<rollout_ids>\n00000000-0000-0000-0000-000000000001\n</rollout_ids>\n</oai-mem-citation>";
+    const QUOTED_STRUCTURED_CITATION: &str = "<oai-mem-citation><citation_entries>MEMORY.md:1-2|note=[used \"quoted\" preference]</citation_entries><rollout_ids>00000000-0000-0000-0000-000000000001</rollout_ids></oai-mem-citation>";
+
+    fn expected_citation(note: &str) -> MemoryCitation {
+        MemoryCitation {
+            entries: vec![MemoryCitationEntry {
+                path: "MEMORY.md".into(),
+                line_start: 1,
+                line_end: 2,
+                note: note.into(),
+            }],
+            rollout_ids: vec!["00000000-0000-0000-0000-000000000001".into()],
+        }
+    }
 
     #[test]
     fn strips_and_parses_citation_block() {
@@ -287,6 +560,65 @@ mod memory_citation_tests {
     }
 
     #[test]
+    fn preserves_incomplete_structured_literal_inside_json_string() {
+        let text = r#"{"body":"explain <oai-mem-citation><citation_entries> handling"}"#;
+        let (stripped, blocks) = strip_memory_citation_block(text);
+
+        assert_eq!(stripped, text);
+        assert_eq!(blocks, Vec::<String>::new());
+    }
+
+    #[test]
+    fn preserves_complete_structured_literal_inside_json_and_strips_real_suffix() {
+        let json = serde_json::json!({
+            "body": format!("literal example: {STRUCTURED_CITATION}"),
+            "escaped": "quote: \" and slash: \\",
+        })
+        .to_string();
+        let text = format!("{json}\n{STRUCTURED_CITATION}");
+        let (stripped, blocks) = strip_memory_citation_block(&text);
+
+        assert_eq!(stripped, json);
+        assert_eq!(blocks, vec![STRUCTURED_CITATION.to_string()]);
+    }
+
+    #[test]
+    fn preserves_structured_literal_inside_json_array_and_strips_real_suffix() {
+        let json =
+            serde_json::json!([format!("literal example: {STRUCTURED_CITATION}")]).to_string();
+        let text = format!("{json}\n{STRUCTURED_CITATION}");
+        let (stripped, blocks) = strip_memory_citation_block(&text);
+
+        assert_eq!(stripped, json);
+        assert_eq!(blocks, vec![STRUCTURED_CITATION.to_string()]);
+    }
+
+    #[test]
+    fn preserves_structured_literal_inside_root_json_string_and_strips_real_suffix() {
+        let json = serde_json::to_string(&format!("literal example: {STRUCTURED_CITATION}"))
+            .expect("root JSON string");
+        let text = format!("{json}\n{STRUCTURED_CITATION}");
+        let (stripped, blocks) = strip_memory_citation_block(&text);
+
+        assert_eq!(stripped, json);
+        assert_eq!(blocks, vec![STRUCTURED_CITATION.to_string()]);
+    }
+
+    #[test]
+    fn preserves_structured_literal_inside_fenced_json_and_strips_real_suffix() {
+        let json = serde_json::json!({
+            "body": "explain <oai-mem-citation><citation_entries> handling",
+        })
+        .to_string();
+        let visible = format!("Review result:\n```json\n{json}\n```");
+        let text = format!("{visible}\n{STRUCTURED_CITATION}");
+        let (stripped, blocks) = strip_memory_citation_block(&text);
+
+        assert_eq!(stripped, visible);
+        assert_eq!(blocks, vec![STRUCTURED_CITATION.to_string()]);
+    }
+
+    #[test]
     fn strips_structured_citation_inside_proposed_plan() {
         let text = format!(
             "<proposed_plan>\nKeep this\n{STRUCTURED_CITATION}\nAnd this\n</proposed_plan>"
@@ -308,6 +640,35 @@ mod memory_citation_tests {
         assert_eq!(stripped, "answer");
         assert_eq!(blocks, Vec::<String>::new());
         assert_eq!(parse_memory_citation(blocks), None);
+    }
+
+    #[test]
+    fn strips_and_parses_citation_after_unclosed_json_strings() {
+        for prefix in [r#"{"body":"unfinished"#, r#""unfinished"#] {
+            for separator in ["", " ", "\n"] {
+                let text = format!("{prefix}{separator}{STRUCTURED_CITATION}");
+                let (stripped, blocks) = strip_memory_citation_block(&text);
+
+                assert_eq!(stripped, prefix);
+                assert_eq!(
+                    parse_memory_citation(blocks),
+                    Some(expected_citation("used preference"))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn citation_quote_does_not_validate_unclosed_json() {
+        let prefix = r#"{"body":"unfinished"#;
+        let text = format!("{prefix}{QUOTED_STRUCTURED_CITATION}");
+        let (stripped, blocks) = strip_memory_citation_block(&text);
+
+        assert_eq!(stripped, prefix);
+        assert_eq!(
+            parse_memory_citation(blocks),
+            Some(expected_citation("used \"quoted\" preference"))
+        );
     }
 
     #[test]
@@ -460,6 +821,98 @@ mod memory_citation_tests {
             )),
             "before <oai-mem-citation>\"literal\" middle  after"
         );
+        assert_eq!(filter.finish(), "");
+    }
+
+    #[test]
+    fn delta_filter_preserves_json_literal_and_suppresses_real_suffix_across_deltas() {
+        let json = r#"{"body":"quote: \" then <oai-mem-citation><citation_entries> literal"}"#;
+        let text = format!("{json}\n{STRUCTURED_CITATION}");
+        let literal_split = text.find(OPEN_TAG).expect("literal open tag") + "<oai".len();
+        let suffix_open = text.rfind(OPEN_TAG).expect("suffix open tag");
+        let suffix_split = suffix_open + "<oai-mem-citation>\n<citation_".len();
+        let close_split = text.rfind(CLOSE_TAG).expect("suffix close tag") + "</oai-mem".len();
+        let chunks = [
+            &text[..literal_split],
+            &text[literal_split..suffix_split],
+            &text[suffix_split..close_split],
+            &text[close_split..],
+        ];
+        let mut filter = MemoryCitationDeltaFilter::default();
+        let mut output = String::new();
+
+        for chunk in chunks {
+            output.push_str(&filter.push(chunk));
+        }
+        output.push_str(&filter.finish());
+
+        assert_eq!(output, json);
+    }
+
+    #[test]
+    fn delta_filter_preserves_fenced_json_literal_one_character_at_a_time() {
+        let json = serde_json::json!({
+            "body": format!("literal example: {STRUCTURED_CITATION}"),
+            "escaped": "quote: \" and slash: \\",
+        })
+        .to_string();
+        let visible = format!("Review result:\n```json\n{json}\n```");
+        let text = format!("{visible}\n{STRUCTURED_CITATION}");
+        let mut filter = MemoryCitationDeltaFilter::default();
+        let mut output = String::new();
+
+        for ch in text.chars() {
+            let mut encoded = [0; 4];
+            output.push_str(&filter.push(ch.encode_utf8(&mut encoded)));
+        }
+        output.push_str(&filter.finish());
+
+        assert_eq!(output, visible);
+    }
+
+    #[test]
+    fn delta_filter_preserves_root_json_string_literal_one_character_at_a_time() {
+        let json = serde_json::to_string(&format!("literal example: {STRUCTURED_CITATION}"))
+            .expect("root JSON string");
+        let text = format!("{json}\n{STRUCTURED_CITATION}");
+        let mut filter = MemoryCitationDeltaFilter::default();
+        let mut output = String::new();
+
+        for ch in text.chars() {
+            let mut encoded = [0; 4];
+            output.push_str(&filter.push(ch.encode_utf8(&mut encoded)));
+        }
+        output.push_str(&filter.finish());
+
+        assert_eq!(output, json);
+    }
+
+    #[test]
+    fn delta_filter_suppresses_suffix_after_unclosed_json_strings() {
+        for prefix in [r#"{"body":"unfinished"#, r#""unfinished"#] {
+            for separator in ["", " ", "\n"] {
+                let text = format!("{prefix}{separator}{STRUCTURED_CITATION}");
+                let mut filter = MemoryCitationDeltaFilter::default();
+                let mut output = String::new();
+
+                for ch in text.chars() {
+                    let mut encoded = [0; 4];
+                    output.push_str(&filter.push(ch.encode_utf8(&mut encoded)));
+                }
+                output.push_str(&filter.finish());
+
+                assert_eq!(output, prefix);
+            }
+        }
+    }
+
+    #[test]
+    fn delta_filter_finish_fail_closes_unresolved_json_candidate() {
+        let prefix = r#"{"body":"unfinished"#;
+        let text = format!("{prefix}<oai-mem-citation><citation_entries>hidden");
+        let mut filter = MemoryCitationDeltaFilter::default();
+
+        assert_eq!(filter.push(&text), prefix);
         assert_eq!(filter.finish(), "");
     }
 

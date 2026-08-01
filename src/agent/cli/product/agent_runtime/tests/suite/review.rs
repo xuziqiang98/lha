@@ -315,7 +315,7 @@ async fn review_preserves_literal_memory_citation_text_with_memory_enabled() {
             },
             ReviewFinding {
                 title: "Neutralize memory-control tags in citation labels".to_string(),
-                body: "A cited page may contain the literal tag `<oai-mem-citation>` in ordinary text; the remaining JSON fields and verdict must stay intact.".to_string(),
+                body: "A cited page may contain the literal sequence `<oai-mem-citation><citation_entries>` inside a JSON string; the remaining fields and verdict must stay intact.".to_string(),
                 confidence_score: 0.95,
                 priority: 2,
                 code_location: ReviewCodeLocation {
@@ -333,12 +333,19 @@ async fn review_preserves_literal_memory_citation_text_with_memory_enabled() {
     };
     let review_json =
         serde_json::to_string(&expected).unwrap_or_else(|err| panic!("review json: {err}"));
+    let visible_review = format!("Review result:\n```json\n{review_json}\n```");
     let marker = "<oai-mem-citation>";
-    let marker_start = review_json
+    let marker_start = visible_review
         .find(marker)
         .expect("literal marker in review json");
     let marker_split = marker_start + "<oai".len();
     let marker_end = marker_start + marker.len();
+    let citation = "<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[used reviewer memory]\n</citation_entries>\n<rollout_ids>\n00000000-0000-0000-0000-000000000001\n</rollout_ids>\n</oai-mem-citation>";
+    let assistant_message = format!("{visible_review}\n{citation}");
+    let suffix_marker_start = assistant_message
+        .rfind(marker)
+        .expect("real memory citation marker");
+    let suffix_marker_split = suffix_marker_start + "<oai-mem".len();
 
     let server = MockServer::start().await;
     let response_mock = mount_sse_once(
@@ -346,10 +353,11 @@ async fn review_preserves_literal_memory_citation_text_with_memory_enabled() {
         sse(vec![
             ev_response_created("resp-review-memory-literal"),
             ev_message_item_added("msg-review-memory-literal", ""),
-            ev_output_text_delta(&review_json[..marker_split]),
-            ev_output_text_delta(&review_json[marker_split..marker_end]),
-            ev_output_text_delta(&review_json[marker_end..]),
-            ev_assistant_message("msg-review-memory-literal", &review_json),
+            ev_output_text_delta(&visible_review[..marker_split]),
+            ev_output_text_delta(&visible_review[marker_split..marker_end]),
+            ev_output_text_delta(&assistant_message[marker_end..suffix_marker_split]),
+            ev_output_text_delta(&assistant_message[suffix_marker_split..]),
+            ev_assistant_message("msg-review-memory-literal", &assistant_message),
             ev_completed("resp-review-memory-literal"),
         ]),
     )

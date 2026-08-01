@@ -1429,6 +1429,106 @@ async fn plan_mode_hides_memory_citation_after_proposed_plan() -> anyhow::Result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plan_mode_preserves_citation_literal_inside_fenced_json() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let citation = memory_citation_block("used plan context");
+    let json = serde_json::json!({
+        "body": "explain <oai-mem-citation><citation_entries> handling",
+    })
+    .to_string();
+    let plan_text = format!("```json\n{json}\n```\n");
+    let full_message = format!("<proposed_plan>\n{plan_text}</proposed_plan>\n{citation}");
+    let literal_split = full_message
+        .find("<oai-mem-citation>")
+        .expect("literal memory citation marker")
+        + "<oai".len();
+    let suffix_open = full_message
+        .rfind("<oai-mem-citation>")
+        .expect("real memory citation marker");
+    let suffix_split = suffix_open + "<oai-mem".len();
+    let stream = sse(vec![
+        ev_response_created("resp-1"),
+        ev_message_item_added("msg-1", ""),
+        ev_output_text_delta(&full_message[..literal_split]),
+        ev_output_text_delta(&full_message[literal_split..suffix_split]),
+        ev_output_text_delta(&full_message[suffix_split..]),
+        ev_assistant_message("msg-1", &full_message),
+        ev_completed("resp-1"),
+    ]);
+    mount_sse_once(&server, stream).await;
+
+    let TestCodex {
+        codex,
+        session_configured,
+        ..
+    } = test_codex()
+        .with_pre_build_hook(write_memory_summary)
+        .with_config(|config| {
+            config.features.enable(Feature::MemoryTool);
+        })
+        .build(&server)
+        .await?;
+
+    let identity = Identity {
+        kind: IdentityKind::Planner,
+        settings: Settings {
+            model: session_configured.model.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "please plan".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: std::env::current_dir()?,
+            approval_policy: crate::product::agent::protocol::AskForApproval::Never,
+            sandbox_policy: crate::product::agent::protocol::SandboxPolicy::DangerFullAccess,
+            model: session_configured.model.clone(),
+            effort: None,
+            summary: crate::product::protocol::config_types::ReasoningSummary::Auto,
+            identity: Some(identity),
+            personality: None,
+            tui_buddy: None,
+        })
+        .await?;
+
+    let mut agent_deltas = Vec::new();
+    let mut plan_deltas = Vec::new();
+    let mut plan_items = Vec::new();
+    loop {
+        match wait_for_event(&codex, |_| true).await {
+            EventMsg::AgentMessageContentDelta(event) => agent_deltas.push(event.delta),
+            EventMsg::PlanDelta(event) => plan_deltas.push(event.delta),
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::Plan(item),
+                ..
+            }) => plan_items.push(item),
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert_eq!(plan_deltas.concat(), plan_text);
+    assert_eq!(
+        plan_items
+            .iter()
+            .map(|item| item.text.as_str())
+            .collect::<Vec<_>>(),
+        vec![plan_text]
+    );
+    assert_eq!(agent_deltas, Vec::<String>::new());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plan_mode_attaches_memory_citation_to_visible_agent_message() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 

@@ -342,6 +342,258 @@ async fn assistant_literal_memory_citation_text_is_preserved_with_memory_injecti
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn assistant_fenced_json_citation_literal_is_preserved_and_real_suffix_is_stripped()
+-> Result<()> {
+    let server = start_mock_server().await;
+    let expected_citation = MemoryCitation {
+        entries: vec![MemoryCitationEntry {
+            path: "MEMORY.md".into(),
+            line_start: 1,
+            line_end: 2,
+            note: "used preference".into(),
+        }],
+        rollout_ids: vec!["00000000-0000-0000-0000-000000000001".into()],
+    };
+    let json = json!({
+        "body": "explain <oai-mem-citation><citation_entries> handling",
+        "escaped": "quote: \" and slash: \\",
+    })
+    .to_string();
+    let visible_message = format!("Review result:\n```json\n{json}\n```");
+    let citation = "<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[used preference]\n</citation_entries>\n<rollout_ids>\n00000000-0000-0000-0000-000000000001\n</rollout_ids>\n</oai-mem-citation>";
+    let assistant_message = format!("{visible_message}\n{citation}");
+    let literal_split = assistant_message
+        .find("<oai-mem-citation>")
+        .expect("literal memory citation marker")
+        + "<oai".len();
+    let suffix_open = assistant_message
+        .rfind("<oai-mem-citation>")
+        .expect("real memory citation marker");
+    let suffix_split = suffix_open + "<oai-mem-citation>\n<citation_".len();
+    let close_split = assistant_message
+        .rfind("</oai-mem-citation>")
+        .expect("real memory citation close marker")
+        + "</oai-mem".len();
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            ev_response_created("resp-json-memory-citation"),
+            ev_message_item_added("msg-json-memory-citation", ""),
+            ev_output_text_delta(&assistant_message[..literal_split]),
+            ev_output_text_delta(&assistant_message[literal_split..suffix_split]),
+            ev_output_text_delta(&assistant_message[suffix_split..close_split]),
+            ev_output_text_delta(&assistant_message[close_split..]),
+            ev_assistant_message("msg-json-memory-citation", &assistant_message),
+            ev_completed("resp-json-memory-citation"),
+        ]),
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_pre_build_hook(|lha_home| {
+            let memory_root = lha_home.join("memories");
+            fs::create_dir_all(&memory_root).expect("memory dir");
+            fs::write(
+                memory_root.join("memory_summary.md"),
+                "Memory citations are available.",
+            )
+            .expect("memory summary");
+        })
+        .with_config(|config| {
+            config.features.enable(Feature::MemoryTool);
+        });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "answer with structured JSON".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let mut deltas = Vec::new();
+    let mut completed = None;
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::AgentMessageContentDelta(event) => deltas.push(event.delta),
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::AgentMessage(item),
+                ..
+            }) => completed = Some(item),
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    let completed = completed.expect("completed agent message");
+    let text = completed
+        .content
+        .iter()
+        .map(|entry| match entry {
+            crate::product::protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+        })
+        .collect::<String>();
+    assert_eq!(deltas.concat(), visible_message);
+    assert_eq!(text, visible_message);
+    assert_eq!(completed.memory_citation, Some(expected_citation));
+
+    test.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn assistant_unclosed_json_hides_citation_and_records_usage() -> Result<()> {
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let memory_root = home.path().join("memories");
+    fs::create_dir_all(&memory_root)?;
+    fs::write(
+        memory_root.join("memory_summary.md"),
+        "Memory citations are available.",
+    )?;
+    let state_db =
+        StateRuntime::init(home.path().to_path_buf(), TEST_PROVIDER.to_string(), None).await?;
+    let source_thread = write_memory_thread(
+        home.path(),
+        &state_db,
+        vec![user_message("remember this source")],
+    )
+    .await?;
+    seed_stage1_output(
+        &state_db,
+        source_thread,
+        "raw source memory",
+        "source rollout summary",
+    )
+    .await?;
+
+    let expected_citation = MemoryCitation {
+        entries: vec![MemoryCitationEntry {
+            path: "MEMORY.md".into(),
+            line_start: 1,
+            line_end: 2,
+            note: "used preference".into(),
+        }],
+        rollout_ids: vec![source_thread.to_string()],
+    };
+    let visible_message = r#"{"body":"unfinished"#;
+    let citation = format!(
+        "<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[used preference]\n</citation_entries>\n<rollout_ids>\n{source_thread}\n</rollout_ids>\n</oai-mem-citation>"
+    );
+    let assistant_message = format!("{visible_message} {citation}");
+    let open_split = assistant_message
+        .find("<oai-mem-citation>")
+        .expect("memory citation marker")
+        + "<oai".len();
+    let inner_split = assistant_message
+        .find("<citation_entries>")
+        .expect("citation entries marker")
+        + "<citation_".len();
+    let close_split = assistant_message
+        .find("</oai-mem-citation>")
+        .expect("memory citation close marker")
+        + "</oai-mem".len();
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            ev_response_created("resp-unclosed-json-memory-citation"),
+            ev_message_item_added("msg-unclosed-json-memory-citation", ""),
+            ev_output_text_delta(&assistant_message[..open_split]),
+            ev_output_text_delta(&assistant_message[open_split..inner_split]),
+            ev_output_text_delta(&assistant_message[inner_split..close_split]),
+            ev_output_text_delta(&assistant_message[close_split..]),
+            ev_assistant_message("msg-unclosed-json-memory-citation", &assistant_message),
+            ev_completed("resp-unclosed-json-memory-citation"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_config(|config| {
+            config.features.enable(Feature::MemoryTool);
+            config.memories.generate_memories = false;
+        });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "answer with malformed structured JSON".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let mut deltas = Vec::new();
+    let mut completed = None;
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::AgentMessageContentDelta(event) => deltas.push(event.delta),
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::AgentMessage(item),
+                ..
+            }) => completed = Some(item),
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    let completed = completed.expect("completed agent message");
+    let text = completed
+        .content
+        .iter()
+        .map(|entry| match entry {
+            crate::product::protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+        })
+        .collect::<String>();
+    assert_eq!(deltas.concat(), visible_message);
+    assert_eq!(text, visible_message);
+    assert_eq!(completed.memory_citation, Some(expected_citation.clone()));
+    assert_eq!(
+        memory_output_usage_state(home.path(), source_thread).await?,
+        MemoryOutputUsageState {
+            usage_count: 1,
+            has_last_usage: true,
+        }
+    );
+
+    test.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
+    let items = read_rollout_items(rollout_path.as_path()).await?;
+    let persisted = items.iter().find_map(|item| match item {
+        RolloutItem::EventMsg(EventMsg::AgentMessage(payload)) => Some(payload.clone()),
+        RolloutItem::SessionMeta(_)
+        | RolloutItem::TranscriptItem(_)
+        | RolloutItem::GhostSnapshot(_)
+        | RolloutItem::Compacted(_)
+        | RolloutItem::InputSlimmingStoredInput(_)
+        | RolloutItem::TurnContext(_)
+        | RolloutItem::Workflow(_)
+        | RolloutItem::EventMsg(_) => None,
+    });
+    let persisted = persisted.expect("persisted agent message event");
+    assert_eq!(persisted.message, visible_message);
+    assert_eq!(persisted.memory_citation, Some(expected_citation));
+
+    let _home_guard = home;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn memory_phase1_mock_response_creates_redacted_stage1_output() -> Result<()> {
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
@@ -903,6 +1155,12 @@ struct MemoryOutputState {
     selected_for_phase2: bool,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct MemoryOutputUsageState {
+    usage_count: i64,
+    has_last_usage: bool,
+}
+
 async fn memory_output_state(lha_home: &Path, thread_id: ThreadId) -> Result<MemoryOutputState> {
     let pool = open_memories_pool(lha_home).await?;
     let row = sqlx::query("SELECT selected_for_phase2 FROM stage1_outputs WHERE thread_id = ?")
@@ -911,6 +1169,21 @@ async fn memory_output_state(lha_home: &Path, thread_id: ThreadId) -> Result<Mem
         .await?;
     Ok(MemoryOutputState {
         selected_for_phase2: row.try_get::<i64, _>("selected_for_phase2")? != 0,
+    })
+}
+
+async fn memory_output_usage_state(
+    lha_home: &Path,
+    thread_id: ThreadId,
+) -> Result<MemoryOutputUsageState> {
+    let pool = open_memories_pool(lha_home).await?;
+    let row = sqlx::query("SELECT usage_count, last_usage FROM stage1_outputs WHERE thread_id = ?")
+        .bind(thread_id.to_string())
+        .fetch_one(&pool)
+        .await?;
+    Ok(MemoryOutputUsageState {
+        usage_count: row.try_get("usage_count")?,
+        has_last_usage: row.try_get::<Option<i64>, _>("last_usage")?.is_some(),
     })
 }
 
