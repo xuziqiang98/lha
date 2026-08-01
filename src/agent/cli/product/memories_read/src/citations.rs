@@ -13,20 +13,14 @@ const STRUCTURED_INNER_OPEN_TAGS: [&str; 3] = [
     ROLLOUT_IDS_OPEN_TAG,
     THREAD_IDS_OPEN_TAG,
 ];
-
-#[derive(Debug, PartialEq, Eq)]
-enum MemoryCitationPrefix {
-    Complete { end: usize },
-    Incomplete,
-    Literal,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum JsonCitationDisposition {
-    Pending,
-    Literal { end: usize },
-    FailClosed,
-}
+const STRUCTURED_INNER_CLOSE_TAGS: [&str; 3] =
+    ["</citation_entries>", "</rollout_ids>", "</thread_ids>"];
+const CONTINUATION_CLOSE_TAGS: [&str; 4] = [
+    STRUCTURED_INNER_CLOSE_TAGS[0],
+    STRUCTURED_INNER_CLOSE_TAGS[1],
+    STRUCTURED_INNER_CLOSE_TAGS[2],
+    CLOSE_TAG,
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum JsonTextTransition {
@@ -35,400 +29,1201 @@ enum JsonTextTransition {
     Invalid,
 }
 
-#[derive(Debug, Clone, Default)]
-enum MemoryCitationTextMode {
-    #[default]
-    Searching,
-    RootJsonString {
-        escaped: bool,
-    },
-    Json {
-        depth: usize,
-        in_string: bool,
-        escaped: bool,
-    },
-}
-
 #[derive(Debug)]
 struct MemoryCitationTextContext {
-    mode: MemoryCitationTextMode,
     root_value_possible: bool,
-    active_json: String,
+    active_json: Option<JsonTracker>,
 }
 
 impl Default for MemoryCitationTextContext {
     fn default() -> Self {
         Self {
-            mode: MemoryCitationTextMode::Searching,
             root_value_possible: true,
-            active_json: String::new(),
+            active_json: None,
         }
     }
 }
 
 impl MemoryCitationTextContext {
     fn reset(&mut self) {
-        self.mode = MemoryCitationTextMode::Searching;
         self.root_value_possible = true;
-        self.active_json.clear();
+        self.active_json = None;
     }
 
     fn inside_json_string(&self) -> bool {
-        matches!(
-            &self.mode,
-            MemoryCitationTextMode::RootJsonString { .. }
-                | MemoryCitationTextMode::Json {
-                    in_string: true,
-                    ..
-                }
-        )
-    }
-
-    fn classify_json_candidate(&self, candidate: &str, finish: bool) -> JsonCitationDisposition {
-        let root_json_string = matches!(&self.mode, MemoryCitationTextMode::RootJsonString { .. });
-        let mut mode = self.mode.clone();
-
-        for (idx, ch) in candidate.char_indices() {
-            match consume_active_json_char(&mut mode, ch) {
-                JsonTextTransition::Continue => {}
-                JsonTextTransition::Invalid => return JsonCitationDisposition::FailClosed,
-                JsonTextTransition::Complete => {
-                    let end = idx + ch.len_utf8();
-                    let mut json = String::with_capacity(self.active_json.len() + end);
-                    json.push_str(&self.active_json);
-                    json.push_str(&candidate[..end]);
-                    if serde_json::from_str::<serde_json::Value>(&json).is_err() {
-                        return JsonCitationDisposition::FailClosed;
-                    }
-
-                    if root_json_string {
-                        let rest = candidate[end..].trim_start();
-                        if rest.is_empty() {
-                            return if finish {
-                                JsonCitationDisposition::Literal { end }
-                            } else {
-                                JsonCitationDisposition::Pending
-                            };
-                        }
-                        if rest.starts_with(OPEN_TAG) {
-                            return JsonCitationDisposition::Literal { end };
-                        }
-                        if !finish && OPEN_TAG.starts_with(rest) {
-                            return JsonCitationDisposition::Pending;
-                        }
-                        return JsonCitationDisposition::FailClosed;
-                    }
-
-                    return JsonCitationDisposition::Literal { end };
-                }
-            }
-        }
-
-        if finish {
-            JsonCitationDisposition::FailClosed
-        } else {
-            JsonCitationDisposition::Pending
-        }
+        self.active_json
+            .as_ref()
+            .is_some_and(JsonTracker::inside_string)
     }
 
     fn abandon_json(&mut self) {
-        self.mode = MemoryCitationTextMode::Searching;
         self.root_value_possible = false;
-        self.active_json.clear();
+        self.active_json = None;
     }
 
     fn consume_visible(&mut self, text: &str) {
         for ch in text.chars() {
-            if matches!(&self.mode, MemoryCitationTextMode::Searching) {
-                if self.root_value_possible {
-                    if ch.is_whitespace() {
-                        continue;
+            if let Some(json) = self.active_json.as_mut() {
+                match json.push(ch) {
+                    JsonTextTransition::Continue => continue,
+                    JsonTextTransition::Complete => {
+                        self.active_json = None;
+                        self.root_value_possible = false;
                     }
-                    self.root_value_possible = false;
-                    if ch == '"' {
-                        self.mode = MemoryCitationTextMode::RootJsonString { escaped: false };
-                        self.active_json.clear();
-                        self.active_json.push(ch);
-                        continue;
+                    JsonTextTransition::Invalid => {
+                        self.active_json = None;
+                        self.root_value_possible = false;
+                        self.start_json_if_possible(ch);
                     }
-                }
-                if matches!(ch, '{' | '[') {
-                    self.mode = MemoryCitationTextMode::Json {
-                        depth: 1,
-                        in_string: false,
-                        escaped: false,
-                    };
-                    self.active_json.clear();
-                    self.active_json.push(ch);
                 }
                 continue;
             }
 
-            self.active_json.push(ch);
-            if !matches!(
-                consume_active_json_char(&mut self.mode, ch),
-                JsonTextTransition::Continue
-            ) {
-                self.abandon_json();
-            }
+            self.start_json_if_possible(ch);
+        }
+    }
+
+    fn take_json(&mut self) -> Option<JsonTracker> {
+        self.active_json.take()
+    }
+
+    fn restore_json(&mut self, json: JsonTracker) {
+        self.active_json = Some(json);
+        self.root_value_possible = false;
+    }
+
+    fn complete_json(&mut self) {
+        self.active_json = None;
+        self.root_value_possible = false;
+    }
+
+    fn start_json_if_possible(&mut self, ch: char) {
+        if matches!(ch, '{' | '[') || (self.root_value_possible && ch == '"') {
+            self.active_json = Some(JsonTracker::new(ch));
+            self.root_value_possible = false;
+        } else if !ch.is_whitespace() {
+            self.root_value_possible = false;
         }
     }
 }
 
-fn consume_active_json_char(mode: &mut MemoryCitationTextMode, ch: char) -> JsonTextTransition {
-    match mode {
-        MemoryCitationTextMode::RootJsonString { escaped } => {
-            if matches!(ch, '\u{0000}'..='\u{001f}') {
-                JsonTextTransition::Invalid
-            } else if *escaped {
-                *escaped = false;
-                JsonTextTransition::Continue
-            } else {
-                match ch {
-                    '\\' => {
-                        *escaped = true;
-                        JsonTextTransition::Continue
+#[derive(Debug)]
+struct JsonTracker {
+    source: String,
+    root: JsonRootState,
+    stack: Vec<JsonContainer>,
+    token: Option<JsonToken>,
+}
+
+impl JsonTracker {
+    fn new(start: char) -> Self {
+        let mut tracker = Self {
+            source: String::new(),
+            root: JsonRootState::Value,
+            stack: Vec::new(),
+            token: None,
+        };
+        let transition = tracker.push(start);
+        debug_assert_eq!(transition, JsonTextTransition::Continue);
+        tracker
+    }
+
+    fn inside_string(&self) -> bool {
+        matches!(self.token, Some(JsonToken::String(_)))
+    }
+
+    fn push(&mut self, ch: char) -> JsonTextTransition {
+        self.source.push(ch);
+
+        loop {
+            let Some(token) = self.token.take() else {
+                return self.consume_structural_char(ch);
+            };
+
+            match token {
+                JsonToken::String(mut string) => match string.escape {
+                    JsonStringEscape::None => {
+                        if matches!(ch, '\u{0000}'..='\u{001f}') {
+                            return JsonTextTransition::Invalid;
+                        }
+                        match ch {
+                            '\\' => {
+                                string.escape = JsonStringEscape::Escaped;
+                                self.token = Some(JsonToken::String(string));
+                                return JsonTextTransition::Continue;
+                            }
+                            '"' => {
+                                return match string.role {
+                                    JsonStringRole::Key => self.finish_key(),
+                                    JsonStringRole::Value => self.finish_value(),
+                                };
+                            }
+                            _ => {
+                                self.token = Some(JsonToken::String(string));
+                                return JsonTextTransition::Continue;
+                            }
+                        }
                     }
-                    '"' => JsonTextTransition::Complete,
-                    _ => JsonTextTransition::Continue,
+                    JsonStringEscape::Escaped => {
+                        string.escape = match ch {
+                            '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' => {
+                                JsonStringEscape::None
+                            }
+                            'u' => JsonStringEscape::Unicode(4),
+                            _ => return JsonTextTransition::Invalid,
+                        };
+                        self.token = Some(JsonToken::String(string));
+                        return JsonTextTransition::Continue;
+                    }
+                    JsonStringEscape::Unicode(remaining) => {
+                        if !ch.is_ascii_hexdigit() {
+                            return JsonTextTransition::Invalid;
+                        }
+                        string.escape = if remaining == 1 {
+                            JsonStringEscape::None
+                        } else {
+                            JsonStringEscape::Unicode(remaining - 1)
+                        };
+                        self.token = Some(JsonToken::String(string));
+                        return JsonTextTransition::Continue;
+                    }
+                },
+                JsonToken::Number(number) => match number.advance(ch) {
+                    JsonNumberTransition::Continue(next) => {
+                        self.token = Some(JsonToken::Number(next));
+                        return JsonTextTransition::Continue;
+                    }
+                    JsonNumberTransition::Complete => {
+                        let transition = self.finish_value();
+                        if !matches!(transition, JsonTextTransition::Continue) {
+                            return transition;
+                        }
+                    }
+                    JsonNumberTransition::Invalid => return JsonTextTransition::Invalid,
+                },
+                JsonToken::Keyword { literal, index } => {
+                    if index == literal.len() {
+                        if !is_json_delimiter(ch) {
+                            return JsonTextTransition::Invalid;
+                        }
+                        let transition = self.finish_value();
+                        if !matches!(transition, JsonTextTransition::Continue) {
+                            return transition;
+                        }
+                    } else if ch.is_ascii() && literal[index] == ch as u8 {
+                        self.token = Some(JsonToken::Keyword {
+                            literal,
+                            index: index + 1,
+                        });
+                        return JsonTextTransition::Continue;
+                    } else {
+                        return JsonTextTransition::Invalid;
+                    }
                 }
             }
         }
-        MemoryCitationTextMode::Json {
-            depth,
-            in_string,
-            escaped,
-        } => {
-            if *in_string {
-                if matches!(ch, '\u{0000}'..='\u{001f}') {
-                    JsonTextTransition::Invalid
-                } else if *escaped {
-                    *escaped = false;
+    }
+
+    fn consume_structural_char(&mut self, ch: char) -> JsonTextTransition {
+        if is_json_whitespace(ch) {
+            return JsonTextTransition::Continue;
+        }
+
+        match ch {
+            '{' if self.expects_value() => {
+                self.stack
+                    .push(JsonContainer::Object(JsonObjectState::KeyOrEnd));
+                JsonTextTransition::Continue
+            }
+            '[' if self.expects_value() => {
+                self.stack
+                    .push(JsonContainer::Array(JsonArrayState::ValueOrEnd));
+                JsonTextTransition::Continue
+            }
+            '}' => self.close_object(),
+            ']' => self.close_array(),
+            '"' => {
+                if matches!(
+                    self.stack.last(),
+                    Some(JsonContainer::Object(JsonObjectState::KeyOrEnd))
+                ) {
+                    self.token = Some(JsonToken::String(JsonString {
+                        role: JsonStringRole::Key,
+                        escape: JsonStringEscape::None,
+                    }));
+                    JsonTextTransition::Continue
+                } else if self.expects_value() {
+                    self.token = Some(JsonToken::String(JsonString {
+                        role: JsonStringRole::Value,
+                        escape: JsonStringEscape::None,
+                    }));
                     JsonTextTransition::Continue
                 } else {
-                    match ch {
-                        '\\' => {
-                            *escaped = true;
-                            JsonTextTransition::Continue
-                        }
-                        '"' => {
-                            *in_string = false;
-                            JsonTextTransition::Continue
-                        }
-                        _ => JsonTextTransition::Continue,
-                    }
+                    JsonTextTransition::Invalid
                 }
-            } else {
-                match ch {
-                    '"' => {
-                        *in_string = true;
-                        JsonTextTransition::Continue
+            }
+            ':' => {
+                let Some(JsonContainer::Object(state)) = self.stack.last_mut() else {
+                    return JsonTextTransition::Invalid;
+                };
+                if !matches!(*state, JsonObjectState::Colon) {
+                    return JsonTextTransition::Invalid;
+                }
+                *state = JsonObjectState::Value;
+                JsonTextTransition::Continue
+            }
+            ',' => match self.stack.last_mut() {
+                Some(JsonContainer::Object(state))
+                    if matches!(*state, JsonObjectState::CommaOrEnd) =>
+                {
+                    *state = JsonObjectState::KeyOrEnd;
+                    JsonTextTransition::Continue
+                }
+                Some(JsonContainer::Array(state))
+                    if matches!(*state, JsonArrayState::CommaOrEnd) =>
+                {
+                    *state = JsonArrayState::ValueOrEnd;
+                    JsonTextTransition::Continue
+                }
+                Some(JsonContainer::Object(_)) | Some(JsonContainer::Array(_)) | None => {
+                    JsonTextTransition::Invalid
+                }
+            },
+            '-' | '0'..='9' if self.expects_value() => {
+                self.token = JsonNumberState::new(ch).map(JsonToken::Number);
+                JsonTextTransition::Continue
+            }
+            't' if self.expects_value() => {
+                self.token = Some(JsonToken::Keyword {
+                    literal: b"true",
+                    index: 1,
+                });
+                JsonTextTransition::Continue
+            }
+            'f' if self.expects_value() => {
+                self.token = Some(JsonToken::Keyword {
+                    literal: b"false",
+                    index: 1,
+                });
+                JsonTextTransition::Continue
+            }
+            'n' if self.expects_value() => {
+                self.token = Some(JsonToken::Keyword {
+                    literal: b"null",
+                    index: 1,
+                });
+                JsonTextTransition::Continue
+            }
+            _ => JsonTextTransition::Invalid,
+        }
+    }
+
+    fn expects_value(&self) -> bool {
+        match self.stack.last() {
+            Some(JsonContainer::Object(state)) => matches!(*state, JsonObjectState::Value),
+            Some(JsonContainer::Array(state)) => matches!(*state, JsonArrayState::ValueOrEnd),
+            None => matches!(self.root, JsonRootState::Value),
+        }
+    }
+
+    fn close_object(&mut self) -> JsonTextTransition {
+        let Some(JsonContainer::Object(state)) = self.stack.last() else {
+            return JsonTextTransition::Invalid;
+        };
+        if !matches!(
+            *state,
+            JsonObjectState::KeyOrEnd | JsonObjectState::CommaOrEnd
+        ) {
+            return JsonTextTransition::Invalid;
+        }
+        self.stack.pop();
+        self.finish_value()
+    }
+
+    fn close_array(&mut self) -> JsonTextTransition {
+        let Some(JsonContainer::Array(state)) = self.stack.last() else {
+            return JsonTextTransition::Invalid;
+        };
+        if !matches!(
+            *state,
+            JsonArrayState::ValueOrEnd | JsonArrayState::CommaOrEnd
+        ) {
+            return JsonTextTransition::Invalid;
+        }
+        self.stack.pop();
+        self.finish_value()
+    }
+
+    fn finish_key(&mut self) -> JsonTextTransition {
+        let Some(JsonContainer::Object(state)) = self.stack.last_mut() else {
+            return JsonTextTransition::Invalid;
+        };
+        if !matches!(*state, JsonObjectState::KeyOrEnd) {
+            return JsonTextTransition::Invalid;
+        }
+        *state = JsonObjectState::Colon;
+        JsonTextTransition::Continue
+    }
+
+    fn finish_value(&mut self) -> JsonTextTransition {
+        match self.stack.last_mut() {
+            Some(JsonContainer::Object(state)) if matches!(*state, JsonObjectState::Value) => {
+                *state = JsonObjectState::CommaOrEnd;
+                JsonTextTransition::Continue
+            }
+            Some(JsonContainer::Array(state)) if matches!(*state, JsonArrayState::ValueOrEnd) => {
+                *state = JsonArrayState::CommaOrEnd;
+                JsonTextTransition::Continue
+            }
+            Some(JsonContainer::Object(_)) | Some(JsonContainer::Array(_)) => {
+                JsonTextTransition::Invalid
+            }
+            None if matches!(self.root, JsonRootState::Value) => {
+                self.root = JsonRootState::Complete;
+                if serde_json::from_str::<serde_json::Value>(&self.source).is_ok() {
+                    JsonTextTransition::Complete
+                } else {
+                    JsonTextTransition::Invalid
+                }
+            }
+            None => JsonTextTransition::Invalid,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum JsonRootState {
+    Value,
+    Complete,
+}
+
+#[derive(Debug)]
+enum JsonContainer {
+    Object(JsonObjectState),
+    Array(JsonArrayState),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum JsonObjectState {
+    KeyOrEnd,
+    Colon,
+    Value,
+    CommaOrEnd,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum JsonArrayState {
+    ValueOrEnd,
+    CommaOrEnd,
+}
+
+#[derive(Debug)]
+enum JsonToken {
+    String(JsonString),
+    Number(JsonNumberState),
+    Keyword {
+        literal: &'static [u8],
+        index: usize,
+    },
+}
+
+#[derive(Debug)]
+struct JsonString {
+    role: JsonStringRole,
+    escape: JsonStringEscape,
+}
+
+#[derive(Debug)]
+enum JsonStringRole {
+    Key,
+    Value,
+}
+
+#[derive(Debug)]
+enum JsonStringEscape {
+    None,
+    Escaped,
+    Unicode(u8),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum JsonNumberState {
+    Sign,
+    Zero,
+    Integer,
+    FractionStart,
+    Fraction,
+    ExponentStart,
+    ExponentSign,
+    Exponent,
+}
+
+impl JsonNumberState {
+    fn new(ch: char) -> Option<Self> {
+        match ch {
+            '-' => Some(Self::Sign),
+            '0' => Some(Self::Zero),
+            '1'..='9' => Some(Self::Integer),
+            _ => None,
+        }
+    }
+
+    fn advance(self, ch: char) -> JsonNumberTransition {
+        match self {
+            Self::Sign => match ch {
+                '0' => JsonNumberTransition::Continue(Self::Zero),
+                '1'..='9' => JsonNumberTransition::Continue(Self::Integer),
+                _ => JsonNumberTransition::Invalid,
+            },
+            Self::Zero => match ch {
+                '.' => JsonNumberTransition::Continue(Self::FractionStart),
+                'e' | 'E' => JsonNumberTransition::Continue(Self::ExponentStart),
+                _ if is_json_delimiter(ch) => JsonNumberTransition::Complete,
+                _ => JsonNumberTransition::Invalid,
+            },
+            Self::Integer => match ch {
+                '0'..='9' => JsonNumberTransition::Continue(Self::Integer),
+                '.' => JsonNumberTransition::Continue(Self::FractionStart),
+                'e' | 'E' => JsonNumberTransition::Continue(Self::ExponentStart),
+                _ if is_json_delimiter(ch) => JsonNumberTransition::Complete,
+                _ => JsonNumberTransition::Invalid,
+            },
+            Self::FractionStart => match ch {
+                '0'..='9' => JsonNumberTransition::Continue(Self::Fraction),
+                _ => JsonNumberTransition::Invalid,
+            },
+            Self::Fraction => match ch {
+                '0'..='9' => JsonNumberTransition::Continue(Self::Fraction),
+                'e' | 'E' => JsonNumberTransition::Continue(Self::ExponentStart),
+                _ if is_json_delimiter(ch) => JsonNumberTransition::Complete,
+                _ => JsonNumberTransition::Invalid,
+            },
+            Self::ExponentStart => match ch {
+                '+' | '-' => JsonNumberTransition::Continue(Self::ExponentSign),
+                '0'..='9' => JsonNumberTransition::Continue(Self::Exponent),
+                _ => JsonNumberTransition::Invalid,
+            },
+            Self::ExponentSign => match ch {
+                '0'..='9' => JsonNumberTransition::Continue(Self::Exponent),
+                _ => JsonNumberTransition::Invalid,
+            },
+            Self::Exponent => match ch {
+                '0'..='9' => JsonNumberTransition::Continue(Self::Exponent),
+                _ if is_json_delimiter(ch) => JsonNumberTransition::Complete,
+                _ => JsonNumberTransition::Invalid,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum JsonNumberTransition {
+    Continue(JsonNumberState),
+    Complete,
+    Invalid,
+}
+
+fn is_json_whitespace(ch: char) -> bool {
+    matches!(ch, ' ' | '\n' | '\r' | '\t')
+}
+
+fn is_json_delimiter(ch: char) -> bool {
+    is_json_whitespace(ch) || matches!(ch, ',' | '}' | ']')
+}
+
+#[derive(Debug, Default)]
+struct MemoryCitationScanner {
+    text_context: MemoryCitationTextContext,
+    mode: CitationScanMode,
+    collect_citations: bool,
+    citations: Vec<String>,
+    #[cfg(test)]
+    work_units: usize,
+}
+
+impl MemoryCitationScanner {
+    fn new(collect_citations: bool) -> Self {
+        Self {
+            collect_citations,
+            ..Self::default()
+        }
+    }
+
+    fn reset(&mut self) {
+        self.text_context.reset();
+        self.mode = CitationScanMode::default();
+        self.citations.clear();
+        #[cfg(test)]
+        {
+            self.work_units = 0;
+        }
+    }
+
+    fn push(&mut self, text: &str) -> String {
+        let mut output = String::new();
+        self.consume_fragment(text, &mut output);
+        output
+    }
+
+    fn finish(&mut self) -> String {
+        let mut output = String::new();
+
+        loop {
+            match std::mem::take(&mut self.mode) {
+                CitationScanMode::Text(prefix) => {
+                    if !prefix.value.is_empty() {
+                        self.emit_visible(&prefix.value, &mut output);
                     }
-                    '{' | '[' => {
-                        *depth += 1;
-                        JsonTextTransition::Continue
+                    self.mode = CitationScanMode::default();
+                    return output;
+                }
+                CitationScanMode::Candidate(candidate) => {
+                    if candidate.prefix.is_structural() {
+                        self.text_context.abandon_json();
+                        self.mode = CitationScanMode::default();
+                        return output;
                     }
-                    '}' | ']' => {
-                        *depth = depth.saturating_sub(1);
-                        if *depth == 0 {
-                            JsonTextTransition::Complete
-                        } else {
-                            JsonTextTransition::Continue
-                        }
+                    self.release_outer_literal(candidate, &mut output);
+                }
+                CitationScanMode::Deferred(candidate) => {
+                    if candidate.should_suppress_on_finish() {
+                        self.text_context.abandon_json();
+                        self.mode = CitationScanMode::default();
+                        return output;
                     }
-                    _ => JsonTextTransition::Continue,
+                    self.release_deferred_literal(candidate, &mut output);
+                }
+                CitationScanMode::Suppressing(_) => {
+                    self.text_context.abandon_json();
+                    self.mode = CitationScanMode::default();
+                    return output;
                 }
             }
         }
-        MemoryCitationTextMode::Searching => JsonTextTransition::Invalid,
+    }
+
+    fn into_citations(self) -> Vec<String> {
+        self.citations
+    }
+
+    #[cfg(test)]
+    fn work_units(&self) -> usize {
+        self.work_units
+    }
+
+    fn consume_fragment(&mut self, text: &str, output: &mut String) {
+        for ch in text.chars() {
+            self.consume_char(ch, output);
+        }
+    }
+
+    fn consume_char(&mut self, ch: char, output: &mut String) {
+        self.record_work();
+
+        match std::mem::take(&mut self.mode) {
+            CitationScanMode::Text(prefix) => self.consume_text_char(prefix, ch, output),
+            CitationScanMode::Candidate(candidate) => {
+                self.consume_outer_candidate_char(candidate, ch, output);
+            }
+            CitationScanMode::Deferred(candidate) => {
+                self.consume_deferred_candidate_char(candidate, ch, output);
+            }
+            CitationScanMode::Suppressing(mut citation) => {
+                if citation.push(ch) {
+                    self.record_completed_citation(citation);
+                    self.mode = CitationScanMode::default();
+                } else {
+                    self.mode = CitationScanMode::Suppressing(citation);
+                }
+            }
+        }
+    }
+
+    fn consume_text_char(&mut self, mut prefix: OpenTagPrefix, ch: char, output: &mut String) {
+        if prefix.value.is_empty() {
+            if ch == '<' {
+                prefix.value.push(ch);
+                self.mode = CitationScanMode::Text(prefix);
+            } else {
+                self.emit_visible_char(ch, output);
+                self.mode = CitationScanMode::Text(prefix);
+            }
+            return;
+        }
+
+        let prefix_len = prefix.value.len();
+        if ch.is_ascii() && OPEN_TAG.as_bytes()[prefix_len] == ch as u8 {
+            prefix.value.push(ch);
+            if prefix.value.len() == OPEN_TAG.len() {
+                if self.text_context.inside_json_string() {
+                    let Some(json) = self.text_context.take_json() else {
+                        unreachable!("active JSON string should have a tracker");
+                    };
+                    self.mode = CitationScanMode::Deferred(DeferredJsonCandidate::new(json));
+                } else {
+                    self.mode = CitationScanMode::Candidate(OuterTagCandidate::new());
+                }
+            } else {
+                self.mode = CitationScanMode::Text(prefix);
+            }
+            return;
+        }
+
+        let literal = std::mem::take(&mut prefix.value);
+        self.emit_visible(&literal, output);
+        self.mode = CitationScanMode::Text(prefix);
+        self.consume_char(ch, output);
+    }
+
+    fn consume_outer_candidate_char(
+        &mut self,
+        mut candidate: OuterTagCandidate,
+        ch: char,
+        output: &mut String,
+    ) {
+        candidate.body.push(ch);
+        match candidate.prefix.push(ch) {
+            PrefixTransition::Pending => {
+                self.mode = CitationScanMode::Candidate(candidate);
+            }
+            PrefixTransition::Literal => self.release_outer_literal(candidate, output),
+            PrefixTransition::Structural => {
+                self.begin_suppressing(candidate.full_text());
+            }
+        }
+    }
+
+    fn consume_deferred_candidate_char(
+        &mut self,
+        mut candidate: DeferredJsonCandidate,
+        ch: char,
+        output: &mut String,
+    ) {
+        match candidate.phase {
+            DeferredJsonPhase::InsideJson => {
+                candidate.content.push(ch);
+                let json_transition = candidate.json.push(ch);
+                let was_structural = candidate.prefix.is_structural();
+                let prefix_transition = if was_structural {
+                    PrefixTransition::Pending
+                } else {
+                    candidate.prefix.push(ch)
+                };
+
+                if matches!(prefix_transition, PrefixTransition::Literal) {
+                    self.release_deferred_literal(candidate, output);
+                    return;
+                }
+
+                if matches!(json_transition, JsonTextTransition::Invalid) {
+                    if candidate.prefix.is_structural() {
+                        self.begin_suppressing(candidate.full_text());
+                    } else {
+                        candidate.phase = DeferredJsonPhase::JsonInvalid;
+                        self.mode = CitationScanMode::Deferred(candidate);
+                    }
+                    return;
+                }
+
+                if was_structural && candidate.outer_close.push(ch) {
+                    candidate.outer_closed_inside_json = true;
+                }
+
+                if matches!(json_transition, JsonTextTransition::Complete) {
+                    if candidate.outer_closed_inside_json {
+                        self.release_deferred_literal(candidate, output);
+                        return;
+                    }
+                    candidate.phase = if candidate.prefix.is_structural() {
+                        DeferredJsonPhase::AfterJson(AfterJsonState::AwaitingContinuation(
+                            ContinuationProbe::default(),
+                        ))
+                    } else {
+                        DeferredJsonPhase::AfterJson(AfterJsonState::PendingPrefix)
+                    };
+                }
+                self.mode = CitationScanMode::Deferred(candidate);
+            }
+            DeferredJsonPhase::JsonInvalid => {
+                candidate.content.push(ch);
+                match candidate.prefix.push(ch) {
+                    PrefixTransition::Pending => {
+                        self.mode = CitationScanMode::Deferred(candidate);
+                    }
+                    PrefixTransition::Literal => self.release_deferred_literal(candidate, output),
+                    PrefixTransition::Structural => self.begin_suppressing(candidate.full_text()),
+                }
+            }
+            DeferredJsonPhase::AfterJson(AfterJsonState::PendingPrefix) => {
+                candidate.after.push(ch);
+                match candidate.prefix.push(ch) {
+                    PrefixTransition::Pending => {
+                        self.mode = CitationScanMode::Deferred(candidate);
+                    }
+                    PrefixTransition::Literal => self.release_deferred_literal(candidate, output),
+                    PrefixTransition::Structural => self.begin_suppressing(candidate.full_text()),
+                }
+            }
+            DeferredJsonPhase::AfterJson(AfterJsonState::AwaitingContinuation(ref mut probe)) => {
+                candidate.after.push(ch);
+                match probe.push(ch) {
+                    ContinuationTransition::Pending => {
+                        self.mode = CitationScanMode::Deferred(candidate);
+                    }
+                    ContinuationTransition::Continuation => {
+                        self.begin_suppressing(candidate.full_text());
+                    }
+                    ContinuationTransition::Literal => {
+                        self.release_deferred_literal(candidate, output);
+                    }
+                }
+            }
+        }
+    }
+
+    fn release_outer_literal(&mut self, candidate: OuterTagCandidate, output: &mut String) {
+        self.emit_visible(OPEN_TAG, output);
+        self.mode = CitationScanMode::default();
+        self.consume_fragment(&candidate.body, output);
+    }
+
+    fn release_deferred_literal(&mut self, candidate: DeferredJsonCandidate, output: &mut String) {
+        let DeferredJsonCandidate {
+            content,
+            after,
+            json,
+            phase,
+            ..
+        } = candidate;
+
+        match phase {
+            DeferredJsonPhase::InsideJson => self.text_context.restore_json(json),
+            DeferredJsonPhase::JsonInvalid => self.text_context.abandon_json(),
+            DeferredJsonPhase::AfterJson(_) => self.text_context.complete_json(),
+        }
+
+        output.push_str(&content);
+        self.mode = CitationScanMode::default();
+        self.consume_fragment(&after, output);
+    }
+
+    fn begin_suppressing(&mut self, initial: String) {
+        self.text_context.abandon_json();
+        let citation = SuppressedCitation::new(initial, self.collect_citations);
+        if citation.initial_is_complete() {
+            self.record_completed_citation(citation);
+            self.mode = CitationScanMode::default();
+        } else {
+            self.mode = CitationScanMode::Suppressing(citation);
+        }
+    }
+
+    fn record_completed_citation(&mut self, mut citation: SuppressedCitation) {
+        if let Some(citation) = citation.take_captured() {
+            self.citations.push(citation);
+        }
+    }
+
+    fn emit_visible_char(&mut self, ch: char, output: &mut String) {
+        let mut encoded = [0; 4];
+        self.emit_visible(ch.encode_utf8(&mut encoded), output);
+    }
+
+    fn emit_visible(&mut self, text: &str, output: &mut String) {
+        self.text_context.consume_visible(text);
+        output.push_str(text);
+    }
+
+    fn record_work(&mut self) {
+        #[cfg(test)]
+        {
+            self.work_units += 1;
+        }
+    }
+}
+
+#[derive(Debug)]
+enum CitationScanMode {
+    Text(OpenTagPrefix),
+    Candidate(OuterTagCandidate),
+    Deferred(DeferredJsonCandidate),
+    Suppressing(SuppressedCitation),
+}
+
+impl Default for CitationScanMode {
+    fn default() -> Self {
+        Self::Text(OpenTagPrefix::default())
+    }
+}
+
+#[derive(Debug, Default)]
+struct OpenTagPrefix {
+    value: String,
+}
+
+#[derive(Debug)]
+struct OuterTagCandidate {
+    body: String,
+    prefix: StructuredPrefixMatcher,
+}
+
+impl OuterTagCandidate {
+    fn new() -> Self {
+        Self {
+            body: String::new(),
+            prefix: StructuredPrefixMatcher::default(),
+        }
+    }
+
+    fn full_text(self) -> String {
+        format!("{OPEN_TAG}{}", self.body)
+    }
+}
+
+#[derive(Debug)]
+struct DeferredJsonCandidate {
+    content: String,
+    after: String,
+    json: JsonTracker,
+    prefix: StructuredPrefixMatcher,
+    outer_close: PatternMatcher,
+    outer_closed_inside_json: bool,
+    phase: DeferredJsonPhase,
+}
+
+impl DeferredJsonCandidate {
+    fn new(mut json: JsonTracker) -> Self {
+        for ch in OPEN_TAG.chars() {
+            let transition = json.push(ch);
+            debug_assert_eq!(transition, JsonTextTransition::Continue);
+        }
+        Self {
+            content: OPEN_TAG.to_string(),
+            after: String::new(),
+            json,
+            prefix: StructuredPrefixMatcher::default(),
+            outer_close: PatternMatcher::new(CLOSE_TAG),
+            outer_closed_inside_json: false,
+            phase: DeferredJsonPhase::InsideJson,
+        }
+    }
+
+    fn full_text(&self) -> String {
+        format!("{}{}", self.content, self.after)
+    }
+
+    fn should_suppress_on_finish(&self) -> bool {
+        matches!(
+            self.phase,
+            DeferredJsonPhase::InsideJson | DeferredJsonPhase::JsonInvalid
+        ) && self.prefix.is_structural()
+    }
+}
+
+#[derive(Debug)]
+enum DeferredJsonPhase {
+    InsideJson,
+    JsonInvalid,
+    AfterJson(AfterJsonState),
+}
+
+#[derive(Debug)]
+enum AfterJsonState {
+    PendingPrefix,
+    AwaitingContinuation(ContinuationProbe),
+}
+
+#[derive(Debug, Default)]
+struct StructuredPrefixMatcher {
+    state: StructuredPrefixState,
+}
+
+impl StructuredPrefixMatcher {
+    fn push(&mut self, ch: char) -> PrefixTransition {
+        match &mut self.state {
+            StructuredPrefixState::LeadingWhitespace => {
+                if ch.is_whitespace() {
+                    return PrefixTransition::Pending;
+                }
+                let mut active = [false; STRUCTURED_INNER_OPEN_TAGS.len()];
+                let mut any_active = false;
+                for (idx, tag) in STRUCTURED_INNER_OPEN_TAGS.iter().enumerate() {
+                    if ch.is_ascii() && tag.as_bytes()[0] == ch as u8 {
+                        active[idx] = true;
+                        any_active = true;
+                    }
+                }
+                if !any_active {
+                    self.state = StructuredPrefixState::Literal;
+                    PrefixTransition::Literal
+                } else {
+                    self.state = StructuredPrefixState::Matching {
+                        position: 1,
+                        active,
+                    };
+                    PrefixTransition::Pending
+                }
+            }
+            StructuredPrefixState::Matching { position, active } => {
+                let mut any_active = false;
+                let mut complete = false;
+                for (idx, tag) in STRUCTURED_INNER_OPEN_TAGS.iter().enumerate() {
+                    if active[idx] && ch.is_ascii() && tag.as_bytes()[*position] == ch as u8 {
+                        any_active = true;
+                        if *position + 1 == tag.len() {
+                            complete = true;
+                        }
+                    } else {
+                        active[idx] = false;
+                    }
+                }
+                if complete {
+                    self.state = StructuredPrefixState::Structural;
+                    PrefixTransition::Structural
+                } else if any_active {
+                    *position += 1;
+                    PrefixTransition::Pending
+                } else {
+                    self.state = StructuredPrefixState::Literal;
+                    PrefixTransition::Literal
+                }
+            }
+            StructuredPrefixState::Structural => PrefixTransition::Pending,
+            StructuredPrefixState::Literal => PrefixTransition::Literal,
+        }
+    }
+
+    fn is_structural(&self) -> bool {
+        matches!(self.state, StructuredPrefixState::Structural)
+    }
+}
+
+#[derive(Debug, Default)]
+enum StructuredPrefixState {
+    #[default]
+    LeadingWhitespace,
+    Matching {
+        position: usize,
+        active: [bool; STRUCTURED_INNER_OPEN_TAGS.len()],
+    },
+    Structural,
+    Literal,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PrefixTransition {
+    Pending,
+    Structural,
+    Literal,
+}
+
+#[derive(Debug, Default)]
+struct ContinuationProbe {
+    state: ContinuationProbeState,
+}
+
+impl ContinuationProbe {
+    fn push(&mut self, ch: char) -> ContinuationTransition {
+        match &mut self.state {
+            ContinuationProbeState::LeadingWhitespace => {
+                if ch.is_whitespace() {
+                    return ContinuationTransition::Pending;
+                }
+                let mut active = [false; CONTINUATION_CLOSE_TAGS.len()];
+                let mut any_active = false;
+                for (idx, tag) in CONTINUATION_CLOSE_TAGS.iter().enumerate() {
+                    if ch.is_ascii() && tag.as_bytes()[0] == ch as u8 {
+                        active[idx] = true;
+                        any_active = true;
+                    }
+                }
+                if any_active {
+                    self.state = ContinuationProbeState::Matching {
+                        position: 1,
+                        active,
+                    };
+                    ContinuationTransition::Pending
+                } else {
+                    self.state = ContinuationProbeState::Literal;
+                    ContinuationTransition::Literal
+                }
+            }
+            ContinuationProbeState::Matching { position, active } => {
+                let mut any_active = false;
+                let mut complete = false;
+                for (idx, tag) in CONTINUATION_CLOSE_TAGS.iter().enumerate() {
+                    if active[idx] && ch.is_ascii() && tag.as_bytes()[*position] == ch as u8 {
+                        any_active = true;
+                        if *position + 1 == tag.len() {
+                            complete = true;
+                        }
+                    } else {
+                        active[idx] = false;
+                    }
+                }
+                if complete {
+                    self.state = ContinuationProbeState::Continuation;
+                    ContinuationTransition::Continuation
+                } else if any_active {
+                    *position += 1;
+                    ContinuationTransition::Pending
+                } else {
+                    self.state = ContinuationProbeState::Literal;
+                    ContinuationTransition::Literal
+                }
+            }
+            ContinuationProbeState::Continuation => ContinuationTransition::Continuation,
+            ContinuationProbeState::Literal => ContinuationTransition::Literal,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+enum ContinuationProbeState {
+    #[default]
+    LeadingWhitespace,
+    Matching {
+        position: usize,
+        active: [bool; CONTINUATION_CLOSE_TAGS.len()],
+    },
+    Continuation,
+    Literal,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ContinuationTransition {
+    Pending,
+    Continuation,
+    Literal,
+}
+
+#[derive(Debug)]
+struct SuppressedCitation {
+    close: PatternMatcher,
+    captured: Option<String>,
+    complete: bool,
+}
+
+impl SuppressedCitation {
+    fn new(initial: String, collect: bool) -> Self {
+        let mut citation = Self {
+            close: PatternMatcher::new(CLOSE_TAG),
+            captured: collect.then(|| initial.clone()),
+            complete: false,
+        };
+        for ch in initial.chars() {
+            if citation.close.push(ch) {
+                citation.complete = true;
+                break;
+            }
+        }
+        citation
+    }
+
+    fn initial_is_complete(&self) -> bool {
+        self.complete
+    }
+
+    fn push(&mut self, ch: char) -> bool {
+        if let Some(captured) = self.captured.as_mut() {
+            captured.push(ch);
+        }
+        self.complete = self.close.push(ch);
+        self.complete
+    }
+
+    fn take_captured(&mut self) -> Option<String> {
+        self.captured.take()
+    }
+}
+
+#[derive(Debug)]
+struct PatternMatcher {
+    pattern: &'static str,
+    matched: usize,
+}
+
+impl PatternMatcher {
+    fn new(pattern: &'static str) -> Self {
+        Self {
+            pattern,
+            matched: 0,
+        }
+    }
+
+    fn push(&mut self, ch: char) -> bool {
+        let Some(byte) = ch.is_ascii().then_some(ch as u8) else {
+            self.matched = 0;
+            return false;
+        };
+        let pattern = self.pattern.as_bytes();
+
+        if pattern[self.matched] == byte {
+            self.matched += 1;
+            if self.matched == pattern.len() {
+                self.matched = 0;
+                return true;
+            }
+            return false;
+        }
+
+        self.matched = usize::from(byte == pattern[0]);
+        false
     }
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct MemoryCitationDeltaFilter {
-    pending: String,
     trailing_whitespace: String,
-    text_context: MemoryCitationTextContext,
+    scanner: MemoryCitationScanner,
 }
 
 impl MemoryCitationDeltaFilter {
     pub(crate) fn reset(&mut self) {
-        self.pending.clear();
         self.trailing_whitespace.clear();
-        self.text_context.reset();
+        self.scanner.reset();
     }
 
     pub(crate) fn push(&mut self, delta: &str) -> String {
-        self.pending.push_str(delta);
-        self.process(/* finish */ false)
+        let visible = self.scanner.push(delta);
+        self.emit_visible(&visible)
     }
 
     pub(crate) fn finish(&mut self) -> String {
-        self.process(/* finish */ true)
+        let visible = self.scanner.finish();
+        let output = self.emit_visible(&visible);
+        self.trailing_whitespace.clear();
+        output
     }
 
-    fn process(&mut self, finish: bool) -> String {
+    pub(crate) fn abort(&mut self) -> String {
+        let visible = self.scanner.finish();
+        let mut output = self.emit_visible(&visible);
+        output.push_str(&self.trailing_whitespace);
+        self.trailing_whitespace.clear();
+        output
+    }
+
+    fn emit_visible(&mut self, visible: &str) -> String {
+        let visible_end = visible.trim_end().len();
         let mut output = String::new();
-
-        loop {
-            let Some(open_idx) = self.pending.find(OPEN_TAG) else {
-                let keep = if finish {
-                    0
-                } else {
-                    longest_suffix_matching_prefix(&self.pending, OPEN_TAG)
-                };
-                let emit_end = self.pending.len() - keep;
-                self.emit_pending_prefix(emit_end, &mut output);
-                if finish {
-                    self.trailing_whitespace.clear();
-                }
-                return output;
-            };
-
-            self.emit_pending_prefix(open_idx, &mut output);
-
-            if self.text_context.inside_json_string() {
-                match self
-                    .text_context
-                    .classify_json_candidate(&self.pending, finish)
-                {
-                    JsonCitationDisposition::Pending => return output,
-                    JsonCitationDisposition::Literal { end } => {
-                        self.emit_pending_prefix(end, &mut output);
-                        continue;
-                    }
-                    JsonCitationDisposition::FailClosed => {
-                        self.text_context.abandon_json();
-                    }
-                }
-            }
-
-            match classify_memory_citation_prefix(&self.pending) {
-                MemoryCitationPrefix::Complete { end } => {
-                    self.pending.drain(..end);
-                }
-                MemoryCitationPrefix::Literal => {
-                    self.emit_pending_prefix(OPEN_TAG.len(), &mut output);
-                }
-                MemoryCitationPrefix::Incomplete if finish => {
-                    if !has_structured_inner_open_tag(&self.pending) {
-                        let pending_len = self.pending.len();
-                        self.emit_pending_prefix(pending_len, &mut output);
-                    } else {
-                        self.pending.clear();
-                    }
-                    self.trailing_whitespace.clear();
-                    return output;
-                }
-                MemoryCitationPrefix::Incomplete => return output,
-            }
-        }
-    }
-
-    fn emit_pending_prefix(&mut self, end: usize, output: &mut String) {
-        self.text_context.consume_visible(&self.pending[..end]);
-        let visible_end = self.pending[..end].trim_end().len();
         if visible_end == 0 {
-            self.trailing_whitespace.push_str(&self.pending[..end]);
+            self.trailing_whitespace.push_str(visible);
         } else {
             output.push_str(&self.trailing_whitespace);
             self.trailing_whitespace.clear();
-            output.push_str(&self.pending[..visible_end]);
-            self.trailing_whitespace
-                .push_str(&self.pending[visible_end..end]);
+            output.push_str(&visible[..visible_end]);
+            self.trailing_whitespace.push_str(&visible[visible_end..]);
         }
-        self.pending.drain(..end);
+        output
     }
-}
-
-fn classify_memory_citation_prefix(text: &str) -> MemoryCitationPrefix {
-    let Some(after_open) = text.strip_prefix(OPEN_TAG) else {
-        return MemoryCitationPrefix::Literal;
-    };
-    let body = after_open.trim_start();
-
-    if has_supported_inner_open_tag(body) {
-        return text
-            .find(CLOSE_TAG)
-            .map(|close_idx| MemoryCitationPrefix::Complete {
-                end: close_idx + CLOSE_TAG.len(),
-            })
-            .unwrap_or(MemoryCitationPrefix::Incomplete);
-    }
-
-    if body.is_empty()
-        || STRUCTURED_INNER_OPEN_TAGS
-            .iter()
-            .any(|tag| tag.starts_with(body))
-    {
-        MemoryCitationPrefix::Incomplete
-    } else {
-        MemoryCitationPrefix::Literal
-    }
-}
-
-fn has_supported_inner_open_tag(body: &str) -> bool {
-    STRUCTURED_INNER_OPEN_TAGS
-        .iter()
-        .any(|tag| body.starts_with(tag))
-}
-
-fn has_structured_inner_open_tag(text: &str) -> bool {
-    text.strip_prefix(OPEN_TAG)
-        .is_some_and(|after_open| has_supported_inner_open_tag(after_open.trim_start()))
-}
-
-fn longest_suffix_matching_prefix(input: &str, pattern: &str) -> usize {
-    let max_len = input.len().min(pattern.len().saturating_sub(1));
-    (1..=max_len)
-        .rev()
-        .find(|&len| input.ends_with(&pattern[..len]))
-        .unwrap_or(0)
 }
 
 pub fn strip_memory_citation_block(text: &str) -> (String, Vec<String>) {
-    let mut stripped = String::with_capacity(text.len());
-    let mut citations = Vec::new();
-    let mut text_context = MemoryCitationTextContext::default();
-    let mut rest = text;
-
-    while let Some(open_idx) = rest.find(OPEN_TAG) {
-        let visible_prefix = &rest[..open_idx];
-        text_context.consume_visible(visible_prefix);
-        stripped.push_str(visible_prefix);
-        let candidate = &rest[open_idx..];
-        if text_context.inside_json_string() {
-            match text_context.classify_json_candidate(candidate, /* finish */ true) {
-                JsonCitationDisposition::Pending => unreachable!("finished candidate is resolved"),
-                JsonCitationDisposition::Literal { end } => {
-                    text_context.consume_visible(&candidate[..end]);
-                    stripped.push_str(&candidate[..end]);
-                    rest = &candidate[end..];
-                    continue;
-                }
-                JsonCitationDisposition::FailClosed => {
-                    text_context.abandon_json();
-                }
-            }
-        }
-        match classify_memory_citation_prefix(candidate) {
-            MemoryCitationPrefix::Complete { end } => {
-                citations.push(candidate[..end].to_string());
-                rest = &candidate[end..];
-            }
-            MemoryCitationPrefix::Incomplete if has_structured_inner_open_tag(candidate) => {
-                return (stripped.trim_end().to_string(), citations);
-            }
-            MemoryCitationPrefix::Incomplete | MemoryCitationPrefix::Literal => {
-                text_context.consume_visible(OPEN_TAG);
-                stripped.push_str(OPEN_TAG);
-                rest = &candidate[OPEN_TAG.len()..];
-            }
-        }
-    }
-
-    stripped.push_str(rest);
-    (stripped.trim_end().to_string(), citations)
+    let mut scanner = MemoryCitationScanner::new(/* collect_citations */ true);
+    let mut stripped = scanner.push(text);
+    stripped.push_str(&scanner.finish());
+    (stripped.trim_end().to_string(), scanner.into_citations())
 }
 
 pub fn parse_memory_citation(citations: Vec<String>) -> Option<MemoryCitation> {
@@ -941,5 +1736,87 @@ mod memory_citation_tests {
             "answer"
         );
         assert_eq!(filter.finish(), "");
+    }
+
+    #[test]
+    fn array_closure_inside_citation_does_not_leak_structured_metadata() {
+        let prefix = r#"["unfinished"#;
+        let citation = "<oai-mem-citation><citation_entries>MEMORY.md:1-2|note=[x\"]</citation_entries><rollout_ids>00000000-0000-0000-0000-000000000001</rollout_ids></oai-mem-citation>";
+        let text = format!("{prefix}{citation}");
+
+        let (stripped, blocks) = strip_memory_citation_block(&text);
+
+        assert_eq!(stripped, prefix);
+        assert_eq!(
+            parse_memory_citation(blocks),
+            Some(expected_citation("x\""))
+        );
+
+        let mut filter = MemoryCitationDeltaFilter::default();
+        let mut streamed = String::new();
+        for ch in text.chars() {
+            let mut encoded = [0; 4];
+            streamed.push_str(&filter.push(ch.encode_utf8(&mut encoded)));
+        }
+        streamed.push_str(&filter.finish());
+
+        assert_eq!(streamed, prefix);
+    }
+
+    #[test]
+    fn prose_brace_does_not_hide_literal_tag_in_later_fenced_json() {
+        let json = serde_json::json!({
+            "body": format!("literal {STRUCTURED_CITATION}"),
+        })
+        .to_string();
+        let visible = format!("Prose starts {{ not JSON\n```json\n{json}\n```");
+        let text = format!("{visible}\n{STRUCTURED_CITATION}");
+
+        let (stripped, blocks) = strip_memory_citation_block(&text);
+
+        assert_eq!(stripped, visible);
+        assert_eq!(blocks, vec![STRUCTURED_CITATION.to_string()]);
+
+        let mut filter = MemoryCitationDeltaFilter::default();
+        let mut streamed = String::new();
+        for ch in text.chars() {
+            let mut encoded = [0; 4];
+            streamed.push_str(&filter.push(ch.encode_utf8(&mut encoded)));
+        }
+        streamed.push_str(&filter.finish());
+
+        assert_eq!(streamed, visible);
+    }
+
+    #[test]
+    fn delta_filter_abort_flushes_visible_trailing_whitespace() {
+        let mut filter = MemoryCitationDeltaFilter::default();
+
+        assert_eq!(filter.push("partial answer\n"), "partial answer");
+        assert_eq!(filter.abort(), "\n");
+
+        assert_eq!(filter.push("partial answer  "), "partial answer");
+        assert_eq!(filter.abort(), "  ");
+    }
+
+    #[test]
+    fn deferred_json_citation_scanning_stays_linear_for_fragmented_output() {
+        let literal = format!(
+            "{OPEN_TAG}{CITATION_ENTRIES_OPEN_TAG}{}",
+            "x".repeat(64 * 1024)
+        );
+        let json = serde_json::json!({ "body": literal }).to_string();
+        let text = format!("{json}\n{STRUCTURED_CITATION}");
+        let mut scanner = MemoryCitationScanner::default();
+        let mut output = String::new();
+
+        for ch in text.chars() {
+            let mut encoded = [0; 4];
+            output.push_str(&scanner.push(ch.encode_utf8(&mut encoded)));
+        }
+        output.push_str(&scanner.finish());
+
+        assert_eq!(output, format!("{json}\n"));
+        assert!(scanner.work_units() <= text.chars().count() * 2);
     }
 }

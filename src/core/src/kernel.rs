@@ -75,6 +75,12 @@ pub trait TurnEventProcessor: Send {
     where
         Self: Sized;
 
+    /// Called before an unsuccessfully terminated stream returns its original error.
+    ///
+    /// Implementations may flush already-confirmed client-visible state, but must not complete or
+    /// persist the turn.
+    async fn on_stream_interrupted(&mut self) {}
+
     fn cancelled_error(&self) -> Self::Error;
 
     fn llm_error(&self, err: lha_llm::Error) -> Self::Error;
@@ -105,13 +111,29 @@ impl AgentKernel {
         loop {
             let next_event = match or_cancel(stream.next(), &cancellation_token).await {
                 Ok(Some(Ok(event))) => event,
-                Ok(Some(Err(err))) => return Err(processor.llm_error(err)),
-                Ok(None) => return Err(processor.stream_closed_error()),
-                Err(CancelErr::Cancelled) => return Err(processor.cancelled_error()),
+                Ok(Some(Err(err))) => {
+                    processor.on_stream_interrupted().await;
+                    return Err(processor.llm_error(err));
+                }
+                Ok(None) => {
+                    processor.on_stream_interrupted().await;
+                    return Err(processor.stream_closed_error());
+                }
+                Err(CancelErr::Cancelled) => {
+                    processor.on_stream_interrupted().await;
+                    return Err(processor.cancelled_error());
+                }
             };
 
             let is_completed = matches!(next_event, TurnEvent::Completed { .. });
-            let tool_future = state.merge(processor.handle_event(next_event).await?);
+            let update = match processor.handle_event(next_event).await {
+                Ok(update) => update,
+                Err(err) => {
+                    processor.on_stream_interrupted().await;
+                    return Err(err);
+                }
+            };
+            let tool_future = state.merge(update);
             if let Some(tool_future) = tool_future {
                 in_flight.push_back(tool_future);
             }
@@ -123,8 +145,18 @@ impl AgentKernel {
 
         while let Some(result) = in_flight.next().await {
             match result {
-                Ok(response) => processor.record_tool_result(response).await?,
-                Err(err) => processor.on_tool_future_error(err).await?,
+                Ok(response) => {
+                    if let Err(err) = processor.record_tool_result(response).await {
+                        processor.on_stream_interrupted().await;
+                        return Err(err);
+                    }
+                }
+                Err(err) => {
+                    if let Err(err) = processor.on_tool_future_error(err).await {
+                        processor.on_stream_interrupted().await;
+                        return Err(err);
+                    }
+                }
             }
         }
 
@@ -144,6 +176,9 @@ mod tests {
     use lha_llm::types::ContentItem;
     use lha_llm::types::TokenUsage;
     use pretty_assertions::assert_eq;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use tokio::sync::mpsc;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,6 +191,7 @@ mod tests {
     struct RecordingProcessor {
         tool_results: usize,
         response_total_tokens: Option<i64>,
+        interruptions: Arc<AtomicUsize>,
     }
 
     #[async_trait]
@@ -230,6 +266,10 @@ mod tests {
             })
         }
 
+        async fn on_stream_interrupted(&mut self) {
+            self.interruptions.fetch_add(1, Ordering::SeqCst);
+        }
+
         fn cancelled_error(&self) -> Self::Error {
             TestError::Cancelled
         }
@@ -264,6 +304,14 @@ mod tests {
             payload: ToolCallPayload::JsonArguments {
                 arguments: "{}".to_string(),
             },
+        }
+    }
+
+    fn recording_processor(interruptions: Arc<AtomicUsize>) -> RecordingProcessor {
+        RecordingProcessor {
+            tool_results: 0,
+            response_total_tokens: None,
+            interruptions,
         }
     }
 
@@ -304,13 +352,11 @@ mod tests {
         drop(tx_event);
 
         let kernel = AgentKernel::new();
+        let interruptions = Arc::new(AtomicUsize::new(0));
         let outcome = kernel
             .run_turn(
                 TurnEventStream::from_receiver(rx_event),
-                RecordingProcessor {
-                    tool_results: 0,
-                    response_total_tokens: None,
-                },
+                recording_processor(Arc::clone(&interruptions)),
                 CancellationToken::new(),
             )
             .await
@@ -325,6 +371,7 @@ mod tests {
                 tool_output_tokens: 1,
             }
         );
+        assert_eq!(interruptions.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -332,18 +379,67 @@ mod tests {
         let (tx_event, rx_event) = mpsc::channel(1);
         drop(tx_event);
         let kernel = AgentKernel::new();
+        let interruptions = Arc::new(AtomicUsize::new(0));
         let err = kernel
             .run_turn(
                 TurnEventStream::from_receiver(rx_event),
-                RecordingProcessor {
-                    tool_results: 0,
-                    response_total_tokens: None,
-                },
+                recording_processor(Arc::clone(&interruptions)),
                 CancellationToken::new(),
             )
             .await
             .expect_err("stream should fail");
 
         assert_eq!(err, TestError::StreamClosed);
+        assert_eq!(interruptions.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn kernel_flushes_before_returning_llm_error() {
+        let (tx_event, rx_event) = mpsc::channel(1);
+        tx_event
+            .send(Err(lha_llm::Error::Stream(
+                "synthetic stream error".to_string(),
+            )))
+            .await
+            .expect("send stream error");
+        drop(tx_event);
+        let kernel = AgentKernel::new();
+        let interruptions = Arc::new(AtomicUsize::new(0));
+        let err = kernel
+            .run_turn(
+                TurnEventStream::from_receiver(rx_event),
+                recording_processor(Arc::clone(&interruptions)),
+                CancellationToken::new(),
+            )
+            .await
+            .expect_err("stream should fail");
+
+        assert_eq!(
+            err,
+            TestError::Llm(
+                "stream disconnected before completion: synthetic stream error".to_string()
+            )
+        );
+        assert_eq!(interruptions.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn kernel_flushes_before_returning_cancellation_error() {
+        let (_tx_event, rx_event) = mpsc::channel(1);
+        let cancellation_token = CancellationToken::new();
+        cancellation_token.cancel();
+        let kernel = AgentKernel::new();
+        let interruptions = Arc::new(AtomicUsize::new(0));
+        let err = kernel
+            .run_turn(
+                TurnEventStream::from_receiver(rx_event),
+                recording_processor(Arc::clone(&interruptions)),
+                cancellation_token,
+            )
+            .await
+            .expect_err("stream should be cancelled");
+
+        assert_eq!(err, TestError::Cancelled);
+        assert_eq!(interruptions.load(Ordering::SeqCst), 1);
     }
 }

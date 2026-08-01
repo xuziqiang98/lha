@@ -33,6 +33,7 @@ use crate::test_support::core::test_codex::test_codex;
 use crate::test_support::core::wait_for_event;
 use crate::test_support::core::wait_for_event_match;
 use anyhow::Result;
+use lha_llm::RuntimeEndpoint;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use sqlx::Row;
@@ -337,6 +338,80 @@ async fn assistant_literal_memory_citation_text_is_preserved_with_memory_injecti
         .collect::<Vec<_>>();
     assert_eq!(persisted_event_messages, vec![assistant_message]);
     assert_eq!(persisted_transcript_messages, vec![assistant_message]);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupted_memory_stream_flushes_visible_whitespace_without_metadata() -> Result<()> {
+    let server = start_mock_server().await;
+    let stream_delta = "partial answer  \n<oai-mem-citation><citation_entries>hidden metadata";
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            ev_response_created("resp-interrupted-memory-citation"),
+            ev_message_item_added("msg-interrupted-memory-citation", ""),
+            ev_output_text_delta(stream_delta),
+        ]),
+    )
+    .await;
+    let provider = RuntimeEndpoint::openai_compatible_responses(
+        "mock-memory-stream-error",
+        format!("{}/v1", server.uri()),
+    )
+    .with_env_key(Some("PATH".into()))
+    .with_request_max_retries(Some(0))
+    .with_stream_max_retries(Some(0))
+    .with_stream_idle_timeout_ms(Some(2_000));
+    let mut builder = test_codex()
+        .with_pre_build_hook(|lha_home| {
+            let memory_root = lha_home.join("memories");
+            fs::create_dir_all(&memory_root).expect("memory dir");
+            fs::write(
+                memory_root.join("memory_summary.md"),
+                "Memory citations are available.",
+            )
+            .expect("memory summary");
+        })
+        .with_config(move |config| {
+            config.features.enable(Feature::MemoryTool);
+            config.model_provider = provider;
+        });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "answer with an interrupted memory stream".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let mut deltas = Vec::new();
+    let mut saw_error = false;
+    let mut saw_completed_agent_message = false;
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::AgentMessageContentDelta(event) => {
+                assert!(!saw_error);
+                assert!(!event.delta.contains("<oai-mem-citation>"));
+                deltas.push(event.delta);
+            }
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::AgentMessage(_),
+                ..
+            }) => saw_completed_agent_message = true,
+            EventMsg::Error(_) => saw_error = true,
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert!(saw_error);
+    assert!(!saw_completed_agent_message);
+    assert_eq!(deltas.concat(), "partial answer  \n");
 
     Ok(())
 }

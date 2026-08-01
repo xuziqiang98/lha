@@ -8039,6 +8039,10 @@ impl CodexTurnStreamProcessor {
         }
 
         let delta = self.memory_citation_delta_filter.finish();
+        self.emit_memory_citation_delta(active, delta).await;
+    }
+
+    async fn emit_memory_citation_delta(&mut self, active: &TurnItem, delta: String) {
         if delta.is_empty() {
             return;
         }
@@ -8397,6 +8401,22 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
             response_total_tokens: self.response_total_tokens,
             tool_output_tokens: self.tool_output_tokens,
         })
+    }
+
+    async fn on_stream_interrupted(&mut self) {
+        if !self.memory_citations_enabled {
+            return;
+        }
+        let Some(active) = self.active_item.clone() else {
+            return;
+        };
+        if !matches!(active, TurnItem::AgentMessage(_)) {
+            self.memory_citation_delta_filter.reset();
+            return;
+        }
+
+        let delta = self.memory_citation_delta_filter.abort();
+        self.emit_memory_citation_delta(&active, delta).await;
     }
 
     fn cancelled_error(&self) -> Self::Error {
