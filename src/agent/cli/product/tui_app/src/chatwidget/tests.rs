@@ -1166,6 +1166,140 @@ async fn streaming_table_right_edge_preserves_vt100_grid() {
 }
 
 #[tokio::test]
+async fn diff_background_does_not_leak_into_sidebar_across_reflow() {
+    if rerun_diff_sidebar_test_with_rich_color() {
+        return;
+    }
+
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let wide_width = 148;
+    let narrow_width = 119;
+    let height = 47;
+    let wide_sidebar_width =
+        crate::product::tui_app::sidebar::sidebar_width(wide_width).expect("sidebar visible");
+    let wide_main_width = wide_width - wide_sidebar_width;
+
+    let original = r#"fn paint_transcript() {
+    let state = "old background";
+    render(state);
+}
+"#;
+    let modified = r#"fn paint_transcript() {
+    let state = "new background marker";
+    render(state);
+    render_sidebar();
+}
+"#;
+    let changes = HashMap::from([(
+        PathBuf::from("src/render.rs"),
+        FileChange::Update {
+            unified_diff: diffy::create_patch(original, modified).to_string(),
+            move_path: None,
+        },
+    )]);
+    let cwd = PathBuf::from("/workspace");
+    chat.insert_transcript_cell(Arc::new(history_cell::new_patch_event(changes, &cwd)));
+    chat.on_task_started();
+
+    let backend = AuditedVT100Backend::new(wide_width, height);
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(backend)
+        .expect("audited terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, wide_width, height));
+    render_chat_to_audited_terminal(&chat, &mut terminal);
+    let initial = terminal.last_frame_buffer().clone();
+    let initial_patch_row = buffer_row_containing(&initial, "new background marker")
+        .unwrap_or_else(|| panic!("initial patch row:\n{}", buffer_to_string(&initial)));
+    assert_diff_background_precondition(
+        "initial diff frame",
+        initial_patch_row,
+        wide_main_width,
+        &terminal,
+    );
+    assert_sidebar_background_parity("initial diff frame", &terminal);
+
+    chat.on_agent_message_delta(
+        r#"| Stage | Owner | State | Detail |
+| --- | --- | --- | --- |
+| one | tui | ready | establish the baseline |
+| two | renderer | running | grow the live transcript |
+| three | terminal | running | move the patch rows upward |
+| four | sidebar | running | preserve default backgrounds |
+| five | diff | running | retain full-width colored rows |
+| six | vt100 | running | compare physical cell styles |
+| seven | resize | running | prepare for width changes |
+| eight | completion | done | settle the final frame |
+"#
+        .to_string(),
+    );
+    chat.on_commit_tick();
+    terminal.backend_mut().clear_frames();
+    render_chat_to_audited_terminal(&chat, &mut terminal);
+    let streamed = terminal.last_frame_buffer().clone();
+    let streamed_patch_row = buffer_row_containing(&streamed, "new background marker")
+        .unwrap_or_else(|| panic!("streamed patch row:\n{}", buffer_to_string(&streamed)));
+    assert!(
+        streamed_patch_row < initial_patch_row,
+        "expected table growth to move the patch row upward: initial={initial_patch_row}, \
+         streamed={streamed_patch_row}\n{}",
+        buffer_to_string(&streamed)
+    );
+    assert!(
+        buffer_row_containing(&streamed, "completion").is_some(),
+        "streaming table did not reach its final row:\n{}",
+        buffer_to_string(&streamed)
+    );
+    assert_sidebar_background_parity("streaming table growth", &terminal);
+
+    chat.handle_codex_event(Event {
+        id: "diff-sidebar-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+    for event in drain_events(&mut rx) {
+        if let Some(cell) = into_insert_history_cell(event) {
+            chat.insert_transcript_cell(Arc::from(cell));
+        }
+    }
+    terminal.backend_mut().clear_frames();
+    render_chat_to_audited_terminal(&chat, &mut terminal);
+    assert_sidebar_background_parity("completed turn", &terminal);
+
+    terminal.backend_mut().clear_frames();
+    render_chat_to_audited_terminal(&chat, &mut terminal);
+    let no_op = terminal.backend().last_frame().expect("idle no-op frame");
+    assert!(
+        no_op.draw_coordinates.is_empty(),
+        "{}",
+        no_op.diagnostic("idle no-op frame")
+    );
+    assert_sidebar_background_parity("idle no-op frame", &terminal);
+
+    terminal.backend_mut().clear_frames();
+    resize_audited_terminal(&mut terminal, narrow_width, height);
+    render_chat_to_audited_terminal(&chat, &mut terminal);
+    assert!(
+        crate::product::tui_app::sidebar::sidebar_width(narrow_width).is_none(),
+        "sidebar should be hidden at width {narrow_width}"
+    );
+    assert_eq!(
+        chat.last_rendered_width.get(),
+        Some(usize::from(narrow_width))
+    );
+    assert_eq!(terminal.last_frame_buffer().area.width, narrow_width);
+
+    terminal.backend_mut().clear_frames();
+    resize_audited_terminal(&mut terminal, wide_width, height);
+    render_chat_to_audited_terminal(&chat, &mut terminal);
+    assert_eq!(
+        chat.last_rendered_width.get(),
+        Some(usize::from(wide_main_width))
+    );
+    assert_eq!(terminal.last_frame_buffer().area.width, wide_width);
+    assert_sidebar_background_parity("sidebar restored after resize", &terminal);
+}
+
+#[tokio::test]
 async fn completing_stream_restores_status_without_repainting_stable_rows() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let width = 80;
@@ -4019,6 +4153,148 @@ fn render_chat_to_audited_terminal(
     terminal
         .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
         .expect("draw audited chat widget");
+}
+
+fn resize_audited_terminal(
+    terminal: &mut crate::product::tui_app::custom_terminal::Terminal<AuditedVT100Backend>,
+    width: u16,
+    height: u16,
+) {
+    terminal.backend_mut().set_size(width, height);
+    assert!(
+        terminal.autoresize().expect("autoresize audited terminal"),
+        "expected audited terminal size to change"
+    );
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+}
+
+fn rerun_diff_sidebar_test_with_rich_color() -> bool {
+    const RICH_COLOR_CHILD: &str = "LHA_DIFF_SIDEBAR_RICH_COLOR_TEST";
+    const RICH_COLOR_CHILD_MARKER: &str = "LHA_DIFF_SIDEBAR_RICH_COLOR_TEST_BODY";
+    if std::env::var_os(RICH_COLOR_CHILD).is_some() {
+        writeln!(std::io::stderr().lock(), "{RICH_COLOR_CHILD_MARKER}")
+            .expect("write rich-color child marker");
+        return false;
+    }
+
+    let harness_module_path = module_path!()
+        .strip_prefix(env!("CARGO_CRATE_NAME"))
+        .and_then(|path| path.strip_prefix("::"))
+        .expect("module path should start with the crate name");
+    let test_name =
+        format!("{harness_module_path}::diff_background_does_not_leak_into_sidebar_across_reflow");
+    let output = std::process::Command::new(std::env::current_exe().expect("current test binary"))
+        .arg(test_name)
+        .arg("--exact")
+        .arg("--nocapture")
+        .env(RICH_COLOR_CHILD, "1")
+        .env_remove("NO_COLOR")
+        .env("FORCE_COLOR", "3")
+        .env("COLORTERM", "truecolor")
+        .env("TERM", "xterm-256color")
+        .output()
+        .expect("rerun diff/sidebar test with rich color");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "rich-color child test failed with status {}:\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        stdout,
+        stderr,
+    );
+    assert_eq!(
+        stdout.matches(RICH_COLOR_CHILD_MARKER).count()
+            + stderr.matches(RICH_COLOR_CHILD_MARKER).count(),
+        1,
+        "rich-color child did not execute the test body exactly once:\nstdout:\n{stdout}\nstderr:\n{stderr}",
+    );
+    true
+}
+
+fn assert_diff_background_precondition(
+    stage: &str,
+    row: u16,
+    main_width: u16,
+    terminal: &crate::product::tui_app::custom_terminal::Terminal<AuditedVT100Backend>,
+) {
+    let buffer = terminal.last_frame_buffer();
+    let screen = terminal.backend().vt100().screen();
+    let logical_backgrounds = (buffer.area.x..main_width)
+        .filter_map(|x| {
+            let cell = &buffer[(x, row)];
+            (cell.bg != Color::Reset).then_some((x, cell.bg))
+        })
+        .collect::<Vec<_>>();
+    let physical_backgrounds = (buffer.area.x..main_width)
+        .filter_map(|x| {
+            let cell = screen.cell(row, x).expect("VT100 diff cell");
+            (cell.bgcolor() != vt100::Color::Default).then_some((x, cell.bgcolor()))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !logical_backgrounds.is_empty() && !physical_backgrounds.is_empty(),
+        "{stage}: expected a real diff background on row {row}; logical={logical_backgrounds:?}; \
+         physical={physical_backgrounds:?}; run with rich color enabled; {}",
+        audited_terminal_background_diagnostic(stage, terminal)
+    );
+}
+
+fn assert_sidebar_background_parity(
+    stage: &str,
+    terminal: &crate::product::tui_app::custom_terminal::Terminal<AuditedVT100Backend>,
+) {
+    let buffer = terminal.last_frame_buffer();
+    let sidebar_width = crate::product::tui_app::sidebar::sidebar_width(buffer.area.width)
+        .unwrap_or_else(|| panic!("{stage}: expected a visible sidebar"));
+    let sidebar_x = buffer.area.right() - sidebar_width;
+    let screen = terminal.backend().vt100().screen();
+    let mut mismatches = Vec::new();
+    let mut physical_non_default = Vec::new();
+
+    for y in buffer.area.y..buffer.area.bottom() {
+        for x in sidebar_x..buffer.area.right() {
+            let logical = &buffer[(x, y)];
+            let physical = screen
+                .cell(y, x)
+                .unwrap_or_else(|| panic!("{stage}: missing VT100 cell at ({x}, {y})"));
+            if physical.bgcolor() != vt100::Color::Default {
+                physical_non_default.push((x, y, physical.contents(), physical.bgcolor()));
+            }
+            if logical.bg != Color::Reset || physical.bgcolor() != vt100::Color::Default {
+                mismatches.push((
+                    x,
+                    y,
+                    logical.symbol().to_string(),
+                    logical.bg,
+                    physical.contents(),
+                    physical.bgcolor(),
+                ));
+            }
+        }
+    }
+
+    assert!(
+        mismatches.is_empty(),
+        "{stage}: sidebar background mismatch; mismatches={mismatches:?}; \
+         physical_non_default={physical_non_default:?}; {}",
+        audited_terminal_background_diagnostic(stage, terminal)
+    );
+}
+
+fn audited_terminal_background_diagnostic(
+    stage: &str,
+    terminal: &crate::product::tui_app::custom_terminal::Terminal<AuditedVT100Backend>,
+) -> String {
+    let frame = terminal.backend().last_frame().map_or_else(
+        || format!("stage={stage}; missing audited frame"),
+        |frame| frame.diagnostic(stage),
+    );
+    format!(
+        "{frame}; buffer=\n{}\nvt100=\n{}",
+        buffer_to_string(terminal.last_frame_buffer()),
+        terminal.backend().vt100().screen().contents()
+    )
 }
 
 fn assert_sparse_frame(

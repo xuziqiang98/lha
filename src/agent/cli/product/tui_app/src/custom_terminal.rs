@@ -248,12 +248,13 @@ where
         self.viewport_area = area;
     }
 
-    pub fn autoresize(&mut self) -> io::Result<()> {
+    pub fn autoresize(&mut self) -> io::Result<bool> {
         let screen_size = self.size()?;
-        if screen_size != self.last_known_screen_size {
+        let resized = screen_size != self.last_known_screen_size;
+        if resized {
             self.resize(screen_size)?;
         }
-        Ok(())
+        Ok(resized)
     }
 
     pub fn draw<F>(&mut self, render_callback: F) -> io::Result<()>
@@ -281,7 +282,18 @@ where
         F: FnOnce(&mut Frame) -> Result<(), E>,
         E: Into<io::Error>,
     {
-        self.autoresize()?;
+        let _ = self.autoresize()?;
+        self.try_draw_unflushed_at_current_size(render_callback)
+    }
+
+    pub(crate) fn try_draw_unflushed_at_current_size<F, E>(
+        &mut self,
+        render_callback: F,
+    ) -> io::Result<()>
+    where
+        F: FnOnce(&mut Frame) -> Result<(), E>,
+        E: Into<io::Error>,
+    {
         let mut frame = self.get_frame();
         render_callback(&mut frame).map_err(Into::into)?;
         let cursor_position = frame.cursor_position;
@@ -657,6 +669,117 @@ mod tests {
         assert_eq!(frame.stats.printed_columns, 0);
         assert!(frame.stats.erase_line_rows.is_empty());
         assert_eq!(frame.stats.erase_display_count, 0);
+    }
+
+    #[test]
+    fn viewport_reconcile_repairs_physical_background_divergence() {
+        const WIDTH: u16 = 148;
+        const HEIGHT: u16 = 3;
+        const STALE_START: u16 = 107;
+        const STALE_END: u16 = 119;
+        const STALE_ROW: u16 = 1;
+
+        fn render_stable(frame: &mut Frame<'_>) {
+            frame
+                .buffer
+                .set_string(0, 0, "stable main", Style::default());
+            frame.buffer.set_string(120, 0, "sidebar", Style::default());
+        }
+
+        let backend =
+            crate::product::tui_app::test_backend::AuditedVT100Backend::new(WIDTH, HEIGHT);
+        let mut terminal = Terminal::with_options(backend).unwrap();
+        terminal.set_viewport_area(Rect::new(0, 0, WIDTH, HEIGHT));
+        terminal.draw(render_stable).unwrap();
+        let logical = terminal.last_frame_buffer().clone();
+
+        let mut stale_ansi = Vec::new();
+        queue!(
+            &mut stale_ansi,
+            crossterm::cursor::MoveTo(STALE_START, STALE_ROW),
+            crossterm::style::SetBackgroundColor(crossterm::style::Color::Rgb {
+                r: 252,
+                g: 190,
+                b: 200
+            }),
+            crossterm::style::Print(" ".repeat(usize::from(STALE_END - STALE_START))),
+            crossterm::style::SetBackgroundColor(crossterm::style::Color::Reset)
+        )
+        .unwrap();
+        terminal.backend_mut().inject_raw_ansi(&stale_ansi).unwrap();
+        assert!((STALE_START..STALE_END).all(|x| {
+            terminal
+                .backend()
+                .vt100()
+                .screen()
+                .cell(STALE_ROW, x)
+                .unwrap()
+                .bgcolor()
+                != vt100::Color::Default
+        }));
+
+        terminal.backend_mut().clear_frames();
+        terminal.draw(render_stable).unwrap();
+        assert_eq!(terminal.last_frame_buffer(), &logical);
+        let stale_no_op = terminal
+            .backend()
+            .last_frame()
+            .expect("stale physical no-op frame");
+        assert_eq!(stale_no_op.stats.printed_columns, 0);
+        assert!(stale_no_op.stats.erase_line_rows.is_empty());
+        assert!((STALE_START..STALE_END).all(|x| {
+            terminal
+                .backend()
+                .vt100()
+                .screen()
+                .cell(STALE_ROW, x)
+                .unwrap()
+                .bgcolor()
+                != vt100::Color::Default
+        }));
+
+        terminal.backend_mut().clear_frames();
+        terminal.clear().unwrap();
+        terminal.draw(render_stable).unwrap();
+        let reconciled = terminal.backend().last_frame().expect("reconciled frame");
+        let diagnostic = reconciled.diagnostic("viewport reconcile");
+        crate::product::tui_app::test_backend::assert_vt100_grid_matches_buffer(
+            "viewport reconcile",
+            terminal.last_frame_buffer(),
+            terminal.backend().vt100(),
+            &diagnostic,
+        );
+        assert_eq!(reconciled.stats.erase_line_rows, BTreeSet::from([0, 1, 2]));
+        let screen = terminal.backend().vt100().screen();
+        assert!((0..HEIGHT).all(|y| {
+            (0..WIDTH).all(|x| screen.cell(y, x).unwrap().bgcolor() == vt100::Color::Default)
+        }));
+
+        terminal.backend_mut().clear_frames();
+        terminal.draw(render_stable).unwrap();
+        let restored_no_op = terminal
+            .backend()
+            .last_frame()
+            .expect("post-reconcile no-op frame");
+        assert_eq!(restored_no_op.stats.printed_columns, 0);
+        assert!(restored_no_op.stats.erase_line_rows.is_empty());
+        assert_eq!(restored_no_op.stats.erase_display_count, 0);
+    }
+
+    #[test]
+    fn autoresize_reports_only_backend_size_changes() {
+        let backend = RecordingBackend::new(20, 4);
+        let mut terminal = Terminal::with_options(backend).unwrap();
+        terminal.set_viewport_area(Rect::new(0, 0, 20, 2));
+
+        assert!(!terminal.autoresize().unwrap());
+        terminal.set_viewport_area(Rect::new(0, 0, 20, 3));
+        assert!(!terminal.autoresize().unwrap());
+
+        terminal.backend_mut().size = Size::new(21, 4);
+        assert!(terminal.autoresize().unwrap());
+        assert_eq!(terminal.last_known_screen_size, Size::new(21, 4));
+        assert!(!terminal.autoresize().unwrap());
     }
 
     #[test]

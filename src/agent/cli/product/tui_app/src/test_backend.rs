@@ -315,6 +315,11 @@ impl AuditedVT100Backend {
         writer.analyzer.set_size(width, height);
     }
 
+    pub(crate) fn inject_raw_ansi(&mut self, bytes: &[u8]) -> io::Result<()> {
+        Write::write_all(self, bytes)?;
+        Write::flush(self)
+    }
+
     pub(crate) fn fail_next_draw(&mut self) {
         self.fail_next_draw = true;
     }

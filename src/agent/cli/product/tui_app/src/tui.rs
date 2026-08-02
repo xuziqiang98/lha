@@ -13,6 +13,8 @@ use std::sync::Mutex;
 use std::sync::TryLockError;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
+use std::time::Instant;
 
 use crossterm::Command;
 use crossterm::event::DisableBracketedPaste;
@@ -61,6 +63,66 @@ mod stderr_guard;
 use stderr_guard::TuiStderrGuard;
 
 type SharedStderrGuard = Arc<Mutex<Option<TuiStderrGuard>>>;
+
+const RESIZE_RECONCILE_DELAY: Duration = Duration::from_millis(100);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResizeReconcileAction {
+    None,
+    ScheduleAt(Instant),
+    Reconcile,
+}
+
+#[derive(Debug, Default)]
+struct ResizeReconcileState {
+    deadline: Option<Instant>,
+}
+
+impl ResizeReconcileState {
+    fn next_action(&mut self, now: Instant, resized: bool) -> ResizeReconcileAction {
+        if resized {
+            let deadline = now + RESIZE_RECONCILE_DELAY;
+            self.deadline = Some(deadline);
+            return ResizeReconcileAction::ScheduleAt(deadline);
+        }
+
+        match self.deadline {
+            None => ResizeReconcileAction::None,
+            Some(deadline) if now < deadline => ResizeReconcileAction::ScheduleAt(deadline),
+            Some(_) => ResizeReconcileAction::Reconcile,
+        }
+    }
+
+    fn finish_reconcile(&mut self) {
+        self.deadline = None;
+    }
+
+    fn retry_pending(&mut self, now: Instant) -> ResizeReconcileAction {
+        if self.deadline.is_none() {
+            return ResizeReconcileAction::None;
+        }
+        let deadline = now + RESIZE_RECONCILE_DELAY;
+        self.deadline = Some(deadline);
+        ResizeReconcileAction::ScheduleAt(deadline)
+    }
+
+    fn finish_draw(
+        &mut self,
+        action: ResizeReconcileAction,
+        now: Instant,
+        succeeded: bool,
+    ) -> ResizeReconcileAction {
+        if !succeeded {
+            return self.retry_pending(now);
+        }
+        if action == ResizeReconcileAction::Reconcile {
+            self.finish_reconcile();
+            ResizeReconcileAction::None
+        } else {
+            action
+        }
+    }
+}
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
@@ -265,6 +327,7 @@ pub struct Tui {
     notification_backend: Option<DesktopNotificationBackend>,
     mouse_capture_enabled: bool,
     mouse_capture_bypass_active: bool,
+    resize_reconcile: ResizeReconcileState,
 }
 
 impl Drop for Tui {
@@ -305,6 +368,7 @@ impl Tui {
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             mouse_capture_enabled,
             mouse_capture_bypass_active: false,
+            resize_reconcile: ResizeReconcileState::default(),
         }
     }
 
@@ -590,24 +654,39 @@ impl Tui {
         #[cfg(unix)]
         let suspend_context = self.suspend_context.clone();
 
+        let now = Instant::now();
+        let resize_reconcile = &mut self.resize_reconcile;
+        let mut reconcile_action = ResizeReconcileAction::None;
         let draw_result = synchronized_terminal_update(&mut self.terminal, |terminal| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(terminal)?;
             }
 
+            let resized = terminal.autoresize()?;
+            reconcile_action = resize_reconcile.next_action(now, resized);
             Self::update_viewport(terminal, height)?;
             let area = terminal.viewport_area;
+            if reconcile_action == ResizeReconcileAction::Reconcile {
+                terminal.clear_area(area)?;
+            }
 
             // Update the cursor row so Ctrl-Z can place the cursor correctly before suspending.
             #[cfg(unix)]
             suspend_context.set_cursor_y(area.bottom().saturating_sub(1));
 
-            terminal.try_draw_unflushed(|frame| {
+            terminal.try_draw_unflushed_at_current_size(|frame| {
                 draw_fn(frame);
                 Result::Ok(())
             })
         });
+
+        let next_action =
+            resize_reconcile.finish_draw(reconcile_action, Instant::now(), draw_result.is_ok());
+        if let ResizeReconcileAction::ScheduleAt(deadline) = next_action {
+            self.frame_requester
+                .schedule_frame_in(deadline.saturating_duration_since(Instant::now()));
+        }
 
         #[cfg(unix)]
         if resume_stderr_after_draw {
@@ -717,6 +796,115 @@ mod tests {
                     String::from_utf8_lossy(haystack)
                 )
             })
+    }
+
+    #[test]
+    fn resize_reconcile_waits_until_deadline_and_runs_once() {
+        let now = Instant::now();
+        let deadline = now + RESIZE_RECONCILE_DELAY;
+        let mut state = ResizeReconcileState::default();
+
+        assert_eq!(
+            state.next_action(now, true),
+            ResizeReconcileAction::ScheduleAt(deadline)
+        );
+        assert_eq!(
+            state.next_action(deadline - Duration::from_millis(1), false),
+            ResizeReconcileAction::ScheduleAt(deadline)
+        );
+        assert_eq!(
+            state.next_action(deadline, false),
+            ResizeReconcileAction::Reconcile
+        );
+        assert_eq!(
+            state.finish_draw(ResizeReconcileAction::Reconcile, deadline, true),
+            ResizeReconcileAction::None
+        );
+        assert_eq!(
+            state.next_action(deadline + Duration::from_millis(1), false),
+            ResizeReconcileAction::None
+        );
+    }
+
+    #[test]
+    fn repeated_resize_extends_reconcile_deadline() {
+        let now = Instant::now();
+        let second_resize = now + Duration::from_millis(60);
+        let first_deadline = now + RESIZE_RECONCILE_DELAY;
+        let second_deadline = second_resize + RESIZE_RECONCILE_DELAY;
+        let mut state = ResizeReconcileState::default();
+
+        assert_eq!(
+            state.next_action(now, true),
+            ResizeReconcileAction::ScheduleAt(first_deadline)
+        );
+        assert_eq!(
+            state.next_action(second_resize, true),
+            ResizeReconcileAction::ScheduleAt(second_deadline)
+        );
+        assert_eq!(
+            state.next_action(first_deadline, false),
+            ResizeReconcileAction::ScheduleAt(second_deadline)
+        );
+        assert_eq!(
+            state.next_action(second_deadline, false),
+            ResizeReconcileAction::Reconcile
+        );
+    }
+
+    #[test]
+    fn failed_resize_reconcile_is_retried() {
+        let now = Instant::now();
+        let first_deadline = now + RESIZE_RECONCILE_DELAY;
+        let retry_deadline = first_deadline + RESIZE_RECONCILE_DELAY;
+        let mut state = ResizeReconcileState::default();
+
+        assert_eq!(
+            state.next_action(now, true),
+            ResizeReconcileAction::ScheduleAt(first_deadline)
+        );
+        assert_eq!(
+            state.next_action(first_deadline, false),
+            ResizeReconcileAction::Reconcile
+        );
+        assert_eq!(
+            state.finish_draw(ResizeReconcileAction::Reconcile, first_deadline, false),
+            ResizeReconcileAction::ScheduleAt(retry_deadline)
+        );
+        assert_eq!(
+            state.next_action(retry_deadline - Duration::from_millis(1), false),
+            ResizeReconcileAction::ScheduleAt(retry_deadline)
+        );
+        assert_eq!(
+            state.next_action(retry_deadline, false),
+            ResizeReconcileAction::Reconcile
+        );
+        assert_eq!(
+            state.finish_draw(ResizeReconcileAction::Reconcile, retry_deadline, true),
+            ResizeReconcileAction::None
+        );
+        assert_eq!(
+            state.retry_pending(retry_deadline + Duration::from_millis(1)),
+            ResizeReconcileAction::None
+        );
+    }
+
+    #[test]
+    fn failed_resize_draw_restarts_settle_delay() {
+        let now = Instant::now();
+        let failed_at = now + Duration::from_millis(25);
+        let retry_deadline = failed_at + RESIZE_RECONCILE_DELAY;
+        let mut state = ResizeReconcileState::default();
+        let action = state.next_action(now, true);
+
+        assert_eq!(
+            state.finish_draw(action, failed_at, false),
+            ResizeReconcileAction::ScheduleAt(retry_deadline)
+        );
+        assert_eq!(
+            state.next_action(retry_deadline, false),
+            ResizeReconcileAction::Reconcile
+        );
     }
 
     #[test]
