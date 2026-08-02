@@ -51,6 +51,7 @@ pub trait EventSource: Send + 'static {
 pub struct EventBroker<S: EventSource = CrosstermEventSource> {
     state: Mutex<EventBrokerState<S>>,
     resume_events_tx: watch::Sender<()>,
+    resize_event_pending: AtomicBool,
 }
 
 /// Tracks state of underlying [`EventSource`].
@@ -83,7 +84,16 @@ impl<S: EventSource + Default> EventBroker<S> {
         Self {
             state: Mutex::new(EventBrokerState::Start),
             resume_events_tx,
+            resize_event_pending: AtomicBool::new(false),
         }
+    }
+
+    pub(super) fn record_resize_event(&self) {
+        self.resize_event_pending.store(true, Ordering::Relaxed);
+    }
+
+    pub(super) fn take_resize_event(&self) -> bool {
+        self.resize_event_pending.swap(false, Ordering::Relaxed)
     }
 
     /// Drop the underlying event source
@@ -252,7 +262,10 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                 Some(TuiEvent::Key(key_event))
             }
             Event::Mouse(mouse_event) => Some(TuiEvent::Mouse(mouse_event)),
-            Event::Resize(_, _) => Some(TuiEvent::Draw),
+            Event::Resize(_, _) => {
+                self.broker.record_resize_event();
+                Some(TuiEvent::Draw)
+            }
             Event::Paste(pasted) => Some(TuiEvent::Paste(pasted)),
             Event::FocusGained => {
                 self.terminal_focused.store(true, Ordering::Relaxed);
@@ -469,6 +482,30 @@ mod tests {
         }
 
         assert!(saw_draw && saw_key, "expected both draw and key events");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn resize_event_yields_draw_and_sets_pending_signal() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let mut stream = make_stream(broker.clone(), draw_rx, terminal_focused);
+
+        assert!(!broker.take_resize_event());
+        handle.send(Ok(Event::Resize(20, 4)));
+
+        assert!(matches!(stream.next().await, Some(TuiEvent::Draw)));
+        assert!(broker.take_resize_event());
+        assert!(!broker.take_resize_event());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ordinary_draw_does_not_set_resize_signal() {
+        let (broker, _handle, draw_tx, draw_rx, terminal_focused) = setup();
+        let mut stream = make_stream(broker.clone(), draw_rx, terminal_focused);
+
+        let _ = draw_tx.send(());
+
+        assert!(matches!(stream.next().await, Some(TuiEvent::Draw)));
+        assert!(!broker.take_resize_event());
     }
 
     #[tokio::test(flavor = "current_thread")]

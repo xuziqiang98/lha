@@ -79,8 +79,8 @@ struct ResizeReconcileState {
 }
 
 impl ResizeReconcileState {
-    fn next_action(&mut self, now: Instant, resized: bool) -> ResizeReconcileAction {
-        if resized {
+    fn next_action(&mut self, now: Instant, resize_observed: bool) -> ResizeReconcileAction {
+        if resize_observed {
             let deadline = now + RESIZE_RECONCILE_DELAY;
             self.deadline = Some(deadline);
             return ResizeReconcileAction::ScheduleAt(deadline);
@@ -655,16 +655,18 @@ impl Tui {
         let suspend_context = self.suspend_context.clone();
 
         let now = Instant::now();
+        let explicit_resize = self.event_broker.take_resize_event();
         let resize_reconcile = &mut self.resize_reconcile;
-        let mut reconcile_action = ResizeReconcileAction::None;
+        let mut reconcile_action = resize_reconcile.next_action(now, explicit_resize);
         let draw_result = synchronized_terminal_update(&mut self.terminal, |terminal| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(terminal)?;
             }
 
-            let resized = terminal.autoresize()?;
-            reconcile_action = resize_reconcile.next_action(now, resized);
+            if terminal.autoresize()? {
+                reconcile_action = resize_reconcile.next_action(now, true);
+            }
             Self::update_viewport(terminal, height)?;
             let area = terminal.viewport_area;
             if reconcile_action == ResizeReconcileAction::Reconcile {
@@ -799,6 +801,37 @@ mod tests {
     }
 
     #[test]
+    fn same_size_resize_event_arms_reconcile() {
+        let now = Instant::now();
+        let deadline = now + RESIZE_RECONCILE_DELAY;
+        let event_broker: EventBroker = EventBroker::new();
+        let backend = AuditedVT100Backend::new(20, 2);
+        let mut terminal = CustomTerminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 20, 2));
+        let mut state = ResizeReconcileState::default();
+
+        assert!(!terminal.autoresize().expect("unchanged terminal size"));
+        event_broker.record_resize_event();
+        assert_eq!(
+            state.next_action(now, event_broker.take_resize_event()),
+            ResizeReconcileAction::ScheduleAt(deadline)
+        );
+        assert_eq!(
+            state.next_action(deadline, false),
+            ResizeReconcileAction::Reconcile
+        );
+        assert_eq!(
+            state.finish_draw(ResizeReconcileAction::Reconcile, deadline, true),
+            ResizeReconcileAction::None
+        );
+        assert!(!event_broker.take_resize_event());
+        assert_eq!(
+            state.next_action(deadline + Duration::from_millis(1), false),
+            ResizeReconcileAction::None
+        );
+    }
+
+    #[test]
     fn resize_reconcile_waits_until_deadline_and_runs_once() {
         let now = Instant::now();
         let deadline = now + RESIZE_RECONCILE_DELAY;
@@ -894,16 +927,27 @@ mod tests {
         let now = Instant::now();
         let failed_at = now + Duration::from_millis(25);
         let retry_deadline = failed_at + RESIZE_RECONCILE_DELAY;
+        let event_broker: EventBroker = EventBroker::new();
         let mut state = ResizeReconcileState::default();
-        let action = state.next_action(now, true);
+        event_broker.record_resize_event();
+        let action = state.next_action(now, event_broker.take_resize_event());
 
         assert_eq!(
             state.finish_draw(action, failed_at, false),
             ResizeReconcileAction::ScheduleAt(retry_deadline)
         );
+        assert!(!event_broker.take_resize_event());
         assert_eq!(
             state.next_action(retry_deadline, false),
             ResizeReconcileAction::Reconcile
+        );
+        assert_eq!(
+            state.finish_draw(ResizeReconcileAction::Reconcile, retry_deadline, true),
+            ResizeReconcileAction::None
+        );
+        assert_eq!(
+            state.next_action(retry_deadline + Duration::from_millis(1), false),
+            ResizeReconcileAction::None
         );
     }
 
