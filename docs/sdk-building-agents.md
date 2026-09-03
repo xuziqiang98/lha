@@ -335,7 +335,10 @@ impl ToolHandler for EchoTool {
 ```
 
 Use `ToolError::RespondToModel` when the model should receive an error-like tool
-result and continue. Use `ToolError::Fatal` when the turn should fail. Return
+result and continue. Use `ToolError::Fatal` when the turn should fail. Calls to
+unknown tool names are handled the same way automatically: they are recorded as
+an unsuccessful tool result (`success: false`) and reported back to the model
+instead of failing the turn. Return
 `true` from `supports_parallel_tool_calls()` only when the handler is safe to run
 concurrently with other calls.
 

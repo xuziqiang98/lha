@@ -1498,6 +1498,114 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_reports_unknown_tool_to_model_and_continues() {
+        let (runtime, requests) = fake_runtime_with_requests(vec![
+            FakeTurnScript {
+                events: vec![
+                    Ok(TurnEvent::ToolCall(ToolCallRequest {
+                        id: None,
+                        tool_name: "missing_tool".to_string(),
+                        call_id: "call-1".to_string(),
+                        payload: ToolCallPayload::JsonArguments {
+                            arguments: "{}".to_string(),
+                        },
+                    })),
+                    Ok(TurnEvent::Completed {
+                        response_id: "resp-1".to_string(),
+                        token_usage: None,
+                    }),
+                ],
+                gate: None,
+                hold_open: None,
+            },
+            FakeTurnScript {
+                events: vec![
+                    Ok(TurnEvent::ItemStarted {
+                        handle: "msg-2".to_string(),
+                        item: assistant_item("done"),
+                    }),
+                    Ok(TurnEvent::ItemCompleted {
+                        handle: "msg-2".to_string(),
+                        item: assistant_item("done"),
+                    }),
+                    Ok(TurnEvent::Completed {
+                        response_id: "resp-2".to_string(),
+                        token_usage: None,
+                    }),
+                ],
+                gate: None,
+                hold_open: None,
+            },
+        ]);
+
+        let manager = AgentBuilder::new(runtime).build();
+        let session = manager.create_session();
+
+        session
+            .run(SessionInput::from_user_text("hi"))
+            .await
+            .expect("run should succeed");
+        let events = wait_for_idle(&session).await;
+        assert!(
+            events
+                .iter()
+                .filter(|event| matches!(event, AgentEvent::TurnCompleted { .. }))
+                .count()
+                >= 2
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, AgentEvent::TurnFailed { .. })),
+            "unknown tool call should not fail the turn"
+        );
+        let expected_result = lha_llm::ToolResultItem {
+            call_id: "call-1".to_string(),
+            tool_name: "missing_tool".to_string(),
+            payload: ToolResultPayload::Structured {
+                content: "unsupported call: missing_tool".to_string(),
+                content_items: None,
+                success: Some(false),
+            },
+        };
+        let completed_tool_call = events
+            .iter()
+            .find_map(|event| match event {
+                AgentEvent::ToolCallCompleted { response, .. } => Some(response),
+                _ => None,
+            })
+            .expect("tool completion should be emitted");
+        assert_eq!(completed_tool_call, &expected_result);
+
+        let snapshot = session.snapshot().await;
+        assert_eq!(snapshot.conversation.len(), 4);
+        assert_eq!(
+            snapshot.conversation[1],
+            TranscriptItem::ToolCall {
+                id: None,
+                call_id: "call-1".to_string(),
+                tool_name: "missing_tool".to_string(),
+                payload: ToolCallPayload::JsonArguments {
+                    arguments: "{}".to_string(),
+                },
+            }
+        );
+        assert_eq!(
+            snapshot.conversation[2],
+            expected_result.to_transcript_item()
+        );
+
+        let requests = lock_requests(&requests);
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests[1]
+                .conversation
+                .contains(&expected_result.to_transcript_item()),
+            "follow-up request should carry the failed tool result"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn no_skill_provider_preserves_turn_request_shape() {
         let (runtime, requests) = fake_runtime_with_requests(vec![completed_script()]);
         let manager = AgentBuilder::new(runtime)
