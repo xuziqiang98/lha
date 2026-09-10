@@ -210,6 +210,43 @@ impl<'a> ChatRequestBuilder<'a> {
                         last_assistant_text = Some(text.clone());
                     }
 
+                    if role == "assistant"
+                        && !saw_image
+                        && let Some(Value::Object(obj)) = messages.last_mut()
+                        && obj.get("role").and_then(Value::as_str) == Some("assistant")
+                        && obj
+                            .get("tool_calls")
+                            .and_then(Value::as_array)
+                            .is_some_and(|calls| !calls.is_empty())
+                    {
+                        // Same-response trailing text: fold it into the preceding
+                        // tool_calls assistant message so tool results still immediately
+                        // follow it. Strict chat validators reject a separate assistant
+                        // message in between ("insufficient tool messages following
+                        // tool_calls message").
+                        match obj.get_mut("content") {
+                            Some(Value::String(existing)) => existing.push_str(&text),
+                            _ => {
+                                obj.insert("content".to_string(), Value::String(text.clone()));
+                            }
+                        }
+                        if let Some(reasoning) = reasoning_by_anchor_index.get(&idx) {
+                            match obj.get_mut("reasoning") {
+                                Some(Value::String(existing)) if !existing.is_empty() => {
+                                    existing.push('\n');
+                                    existing.push_str(reasoning);
+                                }
+                                _ => {
+                                    obj.insert(
+                                        "reasoning".to_string(),
+                                        Value::String(reasoning.clone()),
+                                    );
+                                }
+                            }
+                        }
+                        continue;
+                    }
+
                     let content_value = if role == "assistant" {
                         json!(text)
                     } else if saw_image {
@@ -615,5 +652,188 @@ mod tests {
         assert_eq!(messages[2]["role"], "system");
         assert_eq!(messages[2]["content"], "follow repo rules");
         assert_eq!(messages[3]["role"], "assistant");
+    }
+
+    #[test]
+    fn merges_same_response_trailing_text_into_tool_calls_message() {
+        let prompt_input = vec![
+            text_message("user", "check the repo"),
+            TranscriptItem::ToolCall {
+                id: None,
+                call_id: "call-1".to_string(),
+                tool_name: "read_file".to_string(),
+                payload: ToolCallPayload::JsonArguments {
+                    arguments: r#"{"path":"README.md"}"#.to_string(),
+                },
+            },
+            TranscriptItem::ToolCall {
+                id: None,
+                call_id: "call-2".to_string(),
+                tool_name: "read_file".to_string(),
+                payload: ToolCallPayload::JsonArguments {
+                    arguments: r#"{"path":"Cargo.toml"}"#.to_string(),
+                },
+            },
+            text_message("assistant", "\n"),
+            TranscriptItem::ToolResult {
+                call_id: "call-1".to_string(),
+                tool_name: "read_file".to_string(),
+                payload: ToolResultPayload::Structured {
+                    content: "readme".to_string(),
+                    content_items: None,
+                    success: Some(true),
+                },
+            },
+            TranscriptItem::ToolResult {
+                call_id: "call-2".to_string(),
+                tool_name: "read_file".to_string(),
+                payload: ToolResultPayload::Structured {
+                    content: "cargo".to_string(),
+                    content_items: None,
+                    success: Some(true),
+                },
+            },
+        ];
+
+        let request = ChatRequestBuilder::new("gpt-test", "inst", &prompt_input, &[])
+            .build(&provider())
+            .expect("request");
+        let messages = request.body["messages"].as_array().expect("messages array");
+
+        // system + user + merged assistant{content, tool_calls} + 2 tool results;
+        // no standalone assistant text message may sit between the tool_calls
+        // message and the tool results.
+        assert_eq!(messages.len(), 5);
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[2]["role"], "assistant");
+        assert_eq!(messages[2]["content"], "\n");
+        let tool_calls = messages[2]["tool_calls"]
+            .as_array()
+            .expect("tool_calls array");
+        assert_eq!(tool_calls.len(), 2);
+        assert_eq!(tool_calls[0]["id"], "call-1");
+        assert_eq!(tool_calls[1]["id"], "call-2");
+        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[3]["tool_call_id"], "call-1");
+        assert_eq!(messages[4]["role"], "tool");
+        assert_eq!(messages[4]["tool_call_id"], "call-2");
+    }
+
+    #[test]
+    fn merges_same_response_real_text_into_tool_calls_message() {
+        let prompt_input = vec![
+            text_message("user", "find the entrypoint"),
+            TranscriptItem::ToolCall {
+                id: None,
+                call_id: "call-1".to_string(),
+                tool_name: "grep".to_string(),
+                payload: ToolCallPayload::JsonArguments {
+                    arguments: r#"{"pattern":"fn main"}"#.to_string(),
+                },
+            },
+            text_message("assistant", "Let me check the repo first."),
+            TranscriptItem::ToolResult {
+                call_id: "call-1".to_string(),
+                tool_name: "grep".to_string(),
+                payload: ToolResultPayload::Text {
+                    output: "src/main.rs:1".to_string(),
+                },
+            },
+        ];
+
+        let request = ChatRequestBuilder::new("gpt-test", "inst", &prompt_input, &[])
+            .build(&provider())
+            .expect("request");
+        let messages = request.body["messages"].as_array().expect("messages array");
+
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[2]["role"], "assistant");
+        assert_eq!(messages[2]["content"], "Let me check the repo first.");
+        assert_eq!(messages[2]["tool_calls"][0]["id"], "call-1");
+        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[3]["tool_call_id"], "call-1");
+    }
+
+    #[test]
+    fn merges_reasoning_anchored_to_trailing_assistant_text() {
+        let prompt_input = vec![
+            text_message("user", "run the checks"),
+            TranscriptItem::ToolCall {
+                id: None,
+                call_id: "call-1".to_string(),
+                tool_name: "shell".to_string(),
+                payload: ToolCallPayload::JsonArguments {
+                    arguments: r#"{"command":"cargo test"}"#.to_string(),
+                },
+            },
+            TranscriptItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                summary: vec![],
+                content: Some(vec![ReasoningContentItem::ReasoningText {
+                    text: "Tests will surface regressions.".to_string(),
+                }]),
+                encrypted_content: None,
+            },
+            text_message("assistant", "Running the test suite."),
+            TranscriptItem::ToolResult {
+                call_id: "call-1".to_string(),
+                tool_name: "shell".to_string(),
+                payload: ToolResultPayload::Text {
+                    output: "ok. 12 passed".to_string(),
+                },
+            },
+        ];
+
+        let request = ChatRequestBuilder::new("gpt-test", "inst", &prompt_input, &[])
+            .build(&provider())
+            .expect("request");
+        let messages = request.body["messages"].as_array().expect("messages array");
+
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[2]["role"], "assistant");
+        assert_eq!(messages[2]["content"], "Running the test suite.");
+        assert_eq!(messages[2]["reasoning"], "Tests will surface regressions.");
+        assert_eq!(messages[2]["tool_calls"][0]["id"], "call-1");
+        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[3]["tool_call_id"], "call-1");
+    }
+
+    #[test]
+    fn merges_multiple_trailing_texts_into_the_same_tool_calls_message() {
+        let prompt_input = vec![
+            text_message("user", "inspect the layout"),
+            TranscriptItem::ToolCall {
+                id: None,
+                call_id: "call-1".to_string(),
+                tool_name: "read_file".to_string(),
+                payload: ToolCallPayload::JsonArguments {
+                    arguments: r#"{"path":"layout.rs"}"#.to_string(),
+                },
+            },
+            text_message("assistant", "Checking."),
+            text_message("assistant", " Found it."),
+            TranscriptItem::ToolResult {
+                call_id: "call-1".to_string(),
+                tool_name: "read_file".to_string(),
+                payload: ToolResultPayload::Structured {
+                    content: "layout".to_string(),
+                    content_items: None,
+                    success: Some(true),
+                },
+            },
+        ];
+
+        let request = ChatRequestBuilder::new("gpt-test", "inst", &prompt_input, &[])
+            .build(&provider())
+            .expect("request");
+        let messages = request.body["messages"].as_array().expect("messages array");
+
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[2]["role"], "assistant");
+        assert_eq!(messages[2]["content"], "Checking. Found it.");
+        assert_eq!(messages[2]["tool_calls"][0]["id"], "call-1");
+        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[3]["tool_call_id"], "call-1");
     }
 }

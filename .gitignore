@@ -27,6 +27,7 @@ result
 .idea/
 .history/
 .zed/
+.zcode/
 *.swp
 *~
 
